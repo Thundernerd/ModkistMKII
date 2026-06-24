@@ -1,4 +1,5 @@
 import { invoke } from "~/utils/tauri";
+import type { WineWinhttpStatus } from "~/utils/wineWinhttp";
 
 export type BepInExState = "missing" | "installed" | "wrongVersion";
 
@@ -7,6 +8,7 @@ export interface BepInExStatus {
   foundVersion?: string;
   message?: string;
   canContinue: boolean;
+  wineWinhttp?: WineWinhttpStatus | null;
 }
 
 export function useBepInEx() {
@@ -59,12 +61,27 @@ export function useBepInEx() {
     }
   }
 
+  async function verifyBepInEx() {
+    loading.value = true;
+    error.value = "";
+
+    try {
+      bepinexStatus.value = await invoke<BepInExStatus>("verify_bepinex");
+    } catch (err) {
+      error.value = String(err);
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  }
+
   return {
     bepinexStatus,
     loading,
     installing,
     error,
     refreshBepInExStatus,
+    verifyBepInEx,
     installBepInEx,
     reinstallBepInEx,
   };

@@ -4,6 +4,7 @@ import {
   navigateToApp,
   readRedirectParam,
 } from "~/utils/authNavigation";
+import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
 
 const route = useRoute();
 const {
@@ -16,7 +17,13 @@ const {
 } = useBepInEx();
 
 const redirect = computed(() => readRedirectParam(route.query.redirect));
-const phase = ref<"checking" | "installing" | "warning" | "error">("checking");
+const phase = ref<"checking" | "installing" | "warning" | "wineWarning" | "error">(
+  "checking",
+);
+
+const wineFeedback = computed(() =>
+  wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
+);
 
 async function runInstall() {
   phase.value = "installing";
@@ -24,6 +31,11 @@ async function runInstall() {
 
   try {
     await installBepInEx();
+    const feedback = wineWinhttpFeedback(bepinexStatus.value.wineWinhttp);
+    if (feedback && feedback.tone !== "success") {
+      phase.value = "wineWarning";
+      return;
+    }
     await navigateToApp(redirect.value);
   } catch {
     phase.value = "error";
@@ -48,6 +60,10 @@ async function handleStatus() {
 
 async function continueAnyway() {
   await continuePastBepInEx(redirect.value);
+}
+
+async function continueAfterWineWarning() {
+  await navigateToApp(redirect.value);
 }
 
 async function retry() {
@@ -105,6 +121,22 @@ onMounted(async () => {
             Detected version: {{ bepinexStatus.foundVersion }}
           </p>
           <button type="button" class="continue-button" @click="continueAnyway">
+            Continue anyway
+          </button>
+        </div>
+
+        <div v-else-if="phase === 'wineWarning'" class="warning">
+          <p class="warning-text">
+            BepInEx was installed, but Modkist could not fully configure your
+            Wine prefix for mod loading.
+          </p>
+          <p
+            v-if="wineFeedback"
+            :class="wineFeedback.tone === 'error' ? 'error' : 'meta'"
+          >
+            {{ wineFeedback.text }}
+          </p>
+          <button type="button" class="continue-button" @click="continueAfterWineWarning">
             Continue anyway
           </button>
         </div>

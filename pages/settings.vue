@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
 
 definePageMeta({ layout: "app" });
 
@@ -11,11 +12,16 @@ const {
   installing,
   error,
   refreshBepInExStatus,
+  verifyBepInEx,
   reinstallBepInEx,
 } = useBepInEx();
 
 const verifyMessage = ref("");
-const verifyTone = ref<"info" | "success" | "error">("info");
+const verifyTone = ref<"info" | "success" | "error" | "warn">("info");
+
+const wineFeedback = computed(() =>
+  wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
+);
 
 const statusLabel = computed(() => {
   switch (bepinexStatus.value.state) {
@@ -44,20 +50,28 @@ const statusClass = computed(() => {
   }
 });
 
-function setVerifyResult(tone: "info" | "success" | "error", message: string) {
+function setVerifyResult(
+  tone: "info" | "success" | "error" | "warn",
+  message: string,
+) {
   verifyTone.value = tone;
   verifyMessage.value = message;
 }
 
-async function verifyBepInEx() {
+async function verifyBepInExInstall() {
   verifyMessage.value = "";
   error.value = "";
 
   try {
-    await refreshBepInExStatus();
+    await verifyBepInEx();
     const status = bepinexStatus.value;
 
     if (status.state === "installed") {
+      const feedback = wineWinhttpFeedback(status.wineWinhttp);
+      if (feedback && feedback.tone !== "success") {
+        setVerifyResult(feedback.tone === "warn" ? "warn" : "error", feedback.text);
+        return;
+      }
       setVerifyResult(
         "success",
         status.foundVersion
@@ -98,8 +112,13 @@ async function reinstallBepInExInstall() {
   verifyMessage.value = "";
   error.value = "";
 
-  try {
+    try {
     await reinstallBepInEx();
+    const feedback = wineWinhttpFeedback(bepinexStatus.value.wineWinhttp);
+    if (feedback && feedback.tone !== "success") {
+      setVerifyResult(feedback.tone === "warn" ? "warn" : "error", feedback.text);
+      return;
+    }
     setVerifyResult(
       "success",
       bepinexStatus.value.foundVersion
@@ -148,7 +167,7 @@ onMounted(() => {
           type="button"
           class="btn-secondary"
           :disabled="loading || installing"
-          @click="verifyBepInEx"
+          @click="verifyBepInExInstall"
         >
           {{ loading ? "Verifying…" : "Verify installation" }}
         </button>
@@ -164,10 +183,17 @@ onMounted(() => {
 
       <p
         v-if="verifyMessage"
-        :class="verifyTone === 'success' ? 'info' : 'error'"
+        :class="verifyTone === 'success' ? 'info' : verifyTone === 'warn' ? 'warn' : 'error'"
         class="feedback"
       >
         {{ verifyMessage }}
+      </p>
+      <p
+        v-else-if="wineFeedback"
+        :class="wineFeedback.tone === 'success' ? 'info' : wineFeedback.tone === 'warn' ? 'warn' : 'error'"
+        class="feedback"
+      >
+        {{ wineFeedback.text }}
       </p>
       <p v-else-if="error" class="error feedback">{{ error }}</p>
     </section>
@@ -259,5 +285,9 @@ onMounted(() => {
 
 .feedback {
   margin: 0.85rem 0 0;
+}
+
+.feedback.warn {
+  color: #fbbf24;
 }
 </style>
