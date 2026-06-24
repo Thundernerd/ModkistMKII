@@ -4,13 +4,17 @@ export default defineNuxtConfig({
   compatibilityDate: "2025-05-15",
   ssr: false,
   telemetry: false,
+  devtools: { enabled: false },
   devServer: {
-    host: host || "0.0.0.0",
+    host: host || "localhost",
     port: 1420,
   },
   vite: {
     clearScreen: false,
     envPrefix: ["VITE_", "TAURI_"],
+    optimizeDeps: {
+      include: ["@tauri-apps/api/core"],
+    },
     server: {
       strictPort: true,
       hmr: host
