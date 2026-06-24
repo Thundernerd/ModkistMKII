@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ModSort, ModTypeFilter } from "~/composables/useMods";
-import { MOD_TYPE_OPTIONS, SORT_OPTIONS } from "~/composables/useModFilters";
+import { MOD_TYPE_OPTIONS } from "~/composables/useModFilters";
 
 const search = defineModel<string>("search", { required: true });
 const modType = defineModel<ModTypeFilter>("modType", { required: true });
@@ -51,28 +51,9 @@ const emit = defineEmits<{
           {{ option.label }}
         </button>
       </div>
-    </div>
 
-    <div class="mod-filters-secondary">
-      <label class="control-label">
-        <span>Sort by</span>
-        <select v-model="sort" aria-label="Sort by">
-          <option
-            v-for="option in SORT_OPTIONS"
-            :key="option.value"
-            :value="option.value"
-          >
-            {{ option.label }}
-          </option>
-        </select>
-      </label>
-      <label class="control-label">
-        <span>Order</span>
-        <select v-model="sortDir" aria-label="Sort direction">
-          <option value="desc">Descending</option>
-          <option value="asc">Ascending</option>
-        </select>
-      </label>
+      <ModSortControl v-model:sort="sort" v-model:sort-dir="sortDir" />
+
       <button
         v-if="hasActiveFilters"
         type="button"
@@ -125,6 +106,7 @@ const emit = defineEmits<{
 }
 
 .mod-filters-primary {
+  --filter-control-height: 2.5rem;
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
@@ -140,6 +122,8 @@ const emit = defineEmits<{
 
 .search-field input {
   width: 100%;
+  height: var(--filter-control-height);
+  padding-block: 0;
   padding-left: 2.25rem;
 }
 
@@ -153,14 +137,19 @@ const emit = defineEmits<{
 
 .type-toggle {
   display: inline-flex;
+  align-items: stretch;
+  height: var(--filter-control-height);
   padding: 0.2rem;
   border-radius: var(--modio-radius-sm);
   background: var(--modio-surface-raised);
   border: 1px solid var(--modio-border);
+  box-sizing: border-box;
 }
 
 .type-toggle-btn {
-  padding: 0.45rem 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.85rem;
   border: none;
   border-radius: calc(var(--modio-radius-sm) - 2px);
   background: transparent;
@@ -179,16 +168,23 @@ const emit = defineEmits<{
   color: var(--modio-accent);
 }
 
+.mod-filters-primary :deep(.sort-control) {
+  height: var(--filter-control-height);
+}
+
+.mod-filters-primary :deep(.sort-control-group) {
+  height: 100%;
+}
+
 .mod-filters-categories {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  padding-top: 0.15rem;
+  padding-top: 0.75rem;
   border-top: 1px solid var(--modio-border);
 }
 
-.mod-filters-categories-header,
-.mod-filters-secondary {
+.mod-filters-categories-header {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -199,24 +195,12 @@ const emit = defineEmits<{
   justify-content: space-between;
 }
 
-.mod-filters-label,
-.control-label span {
+.mod-filters-label {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--modio-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-.control-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.control-label select {
-  min-width: 9rem;
-  font-size: 0.9rem;
 }
 
 .clear-filters {
@@ -253,8 +237,7 @@ const emit = defineEmits<{
 }
 
 @media (max-width: 640px) {
-  .mod-filters-primary,
-  .mod-filters-secondary {
+  .mod-filters-primary {
     flex-direction: column;
     align-items: stretch;
   }
@@ -265,10 +248,6 @@ const emit = defineEmits<{
 
   .type-toggle-btn {
     flex: 1;
-  }
-
-  .control-label select {
-    width: 100%;
   }
 
   .clear-filters {
