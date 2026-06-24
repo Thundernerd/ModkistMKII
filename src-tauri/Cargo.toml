@@ -28,4 +28,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tauri-plugin-store = "2"
 dotenvy = "0.15"
 time = { version = "0.3", features = ["formatting"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+pelite = "0.10"
 

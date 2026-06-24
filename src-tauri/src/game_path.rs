@@ -36,6 +36,14 @@ fn validate_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub fn game_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = read_stored_path(app)?
+        .ok_or_else(|| "Game directory is not configured.".to_string())?;
+    let path_buf = PathBuf::from(&path);
+    validate_directory(&path_buf)?;
+    Ok(path_buf)
+}
+
 fn read_stored_path(app: &AppHandle) -> Result<Option<String>, String> {
     let store = app.store(GAME_STORE_PATH).map_err(|e| e.to_string())?;
     Ok(store
