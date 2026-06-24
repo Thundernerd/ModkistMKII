@@ -1,159 +1,307 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import vueLogo from "~/assets/vue.svg";
+import { onMounted, ref } from "vue";
+import { invoke } from "~/utils/tauri";
+import type { AuthUser } from "~/composables/useModioAuth";
 
-const greetMsg = ref("");
-const name = ref("");
+type LoginStep = "enterEmail" | "codeSent";
 
-async function greet() {
-  greetMsg.value = await invoke("greet", { name: name.value });
+interface ModioStatus {
+  configured: boolean;
+  message?: string;
 }
+
+const step = ref<LoginStep>("enterEmail");
+const email = ref("");
+const otp = ref("");
+const loading = ref(false);
+const error = ref("");
+const infoMessage = ref("");
+const modioConfigured = ref(false);
+const modioMessage = ref(
+  "Set MODIO_API_KEY and MODIO_GAME_ID in .env (see .env.example).",
+);
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const { authStatus, refreshAuthStatus } = useModioAuth();
+
+async function checkModioStatus() {
+  const status = await invoke<ModioStatus>("modio_status");
+  modioConfigured.value = status.configured;
+  if (status.message) {
+    modioMessage.value = status.message;
+  }
+}
+
+function validateEmail(): boolean {
+  if (!emailPattern.test(email.value.trim())) {
+    error.value = "Enter a valid email address.";
+    return false;
+  }
+  return true;
+}
+
+async function sendCode() {
+  if (!validateEmail()) return;
+
+  loading.value = true;
+  error.value = "";
+  infoMessage.value = "";
+
+  try {
+    const message = await invoke<string>("request_email_code", {
+      email: email.value.trim(),
+    });
+    infoMessage.value = message;
+    step.value = "codeSent";
+  } catch (err) {
+    error.value = String(err);
+  } finally {
+    loading.value = false;
+  }
+}
+
+function changeEmail() {
+  step.value = "enterEmail";
+  otp.value = "";
+  error.value = "";
+  infoMessage.value = "";
+}
+
+async function resendCode() {
+  await sendCode();
+}
+
+async function verifyCode() {
+  if (!otp.value.trim()) {
+    error.value = "Enter the security code from your email.";
+    return;
+  }
+
+  loading.value = true;
+  error.value = "";
+
+  try {
+    await invoke<AuthUser>("verify_email_code", { code: otp.value.trim() });
+    await refreshAuthStatus();
+    await navigateTo("/home");
+  } catch (err) {
+    error.value = String(err);
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(async () => {
+  await refreshAuthStatus();
+  if (authStatus.value.loggedIn) {
+    await navigateTo("/home");
+    return;
+  }
+  checkModioStatus();
+});
 </script>
 
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Nuxt</h1>
+  <main class="login-shell">
+    <div class="login">
+      <div class="login-brand">
+        <span class="login-brand-mark" aria-hidden="true" />
+        <h1>Sign in with mod.io</h1>
+      </div>
 
-    <div class="row">
-      <a href="https://vite.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://nuxt.com/" target="_blank">
-        <img :src="vueLogo" class="logo vue" alt="Nuxt logo" />
-      </a>
+      <p v-if="!modioConfigured" class="hint">
+        {{ modioMessage }}
+      </p>
+
+      <section v-else class="panel">
+      <form
+        v-if="step === 'enterEmail'"
+        class="form"
+        @submit.prevent="sendCode"
+      >
+        <label for="email">Email</label>
+        <input
+          id="email"
+          v-model="email"
+          type="email"
+          autocomplete="email"
+          placeholder="you@example.com"
+          :disabled="loading"
+        />
+        <button type="submit" :disabled="loading">
+          {{ loading ? "Sending…" : "Send code" }}
+        </button>
+      </form>
+
+      <div v-else class="form">
+        <div class="email-row">
+          <label>Email</label>
+          <div class="email-display">
+            <input :value="email" type="email" disabled />
+            <button type="button" class="link" @click="changeEmail">
+              Change email
+            </button>
+          </div>
+        </div>
+
+        <label for="otp">Security code</label>
+        <input
+          id="otp"
+          v-model="otp"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          placeholder="Enter code from email"
+          class="otp-input"
+          :disabled="loading"
+          @keyup.enter="verifyCode"
+        />
+
+        <div class="actions">
+          <button type="button" :disabled="loading" @click="verifyCode">
+            {{ loading ? "Verifying…" : "Verify" }}
+          </button>
+          <button
+            type="button"
+            class="secondary btn-secondary"
+            :disabled="loading"
+            @click="resendCode"
+          >
+            Resend code
+          </button>
+        </div>
+      </div>
+
+      <p v-if="infoMessage" class="info">{{ infoMessage }}</p>
+      <p v-if="error" class="error">{{ error }}</p>
+    </section>
     </div>
-    <p>Click on the Tauri, Vite, and Nuxt logos to learn more.</p>
-
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
   </main>
 </template>
 
 <style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  background:
+    radial-gradient(
+      ellipse 70% 45% at 50% -10%,
+      rgba(7, 193, 216, 0.14),
+      transparent
+    ),
+    var(--modio-bg);
 }
 
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-</style>
-
-<style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
+.login {
+  width: 100%;
+  max-width: 28rem;
 }
 
-.container {
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.login-brand-mark {
+  width: 0.35rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: var(--modio-accent);
+}
+
+.login-brand h1 {
   margin: 0;
-  padding-top: 10vh;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.panel {
+  padding: 1.5rem;
+  border-radius: var(--modio-radius);
+  background: var(--modio-surface);
+  border: 1px solid var(--modio-border);
+  box-shadow: var(--modio-shadow);
+}
+
+.form {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  gap: 0.75rem;
+}
+
+label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--modio-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+input {
+  width: 100%;
+}
+
+input:disabled {
+  opacity: 0.65;
+}
+
+.otp-input {
+  font-size: 1.2rem;
+  letter-spacing: 0.15em;
   text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+.email-display {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
-a {
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.actions button {
+  flex: 1;
+}
+
+button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--modio-accent);
+  box-shadow: none;
+  font-size: 0.9rem;
+  text-align: left;
   font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
 }
 
-a:hover {
-  color: #535bf2;
+button.link:hover:not(:disabled) {
+  color: var(--modio-accent-hover);
+  background: none;
 }
 
-h1 {
+.hint {
   text-align: center;
+  padding: 1.25rem;
+  border: 1px dashed var(--modio-border);
+  border-radius: var(--modio-radius);
+  background: var(--modio-surface);
 }
 
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
+.hint,
+.info,
+.error {
+  margin-top: 1rem;
 }
 </style>
