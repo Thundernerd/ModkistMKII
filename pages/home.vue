@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { invoke } from "~/utils/tauri";
-import type { ModSort, ModTypeFilter } from "~/composables/useMods";
+import {
+  MOD_TYPE_OPTIONS,
+  SORT_OPTIONS,
+  useModFilters,
+} from "~/composables/useModFilters";
 
 definePageMeta({ layout: "app" });
 
@@ -21,60 +25,17 @@ const {
   sort,
   sortDir,
   hasMore,
-  fetchMods,
   loadMore,
-} = useMods();
-
-const { tagOptions, fetchTagOptions } = useModTagOptions();
+  activeCategoryLabel,
+  activeCategoryOptions,
+  isCategoryTagSelected,
+  toggleCategoryTag,
+  clearCategoryTags,
+  initialize,
+} = useModFilters();
 
 const modioConfigured = ref(false);
 const modioMessage = ref("");
-
-const modTypeOptions: { value: ModTypeFilter; label: string }[] = [
-  { value: "all", label: "All types" },
-  { value: "plugin", label: "Plugin" },
-  { value: "blueprint", label: "Blueprint" },
-];
-
-const activeCategoryLabel = computed(() => {
-  if (modType.value === "plugin") return "Plugin type";
-  if (modType.value === "blueprint") return "Blueprint type";
-  return "";
-});
-
-const activeCategoryOptions = computed(() => {
-  if (!tagOptions.value) return [];
-  if (modType.value === "plugin") return tagOptions.value.pluginTypes;
-  if (modType.value === "blueprint") return tagOptions.value.blueprintTypes;
-  return [];
-});
-
-function isCategoryTagSelected(tag: string) {
-  return categoryTags.value.includes(tag);
-}
-
-function toggleCategoryTag(tag: string) {
-  if (isCategoryTagSelected(tag)) {
-    categoryTags.value = categoryTags.value.filter((value) => value !== tag);
-    return;
-  }
-
-  categoryTags.value = [...categoryTags.value, tag];
-}
-
-function clearCategoryTags() {
-  categoryTags.value = [];
-}
-
-const sortOptions: { value: ModSort; label: string }[] = [
-  { value: "recentlyAdded", label: "Recently added" },
-  { value: "lastUpdated", label: "Last updated" },
-  { value: "trending", label: "Trending" },
-  { value: "mostPopular", label: "Most popular" },
-  { value: "mostSubscribers", label: "Most subscribers" },
-  { value: "highestRated", label: "Highest rated" },
-  { value: "alphabetical", label: "Alphabetical" },
-];
 
 async function checkModioStatus() {
   const status = await invoke<ModioStatus>("modio_status");
@@ -85,7 +46,7 @@ async function checkModioStatus() {
 onMounted(async () => {
   await checkModioStatus();
   if (modioConfigured.value) {
-    await Promise.all([fetchTagOptions(), fetchMods()]);
+    await initialize();
   }
 });
 </script>
@@ -116,7 +77,7 @@ onMounted(async () => {
             <span>Type</span>
             <select v-model="modType" aria-label="Filter by mod type">
               <option
-                v-for="option in modTypeOptions"
+                v-for="option in MOD_TYPE_OPTIONS"
                 :key="option.value"
                 :value="option.value"
               >
@@ -128,7 +89,7 @@ onMounted(async () => {
             <span>Sort by</span>
             <select v-model="sort" aria-label="Sort by">
               <option
-                v-for="option in sortOptions"
+                v-for="option in SORT_OPTIONS"
                 :key="option.value"
                 :value="option.value"
               >
