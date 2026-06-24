@@ -217,10 +217,21 @@ impl ModioState {
         Ok(())
     }
 
-    fn game_id(&self) -> Result<u64, String> {
+    pub(crate) fn game_id(&self) -> Result<u64, String> {
         self.config
             .game_id
             .ok_or_else(|| "MODIO_GAME_ID is not set in .env".to_string())
+    }
+
+    pub(crate) fn api_key(&self) -> Result<&str, String> {
+        self.api_key
+            .as_deref()
+            .ok_or_else(|| "MODIO_API_KEY is not set in .env".to_string())
+    }
+
+    pub(crate) fn access_token(&self) -> Option<String> {
+        let session = self.session.lock().ok()?;
+        session.token.clone()
     }
 }
 
@@ -239,23 +250,14 @@ fn build_client(api_key: &str, config: &ModioConfig) -> Result<Client, String> {
         );
     }
 
-    builder = builder.target_platform(current_target_platform());
+    builder = builder.target_platform(game_target_platform());
 
     builder.build().map_err(|e| e.to_string())
 }
 
-#[cfg(target_os = "macos")]
-fn current_target_platform() -> TargetPlatform {
-    TargetPlatform::MAC
-}
-
-#[cfg(target_os = "linux")]
-fn current_target_platform() -> TargetPlatform {
-    TargetPlatform::LINUX
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn current_target_platform() -> TargetPlatform {
+fn game_target_platform() -> TargetPlatform {
+    // Zeepkist is a Windows game; modfiles must be resolved for Windows even when
+    // Modkist itself runs on macOS or Linux during development.
     TargetPlatform::WINDOWS
 }
 
@@ -326,6 +328,7 @@ pub struct ModDetail {
     pub media_image_urls: Vec<String>,
     pub has_dependencies: bool,
     pub homepage_url: Option<String>,
+    pub file_id: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -547,6 +550,7 @@ fn mod_to_detail(mod_: modio::types::mods::Mod) -> ModDetail {
         media_image_urls,
         has_dependencies: mod_.dependencies,
         homepage_url: mod_.homepage_url.map(|url| url.to_string()),
+        file_id: mod_.modfile.as_ref().map(|file| file.id.get()),
     }
 }
 

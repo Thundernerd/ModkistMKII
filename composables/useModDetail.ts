@@ -26,6 +26,7 @@ export interface ModDetail {
   mediaImageUrls: string[];
   hasDependencies: boolean;
   homepageUrl?: string;
+  fileId?: number;
 }
 
 export interface ModDependency {
