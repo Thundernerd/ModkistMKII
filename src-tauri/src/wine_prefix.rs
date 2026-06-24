@@ -506,29 +506,65 @@ pub(crate) fn merge_winhttp_overrides(content: &str) -> String {
     merged
 }
 
+fn reg_entry_key(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('"') {
+        return None;
+    }
+    parse_quoted_string(trimmed)
+}
+
+fn compare_reg_entry_keys(left: &str, right: &str) -> std::cmp::Ordering {
+    left.to_ascii_lowercase()
+        .cmp(&right.to_ascii_lowercase())
+}
+
+fn trailing_blank_line_count(section: &str) -> usize {
+    section
+        .lines()
+        .rev()
+        .take_while(|line| line.trim().is_empty())
+        .count()
+}
+
 fn upsert_reg_entry_in_section(section: &mut String, key: &str, value: &str) {
+    let trailing_blanks = trailing_blank_line_count(section);
     let entry = format!("\"{key}\"=\"{value}\"");
-    let mut lines: Vec<String> = section.lines().map(str::to_string).collect();
+    let lines: Vec<String> = section.lines().map(str::to_string).collect();
 
-    if let Some(index) = lines.iter().position(|line| {
-        line.trim().starts_with(&format!("\"{key}\"="))
-    }) {
-        lines[index] = entry;
-    } else {
-        let insert_at = lines
-            .iter()
-            .rposition(|line| !line.trim().is_empty())
-            .map(|index| index + 1)
-            .unwrap_or(lines.len());
-        lines.insert(insert_at, entry);
+    let mut prefix = Vec::new();
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut suffix = Vec::new();
+    let mut seen_entry = false;
+
+    for line in lines {
+        if let Some(entry_key) = reg_entry_key(&line) {
+            seen_entry = true;
+            if entry_key != key {
+                entries.push((entry_key, line));
+            }
+        } else if !seen_entry {
+            prefix.push(line);
+        } else {
+            suffix.push(line);
+        }
     }
 
-    while lines.last().is_some_and(|line| line.trim().is_empty()) {
-        lines.pop();
+    entries.push((key.to_string(), entry));
+    entries.sort_by(|(left, _), (right, _)| compare_reg_entry_keys(left, right));
+
+    let mut result = prefix;
+    result.extend(entries.into_iter().map(|(_, line)| line));
+    result.extend(suffix);
+
+    while result.last().is_some_and(|line| line.trim().is_empty()) {
+        result.pop();
     }
 
-    *section = lines.join("\n");
-    section.push('\n');
+    *section = result.join("\n");
+    for _ in 0..=trailing_blanks {
+        section.push('\n');
+    }
 }
 
 fn apply_via_user_reg(user_reg: &Path, content: &str) -> Result<(), String> {
@@ -705,6 +741,24 @@ mod tests {
         ));
         assert!(!merged.contains("[Software\\\\Wine\\\\DllOverrides]\n\"winhttp\""));
         assert_eq!(merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(), 1);
+    }
+
+    #[test]
+    fn inserts_winhttp_in_alphabetical_order_among_existing_overrides() {
+        let content = "[Software\\\\Wine\\\\DllOverrides] 1608830137\n#time=1d6da1865a6084e\n\"atlthunk\"=\"builtin\"\n\"winmm\"=\"builtin\"\n";
+        let merged = merge_winhttp_overrides(content);
+        assert!(merged.contains(
+            "#time=1d6da1865a6084e\n\"atlthunk\"=\"builtin\"\n\"winhttp\"=\"native,builtin\"\n\"winmm\"=\"builtin\"\n",
+        ));
+    }
+
+    #[test]
+    fn preserves_trailing_blank_line_before_next_section() {
+        let content = "[Software\\\\Wine\\\\DllOverrides] 1608830137\n#time=1d6da1865a6084e\n\"d3d11\"=\"builtin\"\n\n[Software\\\\Wine\\\\AppDefaults]\n";
+        let merged = merge_winhttp_overrides(content);
+        assert!(merged.contains(
+            "\"d3d11\"=\"builtin\"\n\"winhttp\"=\"native,builtin\"\n\n[Software\\\\Wine\\\\AppDefaults]",
+        ));
     }
 
     #[test]
