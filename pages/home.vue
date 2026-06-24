@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { invoke } from "~/utils/tauri";
-import {
-  MOD_TYPE_OPTIONS,
-  SORT_OPTIONS,
-  useModFilters,
-} from "~/composables/useModFilters";
+import { useModFilters } from "~/composables/useModFilters";
 
 definePageMeta({ layout: "app" });
 
@@ -28,9 +24,10 @@ const {
   loadMore,
   activeCategoryLabel,
   activeCategoryOptions,
-  isCategoryTagSelected,
+  hasActiveFilters,
   toggleCategoryTag,
   clearCategoryTags,
+  clearFilters,
   initialize,
 } = useModFilters();
 
@@ -62,81 +59,19 @@ onMounted(async () => {
     </p>
 
     <template v-else>
-      <section class="mods-toolbar" aria-label="Filter and sort mods">
-        <label class="search-field">
-          <span class="search-icon" aria-hidden="true">⌕</span>
-          <input
-            v-model="search"
-            type="search"
-            placeholder="Search mods"
-            aria-label="Search mods"
-          />
-        </label>
-        <div class="toolbar-controls">
-          <label class="control-label">
-            <span>Type</span>
-            <select v-model="modType" aria-label="Filter by mod type">
-              <option
-                v-for="option in MOD_TYPE_OPTIONS"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label class="control-label">
-            <span>Sort by</span>
-            <select v-model="sort" aria-label="Sort by">
-              <option
-                v-for="option in SORT_OPTIONS"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label class="control-label">
-            <span>Order</span>
-            <select v-model="sortDir" aria-label="Sort direction">
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
-            </select>
-          </label>
-        </div>
-      </section>
-
-      <section
-        v-if="activeCategoryOptions.length"
-        class="category-filters"
-        :aria-label="`${activeCategoryLabel} filters`"
-      >
-        <div class="category-filters-header">
-          <h2 class="category-filters-title">{{ activeCategoryLabel }}</h2>
-          <button
-            v-if="categoryTags.length"
-            type="button"
-            class="link-button clear-tags"
-            @click="clearCategoryTags"
-          >
-            Clear
-          </button>
-        </div>
-        <div class="category-tag-list">
-          <button
-            v-for="tag in activeCategoryOptions"
-            :key="tag"
-            type="button"
-            class="category-tag"
-            :class="{ active: isCategoryTagSelected(tag) }"
-            :aria-pressed="isCategoryTagSelected(tag)"
-            @click="toggleCategoryTag(tag)"
-          >
-            {{ tag }}
-          </button>
-        </div>
-      </section>
+      <ModFilters
+        v-model:search="search"
+        v-model:mod-type="modType"
+        v-model:sort="sort"
+        v-model:sort-dir="sortDir"
+        :category-options="activeCategoryOptions"
+        :category-label="activeCategoryLabel"
+        :has-active-filters="hasActiveFilters"
+        :selected-category-tags="categoryTags"
+        @toggle-category-tag="toggleCategoryTag"
+        @clear-category-tags="clearCategoryTags"
+        @clear-filters="clearFilters"
+      />
 
       <p v-if="!loading || mods.length" class="meta mods-count">
         Showing {{ mods.length }} of {{ total }} mods
@@ -196,113 +131,6 @@ onMounted(async () => {
   background: var(--modio-surface);
 }
 
-.mods-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.search-field {
-  flex: 1 1 16rem;
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.search-field input {
-  width: 100%;
-  padding-left: 2.25rem;
-}
-
-.search-icon {
-  position: absolute;
-  left: 0.85rem;
-  color: var(--modio-text-muted);
-  font-size: 1rem;
-  pointer-events: none;
-}
-
-.toolbar-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.control-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.75rem;
-  color: var(--modio-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.control-label select {
-  min-width: 9rem;
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 0.9rem;
-}
-
-.category-filters {
-  margin-bottom: 0.85rem;
-  padding: 1rem 1.1rem;
-  border-radius: var(--modio-radius);
-  background: var(--modio-surface);
-  border: 1px solid var(--modio-border);
-}
-
-.category-filters-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.category-filters-title {
-  margin: 0;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--modio-text-muted);
-}
-
-.clear-tags {
-  font-size: 0.82rem;
-}
-
-.category-tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.category-tag {
-  padding: 0.3rem 0.65rem;
-  border-radius: 999px;
-  border: 1px solid var(--modio-border);
-  background: var(--modio-surface-raised);
-  color: var(--modio-text-muted);
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.category-tag:hover:not(:disabled) {
-  border-color: rgba(7, 193, 216, 0.45);
-  color: var(--modio-text);
-  background: var(--modio-surface-hover);
-}
-
-.category-tag.active {
-  border-color: rgba(7, 193, 216, 0.55);
-  background: rgba(7, 193, 216, 0.12);
-  color: var(--modio-accent);
-}
-
 .mods-count {
   margin: 0 0 1.25rem;
 }
@@ -348,19 +176,5 @@ onMounted(async () => {
   display: flex;
   justify-content: center;
   margin-top: 2rem;
-}
-
-@media (max-width: 640px) {
-  .toolbar-controls {
-    width: 100%;
-  }
-
-  .control-label {
-    flex: 1;
-  }
-
-  .control-label select {
-    width: 100%;
-  }
 }
 </style>
