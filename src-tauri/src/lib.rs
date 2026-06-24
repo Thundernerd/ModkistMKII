@@ -4,7 +4,9 @@ mod modio_client;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use game_path::{game_path_status, set_game_path};
-use modio_client::{list_mods, modio_status, ModioState};
+use modio_client::{
+    get_user_profile, list_mods, list_user_mods, modio_status, ModioState,
+};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 
@@ -48,6 +50,8 @@ pub fn run() {
             greet,
             modio_status,
             list_mods,
+            get_user_profile,
+            list_user_mods,
             request_email_code,
             verify_email_code,
             auth_status,

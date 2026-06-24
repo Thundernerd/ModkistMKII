@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use modio::request::filter::prelude::*;
-use modio::request::filter::{custom_order_by_asc, custom_order_by_desc, Filter};
+use modio::request::filter::{custom_filter, custom_order_by_asc, custom_order_by_desc, Filter, Operator};
 use modio::types::id::Id;
 use modio::types::TargetPlatform;
 use modio::Client;
@@ -399,6 +399,29 @@ fn timestamp_to_iso(secs: i64) -> String {
         .unwrap_or_default()
 }
 
+fn mod_to_summary(mod_: modio::types::mods::Mod) -> ModSummary {
+    ModSummary {
+        id: mod_.id.get(),
+        name: mod_.name,
+        summary: mod_.summary,
+        profile_url: mod_.profile_url.to_string(),
+        logo_url: mod_.logo.thumb_320x180.to_string(),
+        downloads_total: mod_.stats.downloads_total,
+        subscribers_total: mod_.stats.subscribers_total,
+        popularity_rank: Some(mod_.stats.popularity.rank_position),
+        tags: mod_.tags.into_iter().map(|tag| tag.name).collect(),
+        date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfile {
+    pub username: String,
+    pub profile_url: String,
+    pub avatar_url: Option<String>,
+}
+
 #[tauri::command]
 pub fn modio_status(state: State<'_, ModioState>) -> ModioStatus {
     state.status()
@@ -419,22 +442,46 @@ pub async fn list_mods(
         .map_err(format_modio_error)?;
     let list = response.data().await.map_err(|e| e.to_string())?;
 
-    let mods = list
-        .data
-        .into_iter()
-        .map(|mod_| ModSummary {
-            id: mod_.id.get(),
-            name: mod_.name,
-            summary: mod_.summary,
-            profile_url: mod_.profile_url.to_string(),
-            logo_url: mod_.logo.thumb_320x180.to_string(),
-            downloads_total: mod_.stats.downloads_total,
-            subscribers_total: mod_.stats.subscribers_total,
-            popularity_rank: Some(mod_.stats.popularity.rank_position),
-            tags: mod_.tags.into_iter().map(|tag| tag.name).collect(),
-            date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
-        })
-        .collect();
+    let mods = list.data.into_iter().map(mod_to_summary).collect();
+
+    Ok(ModListResult {
+        mods,
+        total: list.total,
+    })
+}
+
+#[tauri::command]
+pub async fn get_user_profile(state: State<'_, ModioState>) -> Result<UserProfile, String> {
+    let client = state.get_session_client()?;
+    let response = client
+        .get_authenticated_user()
+        .await
+        .map_err(format_modio_error)?;
+    let user = response.data().await.map_err(|e| e.to_string())?;
+
+    Ok(UserProfile {
+        username: user.username,
+        profile_url: user.profile_url.to_string(),
+        avatar_url: user
+            .avatar
+            .as_ref()
+            .map(|avatar| avatar.thumb_100x100.to_string()),
+    })
+}
+
+#[tauri::command]
+pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResult, String> {
+    let game_id = state.game_id()?;
+    let client = state.get_session_client()?;
+    let filter = custom_filter("game_id", Operator::Equals, game_id.to_string());
+    let response = client
+        .get_user_mods()
+        .filter(filter)
+        .await
+        .map_err(format_modio_error)?;
+    let list = response.data().await.map_err(|e| e.to_string())?;
+
+    let mods = list.data.into_iter().map(mod_to_summary).collect();
 
     Ok(ModListResult {
         mods,
