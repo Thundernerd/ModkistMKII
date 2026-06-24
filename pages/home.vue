@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { invoke } from "~/utils/tauri";
-import type { ModSort } from "~/composables/useMods";
+import type { ModSort, ModTypeFilter } from "~/composables/useMods";
 
 definePageMeta({ layout: "app" });
 
@@ -16,6 +16,7 @@ const {
   loading,
   error,
   search,
+  modType,
   sort,
   sortDir,
   hasMore,
@@ -25,6 +26,12 @@ const {
 
 const modioConfigured = ref(false);
 const modioMessage = ref("");
+
+const modTypeOptions: { value: ModTypeFilter; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "plugin", label: "Plugin" },
+  { value: "blueprint", label: "Blueprint" },
+];
 
 const sortOptions: { value: ModSort; label: string }[] = [
   { value: "recentlyAdded", label: "Recently added" },
@@ -72,6 +79,18 @@ onMounted(async () => {
           />
         </label>
         <div class="toolbar-controls">
+          <label class="control-label">
+            <span>Type</span>
+            <select v-model="modType" aria-label="Filter by mod type">
+              <option
+                v-for="option in modTypeOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
           <label class="control-label">
             <span>Sort by</span>
             <select v-model="sort" aria-label="Sort by">

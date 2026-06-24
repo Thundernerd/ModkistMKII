@@ -27,10 +27,13 @@ export type ModSort =
   | "highestRated"
   | "alphabetical";
 
+export type ModTypeFilter = "all" | "plugin" | "blueprint";
+
 export type SortDir = "asc" | "desc";
 
 export interface ListModsParams {
   search?: string;
+  modType?: ModTypeFilter;
   sort?: ModSort;
   sortDir?: SortDir;
   limit?: number;
@@ -46,6 +49,7 @@ export function useMods() {
   const error = ref("");
 
   const search = ref("");
+  const modType = ref<ModTypeFilter>("all");
   const sort = ref<ModSort>("trending");
   const sortDir = ref<SortDir>("desc");
   const offset = ref(0);
@@ -62,6 +66,7 @@ export function useMods() {
       const result = await invoke<ModListResult>("list_mods", {
         params: {
           search: search.value.trim() || undefined,
+          modType: modType.value,
           sort: sort.value,
           sortDir: sortDir.value,
           limit: DEFAULT_LIMIT,
@@ -110,6 +115,7 @@ export function useMods() {
 
   watch(sort, () => resetAndFetch());
   watch(sortDir, () => resetAndFetch());
+  watch(modType, () => resetAndFetch());
   watch(search, () => scheduleSearchFetch());
 
   onUnmounted(() => {
@@ -124,6 +130,7 @@ export function useMods() {
     loading,
     error,
     search,
+    modType,
     sort,
     sortDir,
     hasMore,
