@@ -300,6 +300,56 @@ pub struct ModSummary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModDetail {
+    pub id: u64,
+    pub name: String,
+    pub summary: String,
+    pub profile_url: String,
+    pub logo_url: String,
+    pub hero_image_url: String,
+    pub downloads_total: u32,
+    pub downloads_today: u32,
+    pub subscribers_total: u32,
+    pub popularity_rank: Option<u32>,
+    pub tags: Vec<String>,
+    pub date_added: String,
+    pub date_updated: String,
+    pub date_live: String,
+    pub description_html: Option<String>,
+    pub submitted_by_username: String,
+    pub submitted_by_profile_url: String,
+    pub submitted_by_avatar_url: Option<String>,
+    pub ratings_display_text: String,
+    pub ratings_percentage_positive: u32,
+    pub ratings_positive: u32,
+    pub ratings_negative: u32,
+    pub media_image_urls: Vec<String>,
+    pub has_dependencies: bool,
+    pub homepage_url: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDependency {
+    pub id: u64,
+    pub name: String,
+    pub profile_url: String,
+    pub logo_url: String,
+    pub submitted_by_username: String,
+    pub date_updated: String,
+    pub downloads_total: u32,
+    pub file_size_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDependencyListResult {
+    pub mods: Vec<ModDependency>,
+    pub total: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModListResult {
     pub mods: Vec<ModSummary>,
     pub total: u32,
@@ -414,6 +464,64 @@ fn mod_to_summary(mod_: modio::types::mods::Mod) -> ModSummary {
     }
 }
 
+fn mod_to_detail(mod_: modio::types::mods::Mod) -> ModDetail {
+    let media_image_urls: Vec<String> = mod_
+        .media
+        .images
+        .iter()
+        .map(|image| image.original.to_string())
+        .collect();
+    let hero_image_url = media_image_urls
+        .first()
+        .cloned()
+        .unwrap_or_else(|| mod_.logo.original.to_string());
+
+    ModDetail {
+        id: mod_.id.get(),
+        name: mod_.name,
+        summary: mod_.summary,
+        profile_url: mod_.profile_url.to_string(),
+        logo_url: mod_.logo.thumb_320x180.to_string(),
+        hero_image_url,
+        downloads_total: mod_.stats.downloads_total,
+        downloads_today: mod_.stats.downloads_today,
+        subscribers_total: mod_.stats.subscribers_total,
+        popularity_rank: Some(mod_.stats.popularity.rank_position),
+        tags: mod_.tags.into_iter().map(|tag| tag.name).collect(),
+        date_added: timestamp_to_iso(mod_.date_added.as_secs()),
+        date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
+        date_live: timestamp_to_iso(mod_.date_live.as_secs()),
+        description_html: mod_.description,
+        submitted_by_username: mod_.submitted_by.username,
+        submitted_by_profile_url: mod_.submitted_by.profile_url.to_string(),
+        submitted_by_avatar_url: mod_
+            .submitted_by
+            .avatar
+            .as_ref()
+            .map(|avatar| avatar.thumb_100x100.to_string()),
+        ratings_display_text: mod_.stats.ratings.display_text,
+        ratings_percentage_positive: mod_.stats.ratings.percentage_positive,
+        ratings_positive: mod_.stats.ratings.positive,
+        ratings_negative: mod_.stats.ratings.negative,
+        media_image_urls,
+        has_dependencies: mod_.dependencies,
+        homepage_url: mod_.homepage_url.map(|url| url.to_string()),
+    }
+}
+
+fn mod_to_dependency(mod_: modio::types::mods::Mod) -> ModDependency {
+    ModDependency {
+        id: mod_.id.get(),
+        name: mod_.name,
+        profile_url: mod_.profile_url.to_string(),
+        logo_url: mod_.logo.thumb_320x180.to_string(),
+        submitted_by_username: mod_.submitted_by.username,
+        date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
+        downloads_total: mod_.stats.downloads_total,
+        file_size_bytes: mod_.modfile.as_ref().map(|file| file.filesize),
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserProfile {
@@ -447,6 +555,48 @@ pub async fn list_mods(
     Ok(ModListResult {
         mods,
         total: list.total,
+    })
+}
+
+#[tauri::command]
+pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
+    let game_id = state.game_id()?;
+    let client = state.get_mods_client()?;
+    let response = client
+        .get_mod(Id::new(game_id), Id::new(mod_id))
+        .await
+        .map_err(format_modio_error)?;
+    let mod_ = response.data().await.map_err(|e| e.to_string())?;
+
+    Ok(mod_to_detail(mod_))
+}
+
+#[tauri::command]
+pub async fn list_mod_dependencies(
+    state: State<'_, ModioState>,
+    mod_id: u64,
+) -> Result<ModDependencyListResult, String> {
+    let game_id = state.game_id()?;
+    let client = state.get_mods_client()?;
+    let response = client
+        .get_mod_dependencies(Id::new(game_id), Id::new(mod_id))
+        .await
+        .map_err(format_modio_error)?;
+    let list = response.data().await.map_err(|e| e.to_string())?;
+
+    let mut mods = Vec::with_capacity(list.data.len());
+    for dependency in list.data {
+        let mod_response = client
+            .get_mod(Id::new(game_id), dependency.mod_id)
+            .await
+            .map_err(format_modio_error)?;
+        let mod_ = mod_response.data().await.map_err(|e| e.to_string())?;
+        mods.push(mod_to_dependency(mod_));
+    }
+
+    Ok(ModDependencyListResult {
+        total: mods.len() as u32,
+        mods,
     })
 }
 
