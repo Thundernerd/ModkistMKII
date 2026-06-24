@@ -362,6 +362,8 @@ pub struct ListModsParams {
     #[serde(default)]
     pub mod_type: ModTypeFilter,
     #[serde(default)]
+    pub category_tags: Vec<String>,
+    #[serde(default)]
     pub sort: ModSort,
     #[serde(default)]
     pub sort_dir: SortDir,
@@ -454,6 +456,22 @@ fn build_mod_filter(params: &ListModsParams) -> Filter {
 
     if let Some(tag) = mod_type_tag(params.mod_type) {
         filter = filter.and(custom_filter("tags", Operator::Equals, tag));
+    }
+
+    if !params.category_tags.is_empty() {
+        if params.category_tags.len() == 1 {
+            filter = filter.and(custom_filter(
+                "tags",
+                Operator::Equals,
+                params.category_tags[0].clone(),
+            ));
+        } else {
+            filter = filter.and(custom_filter(
+                "tags",
+                Operator::In,
+                params.category_tags.clone(),
+            ));
+        }
     }
 
     filter.order_by(mod_sort_filter(params.sort, params.sort_dir))
@@ -553,9 +571,43 @@ pub struct UserProfile {
     pub avatar_url: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModTagOptions {
+    pub plugin_types: Vec<String>,
+    pub blueprint_types: Vec<String>,
+}
+
 #[tauri::command]
 pub fn modio_status(state: State<'_, ModioState>) -> ModioStatus {
     state.status()
+}
+
+#[tauri::command]
+pub async fn get_mod_tag_options(state: State<'_, ModioState>) -> Result<ModTagOptions, String> {
+    let game_id = state.game_id()?;
+    let client = state.get_base_client()?;
+    let response = client
+        .get_game_tags(Id::new(game_id))
+        .await
+        .map_err(format_modio_error)?;
+    let list = response.data().await.map_err(|e| e.to_string())?;
+
+    let mut plugin_types = Vec::new();
+    let mut blueprint_types = Vec::new();
+
+    for option in list.data {
+        match option.name.as_str() {
+            "Plugin Type" => plugin_types = option.tags,
+            "Blueprint Type" => blueprint_types = option.tags,
+            _ => {}
+        }
+    }
+
+    Ok(ModTagOptions {
+        plugin_types,
+        blueprint_types,
+    })
 }
 
 #[tauri::command]
