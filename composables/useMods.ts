@@ -34,6 +34,7 @@ export type SortDir = "asc" | "desc";
 export interface ListModsParams {
   search?: string;
   modType?: ModTypeFilter;
+  categoryTags?: string[];
   sort?: ModSort;
   sortDir?: SortDir;
   limit?: number;
@@ -50,6 +51,7 @@ export function useMods() {
 
   const search = ref("");
   const modType = ref<ModTypeFilter>("all");
+  const categoryTags = ref<string[]>([]);
   const sort = ref<ModSort>("trending");
   const sortDir = ref<SortDir>("desc");
   const offset = ref(0);
@@ -67,6 +69,8 @@ export function useMods() {
         params: {
           search: search.value.trim() || undefined,
           modType: modType.value,
+          categoryTags:
+            categoryTags.value.length > 0 ? [...categoryTags.value] : undefined,
           sort: sort.value,
           sortDir: sortDir.value,
           limit: DEFAULT_LIMIT,
@@ -115,7 +119,15 @@ export function useMods() {
 
   watch(sort, () => resetAndFetch());
   watch(sortDir, () => resetAndFetch());
-  watch(modType, () => resetAndFetch());
+  watch(modType, () => {
+    if (categoryTags.value.length > 0) {
+      categoryTags.value = [];
+      return;
+    }
+
+    resetAndFetch();
+  });
+  watch(categoryTags, () => resetAndFetch(), { deep: true });
   watch(search, () => scheduleSearchFetch());
 
   onUnmounted(() => {
@@ -131,6 +143,7 @@ export function useMods() {
     error,
     search,
     modType,
+    categoryTags,
     sort,
     sortDir,
     hasMore,

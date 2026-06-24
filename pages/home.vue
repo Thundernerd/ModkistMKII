@@ -17,12 +17,15 @@ const {
   error,
   search,
   modType,
+  categoryTags,
   sort,
   sortDir,
   hasMore,
   fetchMods,
   loadMore,
 } = useMods();
+
+const { tagOptions, fetchTagOptions } = useModTagOptions();
 
 const modioConfigured = ref(false);
 const modioMessage = ref("");
@@ -32,6 +35,36 @@ const modTypeOptions: { value: ModTypeFilter; label: string }[] = [
   { value: "plugin", label: "Plugin" },
   { value: "blueprint", label: "Blueprint" },
 ];
+
+const activeCategoryLabel = computed(() => {
+  if (modType.value === "plugin") return "Plugin type";
+  if (modType.value === "blueprint") return "Blueprint type";
+  return "";
+});
+
+const activeCategoryOptions = computed(() => {
+  if (!tagOptions.value) return [];
+  if (modType.value === "plugin") return tagOptions.value.pluginTypes;
+  if (modType.value === "blueprint") return tagOptions.value.blueprintTypes;
+  return [];
+});
+
+function isCategoryTagSelected(tag: string) {
+  return categoryTags.value.includes(tag);
+}
+
+function toggleCategoryTag(tag: string) {
+  if (isCategoryTagSelected(tag)) {
+    categoryTags.value = categoryTags.value.filter((value) => value !== tag);
+    return;
+  }
+
+  categoryTags.value = [...categoryTags.value, tag];
+}
+
+function clearCategoryTags() {
+  categoryTags.value = [];
+}
 
 const sortOptions: { value: ModSort; label: string }[] = [
   { value: "recentlyAdded", label: "Recently added" },
@@ -52,7 +85,7 @@ async function checkModioStatus() {
 onMounted(async () => {
   await checkModioStatus();
   if (modioConfigured.value) {
-    await fetchMods();
+    await Promise.all([fetchTagOptions(), fetchMods()]);
   }
 });
 </script>
@@ -110,6 +143,37 @@ onMounted(async () => {
               <option value="asc">Ascending</option>
             </select>
           </label>
+        </div>
+      </section>
+
+      <section
+        v-if="activeCategoryOptions.length"
+        class="category-filters"
+        :aria-label="`${activeCategoryLabel} filters`"
+      >
+        <div class="category-filters-header">
+          <h2 class="category-filters-title">{{ activeCategoryLabel }}</h2>
+          <button
+            v-if="categoryTags.length"
+            type="button"
+            class="link-button clear-tags"
+            @click="clearCategoryTags"
+          >
+            Clear
+          </button>
+        </div>
+        <div class="category-tag-list">
+          <button
+            v-for="tag in activeCategoryOptions"
+            :key="tag"
+            type="button"
+            class="category-tag"
+            :class="{ active: isCategoryTagSelected(tag) }"
+            :aria-pressed="isCategoryTagSelected(tag)"
+            @click="toggleCategoryTag(tag)"
+          >
+            {{ tag }}
+          </button>
         </div>
       </section>
 
@@ -219,6 +283,63 @@ onMounted(async () => {
   text-transform: none;
   letter-spacing: normal;
   font-size: 0.9rem;
+}
+
+.category-filters {
+  margin-bottom: 0.85rem;
+  padding: 1rem 1.1rem;
+  border-radius: var(--modio-radius);
+  background: var(--modio-surface);
+  border: 1px solid var(--modio-border);
+}
+
+.category-filters-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.category-filters-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--modio-text-muted);
+}
+
+.clear-tags {
+  font-size: 0.82rem;
+}
+
+.category-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.category-tag {
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--modio-border);
+  background: var(--modio-surface-raised);
+  color: var(--modio-text-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.category-tag:hover:not(:disabled) {
+  border-color: rgba(7, 193, 216, 0.45);
+  color: var(--modio-text);
+  background: var(--modio-surface-hover);
+}
+
+.category-tag.active {
+  border-color: rgba(7, 193, 216, 0.55);
+  background: rgba(7, 193, 216, 0.12);
+  color: var(--modio-accent);
 }
 
 .mods-count {
