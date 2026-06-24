@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { ensureGamePath } from "~/utils/authNavigation";
+import { ensureBepInEx, ensureGamePath } from "~/utils/authNavigation";
 
 const ready = ref(false);
 
 onMounted(async () => {
-  ready.value = await ensureGamePath();
+  if (!(await ensureGamePath())) {
+    return;
+  }
+
+  ready.value = await ensureBepInEx();
 });
 </script>
 
