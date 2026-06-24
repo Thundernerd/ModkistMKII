@@ -1,3 +1,29 @@
+#[cfg(not(unix))]
+mod wine_prefix {
+    use std::path::Path;
+
+    use serde::Serialize;
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WineWinhttpStatus {
+        pub state: String,
+        pub message: Option<String>,
+        pub prefix_label: Option<String>,
+    }
+
+    pub fn configure_winhttp_override(_game_dir: &Path) -> WineWinhttpStatus {
+        WineWinhttpStatus {
+            state: "notApplicable".into(),
+            message: None,
+            prefix_label: None,
+        }
+    }
+}
+
+#[cfg(unix)]
+mod wine_prefix;
+
 mod auth;
 mod bepinex;
 mod game_path;
@@ -7,7 +33,7 @@ mod modio_client;
 mod zip_extract;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
-use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex};
+use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
 use game_path::{game_path_status, set_game_path};
 use mod_install::{
     get_mod_install_state, install_mod, list_installed_mods, uninstall_mod,
@@ -71,6 +97,7 @@ pub fn run() {
             game_path_status,
             set_game_path,
             bepinex_status,
+            verify_bepinex,
             install_bepinex,
             reinstall_bepinex,
             list_installed_mods,

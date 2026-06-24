@@ -9,6 +9,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::game_path::game_directory;
+use crate::wine_prefix::{self, WineWinhttpStatus};
 use crate::zip_extract::extract_zip;
 
 const REQUIRED_VERSION: &str = "5.4.20";
@@ -38,10 +39,15 @@ pub struct BepInExStatus {
     pub found_version: Option<String>,
     pub message: Option<String>,
     pub can_continue: bool,
+    pub wine_winhttp: Option<WineWinhttpStatus>,
 }
 
 impl BepInExStatus {
-    fn from_detection(state: BepInExState, found_version: Option<String>) -> Self {
+    fn from_detection(
+        state: BepInExState,
+        found_version: Option<String>,
+        wine_winhttp: Option<WineWinhttpStatus>,
+    ) -> Self {
         match state {
             BepInExState::Missing => Self {
                 state: "missing".into(),
@@ -50,12 +56,14 @@ impl BepInExStatus {
                     "BepInEx {REQUIRED_VERSION} (x64) was not found in your game directory."
                 )),
                 can_continue: false,
+                wine_winhttp,
             },
             BepInExState::Installed => Self {
                 state: "installed".into(),
                 found_version,
                 message: None,
                 can_continue: true,
+                wine_winhttp,
             },
             BepInExState::WrongVersion => Self {
                 state: "wrongVersion".into(),
@@ -65,6 +73,7 @@ impl BepInExStatus {
                     found_version.unwrap_or_else(|| "an unknown version".into())
                 )),
                 can_continue: true,
+                wine_winhttp,
             },
         }
     }
@@ -190,15 +199,44 @@ async fn download_archive(destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn wine_winhttp_for_installed(
+    state: BepInExState,
+    game_dir: &Path,
+) -> Option<WineWinhttpStatus> {
+    if state == BepInExState::Installed {
+        Some(wine_prefix::configure_winhttp_override(game_dir))
+    } else {
+        None
+    }
+}
+
 fn status_for_game_dir(game_dir: &Path) -> BepInExStatus {
     let (state, found_version) = detect_bepinex(game_dir);
-    BepInExStatus::from_detection(state, found_version)
+    BepInExStatus::from_detection(state, found_version, None)
+}
+
+fn status_after_install(game_dir: &Path) -> BepInExStatus {
+    let (state, found_version) = detect_bepinex(game_dir);
+    let wine_winhttp = wine_winhttp_for_installed(state, game_dir);
+    BepInExStatus::from_detection(state, found_version, wine_winhttp)
 }
 
 #[tauri::command]
 pub fn bepinex_status(app: AppHandle) -> Result<BepInExStatus, String> {
     let game_dir = game_directory(&app)?;
     Ok(status_for_game_dir(&game_dir))
+}
+
+#[tauri::command]
+pub fn verify_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
+    let game_dir = game_directory(&app)?;
+    let (state, found_version) = detect_bepinex(&game_dir);
+    let wine_winhttp = wine_winhttp_for_installed(state, &game_dir);
+    Ok(BepInExStatus::from_detection(
+        state,
+        found_version,
+        wine_winhttp,
+    ))
 }
 
 #[tauri::command]
@@ -238,7 +276,7 @@ async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
         );
     }
 
-    Ok(status)
+    Ok(status_after_install(game_dir))
 }
 
 fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
