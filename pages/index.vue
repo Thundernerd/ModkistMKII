@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { invoke } from "~/utils/tauri";
 import type { AuthUser } from "~/composables/useModioAuth";
+import { navigateToApp } from "~/utils/authNavigation";
 
 type LoginStep = "enterEmail" | "codeSent";
 
@@ -73,7 +74,7 @@ async function resendCode() {
 }
 
 function skipLogin() {
-  navigateTo("/home");
+  navigateToApp();
 }
 
 async function verifyCode() {
@@ -88,7 +89,7 @@ async function verifyCode() {
   try {
     await invoke<AuthUser>("verify_email_code", { code: otp.value.trim() });
     await refreshAuthStatus();
-    await navigateTo("/home");
+    await navigateToApp();
   } catch (err) {
     error.value = String(err);
   } finally {
@@ -99,7 +100,7 @@ async function verifyCode() {
 onMounted(async () => {
   await refreshAuthStatus();
   if (authStatus.value.loggedIn) {
-    await navigateTo("/home");
+    await navigateToApp();
     return;
   }
   checkModioStatus();

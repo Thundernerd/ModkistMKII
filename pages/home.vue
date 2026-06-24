@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { invoke } from "~/utils/tauri";
 import type { ModSort } from "~/composables/useMods";
+import { ensureGamePath } from "~/utils/authNavigation";
 
 interface ModioStatus {
   configured: boolean;
@@ -57,6 +58,9 @@ function formatCount(value: number) {
 
 onMounted(async () => {
   await refreshAuthStatus();
+  if (!(await ensureGamePath())) {
+    return;
+  }
   await checkModioStatus();
   if (modioConfigured.value) {
     await fetchMods();
