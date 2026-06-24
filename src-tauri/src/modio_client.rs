@@ -360,6 +360,8 @@ pub struct ModListResult {
 pub struct ListModsParams {
     pub search: Option<String>,
     #[serde(default)]
+    pub mod_type: ModTypeFilter,
+    #[serde(default)]
     pub sort: ModSort,
     #[serde(default)]
     pub sort_dir: SortDir,
@@ -367,6 +369,23 @@ pub struct ListModsParams {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
+}
+
+#[derive(Deserialize, Default, Copy, Clone)]
+#[serde(rename_all = "camelCase")]
+pub enum ModTypeFilter {
+    #[default]
+    All,
+    Plugin,
+    Blueprint,
+}
+
+fn mod_type_tag(filter: ModTypeFilter) -> Option<&'static str> {
+    match filter {
+        ModTypeFilter::All => None,
+        ModTypeFilter::Plugin => Some("Plugin"),
+        ModTypeFilter::Blueprint => Some("Blueprint"),
+    }
 }
 
 fn default_mod_limit() -> u32 {
@@ -431,6 +450,10 @@ fn build_mod_filter(params: &ListModsParams) -> Filter {
         .filter(|value| !value.is_empty())
     {
         filter = filter.and(Fulltext::eq(search.to_string()));
+    }
+
+    if let Some(tag) = mod_type_tag(params.mod_type) {
+        filter = filter.and(custom_filter("tags", Operator::Equals, tag));
     }
 
     filter.order_by(mod_sort_filter(params.sort, params.sort_dir))
