@@ -1,15 +1,15 @@
 use std::fs::{self, File};
-use std::io::{copy, Write};
-use std::path::{Component, Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 
 use pelite::pe32::{Pe as Pe32, PeFile as PeFile32};
 use pelite::pe64::{Pe as Pe64, PeFile as PeFile64};
 use pelite::resources::version_info::VersionInfo;
 use serde::Serialize;
 use tauri::AppHandle;
-use zip::read::ZipArchive;
 
 use crate::game_path::game_directory;
+use crate::zip_extract::extract_zip;
 
 const REQUIRED_VERSION: &str = "5.4.20";
 const DOWNLOAD_URL: &str =
@@ -70,7 +70,7 @@ impl BepInExStatus {
     }
 }
 
-fn has_bepinex_structure(game_dir: &Path) -> bool {
+pub(crate) fn has_bepinex_structure(game_dir: &Path) -> bool {
     game_dir.join(WINHTTP_DLL).is_file()
         && game_dir.join(DOORSTOP_CONFIG).is_file()
         && game_dir.join(PRELOADER_DLL).is_file()
@@ -163,57 +163,6 @@ fn detect_bepinex(game_dir: &Path) -> (BepInExState, Option<String>) {
     }
 
     (BepInExState::WrongVersion, None)
-}
-
-fn safe_join(base: &Path, entry: &str) -> Result<PathBuf, String> {
-    let entry_path = Path::new(entry);
-    if entry_path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(format!("Unsafe zip entry path: {entry}"));
-    }
-
-    if entry_path.is_absolute() {
-        return Err(format!("Absolute zip entry path: {entry}"));
-    }
-
-    Ok(base.join(entry_path))
-}
-
-fn extract_zip(archive_path: &Path, game_dir: &Path) -> Result<(), String> {
-    let file = File::open(archive_path)
-        .map_err(|e| format!("Could not open downloaded archive: {e}"))?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|e| format!("Could not read zip archive: {e}"))?;
-
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|e| format!("Could not read zip entry: {e}"))?;
-        let entry_name = entry.name().to_string();
-
-        if entry_name.ends_with('/') {
-            let dir_path = safe_join(game_dir, entry_name.trim_end_matches('/'))?;
-            fs::create_dir_all(&dir_path)
-                .map_err(|e| format!("Could not create directory {}: {e}", dir_path.display()))?;
-            continue;
-        }
-
-        let out_path = safe_join(game_dir, &entry_name)?;
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                format!("Could not create parent directory {}: {e}", parent.display())
-            })?;
-        }
-
-        let mut out_file = File::create(&out_path)
-            .map_err(|e| format!("Could not create file {}: {e}", out_path.display()))?;
-        copy(&mut entry, &mut out_file)
-            .map_err(|e| format!("Could not extract {}: {e}", out_path.display()))?;
-    }
-
-    Ok(())
 }
 
 async fn download_archive(destination: &Path) -> Result<(), String> {

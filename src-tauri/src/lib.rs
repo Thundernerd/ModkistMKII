@@ -2,6 +2,7 @@ mod auth;
 mod bepinex;
 mod game_path;
 mod modio_client;
+mod zip_extract;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex};
