@@ -1,20 +1,47 @@
 import { invoke } from "~/utils/tauri";
+import type { AuthStatus } from "~/composables/useModioAuth";
 import type { GamePathStatus } from "~/composables/useGamePath";
 
-export async function navigateToApp() {
+const AUTH_REQUIRED_PATHS = new Set(["/user"]);
+
+function setupRoute(redirect?: string) {
+  return redirect ? { path: "/setup", query: { redirect } } : "/setup";
+}
+
+async function resolveDestination(redirect?: string): Promise<string> {
+  const destination =
+    redirect && redirect.startsWith("/") ? redirect : "/home";
+
+  if (!AUTH_REQUIRED_PATHS.has(destination)) {
+    return destination;
+  }
+
+  const auth = await invoke<AuthStatus>("auth_status");
+  return auth.loggedIn ? destination : "/home";
+}
+
+export function readRedirectParam(value: unknown): string | undefined {
+  const redirect = Array.isArray(value) ? value[0] : value;
+  if (typeof redirect === "string" && redirect.startsWith("/")) {
+    return redirect;
+  }
+  return undefined;
+}
+
+export async function navigateToApp(redirect?: string) {
   const gamePath = await invoke<GamePathStatus>("game_path_status");
   if (!gamePath.valid) {
-    await navigateTo("/setup");
+    await navigateTo(setupRoute(redirect));
     return;
   }
 
-  await navigateTo("/home");
+  await navigateTo(await resolveDestination(redirect));
 }
 
-export async function ensureGamePath(): Promise<boolean> {
+export async function ensureGamePath(redirect?: string): Promise<boolean> {
   const gamePath = await invoke<GamePathStatus>("game_path_status");
   if (!gamePath.valid) {
-    await navigateTo("/setup");
+    await navigateTo(setupRoute(redirect));
     return false;
   }
 

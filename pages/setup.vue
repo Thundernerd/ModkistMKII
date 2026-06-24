@@ -1,57 +1,23 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { open } from "@tauri-apps/plugin-dialog";
+import {
+  navigateToApp,
+  readRedirectParam,
+} from "~/utils/authNavigation";
 import { useGamePath } from "~/composables/useGamePath";
 
-const { gamePathStatus, refreshGamePathStatus, setGamePath } = useGamePath();
+const route = useRoute();
+const { gamePathStatus, refreshGamePathStatus } = useGamePath();
 
-const path = ref("");
-const loading = ref(false);
-const error = ref("");
+const redirect = computed(() => readRedirectParam(route.query.redirect));
 
-async function browseFolder() {
-  error.value = "";
-  const selected = await open({
-    directory: true,
-    multiple: false,
-    title: "Select Zeepkist game directory",
-  });
-
-  if (typeof selected === "string") {
-    path.value = selected;
-  }
-}
-
-async function submitPath() {
-  if (!path.value.trim()) {
-    error.value = "Enter your Zeepkist game directory.";
-    return;
-  }
-
-  loading.value = true;
-  error.value = "";
-
-  try {
-    await setGamePath(path.value.trim());
-    if (gamePathStatus.value.valid) {
-      await navigateTo("/home");
-    }
-  } catch (err) {
-    error.value = String(err);
-  } finally {
-    loading.value = false;
-  }
+async function onPathSaved() {
+  await navigateToApp(redirect.value);
 }
 
 onMounted(async () => {
   await refreshGamePathStatus();
   if (gamePathStatus.value.valid) {
-    await navigateTo("/home");
-    return;
-  }
-
-  if (gamePathStatus.value.path) {
-    path.value = gamePathStatus.value.path;
+    await navigateToApp(redirect.value);
   }
 });
 </script>
@@ -70,34 +36,11 @@ onMounted(async () => {
       </p>
 
       <section class="panel">
-        <form class="form" @submit.prevent="submitPath">
-          <label for="game-path">Game directory</label>
-          <div class="path-row">
-            <input
-              id="game-path"
-              v-model="path"
-              type="text"
-              placeholder="/path/to/Zeepkist"
-              :disabled="loading"
-            />
-            <button
-              type="button"
-              class="btn-secondary browse-button"
-              :disabled="loading"
-              @click="browseFolder"
-            >
-              Browse…
-            </button>
-          </div>
-          <button type="submit" :disabled="loading">
-            {{ loading ? "Saving…" : "Continue" }}
-          </button>
-        </form>
-
-        <p v-if="gamePathStatus.message && !error" class="hint status-hint">
-          {{ gamePathStatus.message }}
-        </p>
-        <p v-if="error" class="error">{{ error }}</p>
+        <GamePathForm
+          input-id="setup-game-path"
+          submit-label="Continue"
+          @saved="onPathSaved"
+        />
       </section>
     </div>
   </main>
@@ -162,38 +105,5 @@ onMounted(async () => {
   background: var(--modio-surface);
   border: 1px solid var(--modio-border);
   box-shadow: var(--modio-shadow);
-}
-
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-label {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--modio-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.path-row {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.path-row input {
-  flex: 1;
-  min-width: 0;
-}
-
-.browse-button {
-  flex-shrink: 0;
-}
-
-.status-hint,
-.error {
-  margin-top: 1rem;
 }
 </style>

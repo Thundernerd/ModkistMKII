@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { invoke } from "~/utils/tauri";
 import type { AuthUser } from "~/composables/useModioAuth";
-import { navigateToApp } from "~/utils/authNavigation";
+import { navigateToApp, readRedirectParam } from "~/utils/authNavigation";
 
 type LoginStep = "enterEmail" | "codeSent";
 
@@ -25,6 +25,9 @@ const modioMessage = ref(
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const { authStatus, refreshAuthStatus } = useModioAuth();
+
+const route = useRoute();
+const redirect = computed(() => readRedirectParam(route.query.redirect));
 
 async function checkModioStatus() {
   const status = await invoke<ModioStatus>("modio_status");
@@ -89,7 +92,7 @@ async function verifyCode() {
   try {
     await invoke<AuthUser>("verify_email_code", { code: otp.value.trim() });
     await refreshAuthStatus();
-    await navigateToApp();
+    await navigateToApp(redirect.value);
   } catch (err) {
     error.value = String(err);
   } finally {
@@ -100,7 +103,7 @@ async function verifyCode() {
 onMounted(async () => {
   await refreshAuthStatus();
   if (authStatus.value.loggedIn) {
-    await navigateToApp();
+    await navigateToApp(redirect.value);
     return;
   }
   checkModioStatus();
