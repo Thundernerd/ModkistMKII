@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { invoke } from "~/utils/tauri";
 import { useModFilters } from "~/composables/useModFilters";
 
@@ -31,6 +32,17 @@ const {
   initialize,
 } = useModFilters();
 
+const {
+  refreshInstalled,
+  installMod,
+  uninstallMod,
+  getUiStatus,
+  getCanUninstall,
+  getInstallError,
+  isUninstalling,
+  installEnvironmentError,
+} = useModInstall();
+
 const modioConfigured = ref(false);
 const modioMessage = ref("");
 
@@ -40,10 +52,23 @@ async function checkModioStatus() {
   modioMessage.value = status.message ?? "";
 }
 
+async function handleInstall(modId: number) {
+  await installMod(modId);
+}
+
+async function handleUninstall(modId: number, modName: string) {
+  const confirmed = await confirm(
+    `Remove "${modName}" from your game folder?`,
+    { title: "Uninstall mod?", kind: "warning" },
+  );
+  if (!confirmed) return;
+  await uninstallMod(modId);
+}
+
 onMounted(async () => {
   await checkModioStatus();
   if (modioConfigured.value) {
-    await initialize();
+    await Promise.all([initialize(), refreshInstalled()]);
   }
 });
 </script>
@@ -73,6 +98,11 @@ onMounted(async () => {
         @clear-filters="clearFilters"
       />
 
+      <p v-if="installEnvironmentError" class="hint install-hint">
+        Installs are unavailable: {{ installEnvironmentError }}
+        <NuxtLink to="/settings">Check Settings</NuxtLink>
+      </p>
+
       <p v-if="!loading || mods.length" class="meta mods-count">
         Showing {{ mods.length }} of {{ total }} mods
       </p>
@@ -94,7 +124,15 @@ onMounted(async () => {
 
     <ul v-else-if="mods.length" class="mod-grid">
       <li v-for="mod in mods" :key="mod.id">
-        <ModCard :mod="mod" />
+        <ModCard
+          :mod="mod"
+          :install-status="getUiStatus(mod.id)"
+          :can-uninstall="getCanUninstall(mod.id)"
+          :is-uninstalling="isUninstalling(mod.id)"
+          :install-error="getInstallError(mod.id)"
+          @install="handleInstall(mod.id)"
+          @uninstall="handleUninstall(mod.id, mod.name)"
+        />
       </li>
     </ul>
 
@@ -133,6 +171,14 @@ onMounted(async () => {
 
 .mods-count {
   margin: 0 0 1.25rem;
+}
+
+.install-hint {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--modio-radius-sm);
+  background: var(--modio-surface);
+  border: 1px solid var(--modio-border);
 }
 
 .mods-error {

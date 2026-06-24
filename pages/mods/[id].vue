@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { confirm } from "@tauri-apps/plugin-dialog";
 import type { DependencySort, ModDependency } from "~/composables/useModDetail";
 import {
   formatFileSize,
@@ -19,6 +20,18 @@ const {
   fetchMod,
   fetchDependencies,
 } = useModDetail();
+
+const {
+  refreshInstalled,
+  refreshInstallState,
+  installMod,
+  uninstallMod,
+  getUiStatus,
+  getCanUninstall,
+  getInstallError,
+  isUninstalling,
+  installEnvironmentError,
+} = useModInstall();
 
 const modId = computed(() => Number(route.params.id));
 const isValidId = computed(() => Number.isInteger(modId.value) && modId.value > 0);
@@ -60,6 +73,7 @@ watch(
       activeTab.value = "description";
       mediaIndex.value = 0;
       fetchMod(id);
+      refreshInstallState(id);
     }
   },
   { immediate: true },
@@ -74,8 +88,22 @@ watch(
   },
 );
 
+watch(
+  () => dependencies.value.length,
+  () => {
+    if (!dependencies.value.length) return;
+    for (const dep of dependencies.value) {
+      refreshInstallState(dep.id);
+    }
+  },
+);
+
 watch(mediaImages, () => {
   mediaIndex.value = 0;
+});
+
+onMounted(() => {
+  refreshInstalled();
 });
 
 function formatCount(value: number) {
@@ -118,6 +146,22 @@ async function copyModId() {
   } catch {
     copiedId.value = false;
   }
+}
+
+async function handleInstall(targetModId = modId.value) {
+  await installMod(targetModId);
+  await refreshInstalled();
+}
+
+async function handleUninstall(targetModId = modId.value, modName?: string) {
+  const name = modName ?? mod.value?.name ?? "this mod";
+  const confirmed = await confirm(
+    `Remove "${name}" from your game folder?`,
+    { title: "Uninstall mod?", kind: "warning" },
+  );
+  if (!confirmed) return;
+  await uninstallMod(targetModId);
+  await refreshInstalled();
 }
 
 function dependencyMeta(dep: ModDependency) {
@@ -263,21 +307,23 @@ function dependencyMeta(dep: ModDependency) {
 
               <ul v-else class="dependency-list">
                 <li v-for="dep in sortedDependencies" :key="dep.id">
-                  <NuxtLink :to="`/mods/${dep.id}`" class="dependency-card">
-                    <div class="dependency-thumb">
-                      <img
-                        v-if="dep.logoUrl"
-                        :src="dep.logoUrl"
-                        :alt="`${dep.name} logo`"
-                        loading="lazy"
-                      />
-                      <div v-else class="dependency-thumb-fallback" />
-                    </div>
+                  <div class="dependency-card">
+                    <NuxtLink :to="`/mods/${dep.id}`" class="dependency-card-link">
+                      <div class="dependency-thumb">
+                        <img
+                          v-if="dep.logoUrl"
+                          :src="dep.logoUrl"
+                          :alt="`${dep.name} logo`"
+                          loading="lazy"
+                        />
+                        <div v-else class="dependency-thumb-fallback" />
+                      </div>
 
-                    <div class="dependency-info">
-                      <h3>{{ dep.name }}</h3>
-                      <p class="dependency-meta">{{ dependencyMeta(dep) }}</p>
-                    </div>
+                      <div class="dependency-info">
+                        <h3>{{ dep.name }}</h3>
+                        <p class="dependency-meta">{{ dependencyMeta(dep) }}</p>
+                      </div>
+                    </NuxtLink>
 
                     <div class="dependency-actions">
                       <span
@@ -286,9 +332,18 @@ function dependencyMeta(dep: ModDependency) {
                       >
                         {{ formatFileSize(dep.fileSizeBytes) }}
                       </span>
-                      <span class="dependency-subscribe">View</span>
+                      <ModInstallButton
+                        :mod-id="dep.id"
+                        :status="getUiStatus(dep.id)"
+                        :can-uninstall="getCanUninstall(dep.id)"
+                        :is-uninstalling="isUninstalling(dep.id)"
+                        :error="getInstallError(dep.id)"
+                        compact
+                        @install="handleInstall(dep.id)"
+                        @uninstall="handleUninstall(dep.id, dep.name)"
+                      />
                     </div>
-                  </NuxtLink>
+                  </div>
                 </li>
               </ul>
             </div>
@@ -297,6 +352,20 @@ function dependencyMeta(dep: ModDependency) {
 
         <aside class="mod-detail-sidebar">
           <h1 class="sidebar-title">{{ mod.name }}</h1>
+
+          <p v-if="installEnvironmentError" class="sidebar-install-hint">
+            {{ installEnvironmentError }}
+          </p>
+
+          <ModInstallButton
+            :mod-id="mod.id"
+            :status="getUiStatus(mod.id)"
+            :can-uninstall="getCanUninstall(mod.id)"
+            :is-uninstalling="isUninstalling(mod.id)"
+            :error="getInstallError(mod.id)"
+            @install="handleInstall(mod.id)"
+            @uninstall="handleUninstall(mod.id, mod.name)"
+          />
 
           <a
             :href="mod.profileUrl"
@@ -652,15 +721,13 @@ function dependencyMeta(dep: ModDependency) {
 
 .dependency-card {
   display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.85rem;
   align-items: center;
   padding: 0.75rem;
   border-radius: var(--modio-radius);
   border: 1px solid var(--modio-border);
   background: var(--modio-surface);
-  color: inherit;
-  text-decoration: none;
   transition:
     border-color 0.2s ease,
     background-color 0.2s ease;
@@ -669,6 +736,18 @@ function dependencyMeta(dep: ModDependency) {
 .dependency-card:hover {
   border-color: rgba(7, 193, 216, 0.45);
   background: var(--modio-surface-raised);
+}
+
+.dependency-card-link {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dependency-card-link:hover {
   color: inherit;
 }
 
@@ -721,16 +800,6 @@ function dependencyMeta(dep: ModDependency) {
   white-space: nowrap;
 }
 
-.dependency-subscribe {
-  padding: 0.35rem 0.75rem;
-  border-radius: var(--modio-radius-sm);
-  border: 1px solid var(--modio-accent);
-  color: var(--modio-accent);
-  font-size: 0.78rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .mod-detail-sidebar {
   position: sticky;
   top: 1rem;
@@ -745,6 +814,12 @@ function dependencyMeta(dep: ModDependency) {
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.2;
+}
+
+.sidebar-install-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--modio-danger);
 }
 
 .subscribe-button {
@@ -992,11 +1067,14 @@ function dependencyMeta(dep: ModDependency) {
   }
 
   .dependency-card {
+    grid-template-columns: 1fr;
+  }
+
+  .dependency-card-link {
     grid-template-columns: 3.5rem minmax(0, 1fr);
   }
 
   .dependency-actions {
-    grid-column: 2;
     flex-direction: row;
     align-items: center;
     justify-content: space-between;

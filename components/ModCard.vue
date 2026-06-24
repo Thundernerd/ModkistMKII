@@ -1,8 +1,18 @@
 <script setup lang="ts">
+import type { InstallUiStatus } from "~/composables/useModInstall";
 import type { ModSummary } from "~/composables/useMods";
 
 defineProps<{
   mod: ModSummary;
+  installStatus?: InstallUiStatus;
+  canUninstall?: boolean;
+  isUninstalling?: boolean;
+  installError?: string;
+}>();
+
+const emit = defineEmits<{
+  install: [];
+  uninstall: [];
 }>();
 
 function formatDate(iso: string) {
@@ -16,40 +26,55 @@ function formatCount(value: number) {
 </script>
 
 <template>
-  <NuxtLink :to="`/mods/${mod.id}`" class="mod-card">
-    <div class="mod-thumb">
-      <img
-        v-if="mod.logoUrl"
-        :src="mod.logoUrl"
-        :alt="`${mod.name} thumbnail`"
-        loading="lazy"
+  <article class="mod-card">
+    <NuxtLink :to="`/mods/${mod.id}`" class="mod-card-link">
+      <div class="mod-thumb">
+        <img
+          v-if="mod.logoUrl"
+          :src="mod.logoUrl"
+          :alt="`${mod.name} thumbnail`"
+          loading="lazy"
+        />
+        <div v-else class="mod-thumb-fallback" />
+      </div>
+      <div class="mod-content">
+        <h2 class="mod-name">{{ mod.name }}</h2>
+        <p class="mod-summary">{{ mod.summary }}</p>
+        <div class="mod-stats">
+          <span class="stat">
+            <span class="stat-icon" aria-hidden="true">↓</span>
+            {{ formatCount(mod.downloadsTotal) }}
+          </span>
+          <span class="stat">
+            <span class="stat-icon" aria-hidden="true">★</span>
+            {{ formatCount(mod.subscribersTotal) }}
+          </span>
+          <span v-if="mod.popularityRank" class="stat">
+            #{{ mod.popularityRank }}
+          </span>
+        </div>
+        <div v-if="mod.tags.length" class="mod-tags">
+          <span v-for="tag in mod.tags" :key="tag" class="tag">{{ tag }}</span>
+        </div>
+        <p v-if="mod.dateUpdated" class="mod-updated">
+          Updated {{ formatDate(mod.dateUpdated) }}
+        </p>
+      </div>
+    </NuxtLink>
+
+    <div v-if="installStatus" class="mod-card-footer">
+      <ModInstallButton
+        :mod-id="mod.id"
+        :status="installStatus"
+        :can-uninstall="canUninstall"
+        :is-uninstalling="isUninstalling"
+        :error="installError"
+        compact
+        @install="emit('install')"
+        @uninstall="emit('uninstall')"
       />
-      <div v-else class="mod-thumb-fallback" />
     </div>
-    <div class="mod-content">
-      <h2 class="mod-name">{{ mod.name }}</h2>
-      <p class="mod-summary">{{ mod.summary }}</p>
-      <div class="mod-stats">
-        <span class="stat">
-          <span class="stat-icon" aria-hidden="true">↓</span>
-          {{ formatCount(mod.downloadsTotal) }}
-        </span>
-        <span class="stat">
-          <span class="stat-icon" aria-hidden="true">★</span>
-          {{ formatCount(mod.subscribersTotal) }}
-        </span>
-        <span v-if="mod.popularityRank" class="stat">
-          #{{ mod.popularityRank }}
-        </span>
-      </div>
-      <div v-if="mod.tags.length" class="mod-tags">
-        <span v-for="tag in mod.tags" :key="tag" class="tag">{{ tag }}</span>
-      </div>
-      <p v-if="mod.dateUpdated" class="mod-updated">
-        Updated {{ formatDate(mod.dateUpdated) }}
-      </p>
-    </div>
-  </NuxtLink>
+  </article>
 </template>
 
 <style scoped>
@@ -57,8 +82,6 @@ function formatCount(value: number) {
   display: flex;
   flex-direction: column;
   height: 100%;
-  color: inherit;
-  text-decoration: none;
   background: var(--modio-surface);
   border: 1px solid var(--modio-border);
   border-radius: var(--modio-radius);
@@ -73,6 +96,17 @@ function formatCount(value: number) {
   transform: translateY(-2px);
   border-color: rgba(7, 193, 216, 0.45);
   box-shadow: var(--modio-shadow);
+}
+
+.mod-card-link {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  color: inherit;
+  text-decoration: none;
+}
+
+.mod-card-link:hover {
   color: inherit;
 }
 
@@ -103,8 +137,13 @@ function formatCount(value: number) {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  padding: 0.85rem 0.9rem 1rem;
+  padding: 0.85rem 0.9rem 0.75rem;
   flex: 1;
+}
+
+.mod-card-footer {
+  padding: 0 0.9rem 0.9rem;
+  margin-top: auto;
 }
 
 .mod-name {
