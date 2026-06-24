@@ -3,7 +3,15 @@ mod modio_client;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use modio_client::{list_mods, modio_status, ModioState};
+use tauri::webview::PageLoadEvent;
 use tauri::Manager;
+
+const RELOAD_IF_BLANK_JS: &str = r#"window.setTimeout(function () {
+  var root = document.getElementById("__nuxt");
+  if (root && root.childElementCount === 0) {
+    window.location.reload();
+  }
+}, 500)"#;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -19,6 +27,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            let _ = webview.eval(RELOAD_IF_BLANK_JS);
+        })
         .setup(|app| {
             let state = ModioState::from_env();
             if let Err(error) = state.restore_from_store(app.handle()) {

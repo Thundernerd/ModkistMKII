@@ -1,23 +1,30 @@
-import { isTauriReady } from "~/utils/tauri";
+function isNuxtMounted(): boolean {
+  const root = document.getElementById("__nuxt");
+  return !!root && root.childElementCount > 0;
+}
 
 export default defineNuxtPlugin({
   name: "tauri",
   enforce: "pre",
   setup() {
-    if (!import.meta.dev || !import.meta.env.TAURI_ENV_PLATFORM) return;
-    if (isTauriReady()) return;
+    if (!import.meta.env.TAURI_ENV_PLATFORM) return;
+    if (isNuxtMounted()) return;
 
-    const timeout = window.setTimeout(() => {
-      const root = document.getElementById("__nuxt");
-      if (root && root.childElementCount === 0) {
-        window.location.reload();
-      }
-    }, 200);
+    let reloaded = false;
+
+    const reloadIfBlank = () => {
+      if (reloaded || isNuxtMounted()) return;
+      reloaded = true;
+      window.location.reload();
+    };
+
+    const timeouts = [400, 1200].map((delay) =>
+      window.setTimeout(reloadIfBlank, delay),
+    );
 
     const observer = new MutationObserver(() => {
-      const root = document.getElementById("__nuxt");
-      if (!root || root.childElementCount === 0) return;
-      window.clearTimeout(timeout);
+      if (!isNuxtMounted()) return;
+      timeouts.forEach((id) => window.clearTimeout(id));
       observer.disconnect();
     });
 
