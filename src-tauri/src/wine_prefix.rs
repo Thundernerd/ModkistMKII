@@ -5,9 +5,11 @@ use std::process::Command;
 use serde::Serialize;
 
 const GAME_EXECUTABLE: &str = "zeepkist.exe";
-const DLL_OVERRIDES_SECTION: &str = "[Software\\Wine\\DllOverrides]";
+// Wine user.reg section headers escape backslashes (written as \\ in the file).
+const USER_REG_DLL_OVERRIDES_SECTION: &str = "[Software\\\\Wine\\\\DllOverrides]";
 const OVERRIDE_VALUE: &str = "native,builtin";
-const WINHTTP_KEYS: [&str; 2] = ["winhttp", "*winhttp"];
+const WINHTTP_KEY: &str = "winhttp";
+const WINE_REG_WINHTTP_KEYS: [&str; 2] = ["winhttp", "*winhttp"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -318,11 +320,107 @@ fn find_prefix_from_exe_path(exe_path: &Path) -> Option<PathBuf> {
 
 pub(crate) fn is_winhttp_configured(content: &str) -> bool {
     let expected = normalize_override_value(OVERRIDE_VALUE);
-    WINHTTP_KEYS.iter().all(|key| {
-        read_dll_override_value(content, key)
-            .map(|value| normalize_override_value(&value) == expected)
-            .unwrap_or(false)
-    })
+    let Some(span) = primary_dll_overrides_section_span(content) else {
+        return false;
+    };
+
+    read_dll_override_value_in_span(content, span, WINHTTP_KEY)
+        .map(|value| normalize_override_value(&value) == expected)
+        .unwrap_or(false)
+}
+
+fn is_dll_overrides_section(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('[') {
+        return false;
+    }
+
+    let after_open = &trimmed[1..];
+    let Some(close_index) = after_open.find(']') else {
+        return false;
+    };
+
+    let section_name = &after_open[..close_index];
+    section_name.replace("\\\\", "\\").to_ascii_lowercase() == r"software\wine\dlloverrides"
+}
+
+fn is_timestamped_dll_overrides_section(line: &str) -> bool {
+    if !is_dll_overrides_section(line) {
+        return false;
+    }
+
+    let trimmed = line.trim();
+    let after_close = trimmed.split(']').nth(1).unwrap_or("").trim();
+    after_close
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+}
+
+fn find_dll_overrides_section_spans(content: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut section_start: Option<usize> = None;
+    let mut offset = 0usize;
+
+    for line in content.split_inclusive('\n') {
+        let line_content = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = line_content.trim();
+
+        if trimmed.starts_with('[') {
+            if let Some(start) = section_start {
+                spans.push((start, offset));
+                section_start = None;
+            }
+            if is_dll_overrides_section(trimmed) {
+                section_start = Some(offset);
+            }
+        }
+
+        offset += line.len();
+    }
+
+    if let Some(start) = section_start {
+        spans.push((start, content.len()));
+    }
+
+    spans
+}
+
+fn primary_dll_overrides_section_span(content: &str) -> Option<(usize, usize)> {
+    let spans = find_dll_overrides_section_spans(content);
+    if spans.is_empty() {
+        return None;
+    }
+
+    for (start, end) in &spans {
+        let header = content[*start..*end]
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if is_timestamped_dll_overrides_section(header) {
+            return Some((*start, *end));
+        }
+    }
+
+    Some(spans[0])
+}
+
+fn find_dll_overrides_section_span(content: &str) -> Option<(usize, usize)> {
+    primary_dll_overrides_section_span(content)
+}
+
+fn read_dll_override_value_in_span(content: &str, span: (usize, usize), key: &str) -> Option<String> {
+    for line in content[span.0..span.1].lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(value) = parse_reg_value_line(trimmed, key) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn normalize_override_value(value: &str) -> String {
@@ -331,24 +429,6 @@ fn normalize_override_value(value: &str) -> String {
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>()
         .to_ascii_lowercase()
-}
-
-fn read_dll_override_value(content: &str, key: &str) -> Option<String> {
-    let mut in_section = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_section = trimmed == DLL_OVERRIDES_SECTION;
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        if let Some(value) = parse_reg_value_line(trimmed, key) {
-            return Some(value);
-        }
-    }
-    None
 }
 
 fn parse_reg_value_line(line: &str, key: &str) -> Option<String> {
@@ -369,71 +449,85 @@ fn parse_quoted_string(value: &str) -> Option<String> {
     Some(inner[..end].to_string())
 }
 
-pub(crate) fn merge_winhttp_overrides(content: &str) -> String {
-    if is_winhttp_configured(content) {
+fn remove_plain_duplicate_dll_overrides_sections(content: &str) -> String {
+    let spans = find_dll_overrides_section_spans(content);
+    let has_timestamped = spans.iter().any(|(start, _)| {
+        let header = content[*start..]
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim();
+        is_timestamped_dll_overrides_section(header)
+    });
+
+    if !has_timestamped {
         return content.to_string();
     }
 
-    if let Some(start) = content.find(DLL_OVERRIDES_SECTION) {
-        let after_header = start + DLL_OVERRIDES_SECTION.len();
-        let remainder = &content[after_header..];
-        let section_end = remainder
-            .find("\n[")
-            .map(|index| after_header + index)
-            .unwrap_or(content.len());
-
-        let mut section = content[start..section_end].to_string();
-        for key in WINHTTP_KEYS {
-            upsert_reg_entry_in_section(&mut section, key, OVERRIDE_VALUE);
+    let mut removed = String::new();
+    let mut cursor = 0usize;
+    for (start, end) in spans {
+        let header = content[start..end]
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if is_dll_overrides_section(header) && !is_timestamped_dll_overrides_section(header) {
+            removed.push_str(&content[cursor..start]);
+            cursor = end;
         }
+    }
+    removed.push_str(&content[cursor..]);
+    removed
+}
 
-        return format!(
-            "{}{}{}",
-            &content[..start],
-            section,
-            &content[section_end..]
-        );
+pub(crate) fn merge_winhttp_overrides(content: &str) -> String {
+    let content = remove_plain_duplicate_dll_overrides_sections(content);
+
+    if is_winhttp_configured(&content) {
+        return content;
     }
 
-    let mut merged = content.to_string();
+    if let Some((start, end)) = find_dll_overrides_section_span(&content) {
+        let mut section = content[start..end].to_string();
+        upsert_reg_entry_in_section(&mut section, WINHTTP_KEY, OVERRIDE_VALUE);
+
+        return format!("{}{}{}", &content[..start], section, &content[end..]);
+    }
+
+    let mut merged = content;
     if !merged.ends_with('\n') {
         merged.push('\n');
     }
     merged.push('\n');
-    merged.push_str(DLL_OVERRIDES_SECTION);
+    merged.push_str(USER_REG_DLL_OVERRIDES_SECTION);
     merged.push('\n');
-    for key in WINHTTP_KEYS {
-        merged.push_str(&format!("\"{key}\"=\"{OVERRIDE_VALUE}\"\n"));
-    }
+    merged.push_str(&format!("\"{WINHTTP_KEY}\"=\"{OVERRIDE_VALUE}\"\n"));
     merged
 }
 
 fn upsert_reg_entry_in_section(section: &mut String, key: &str, value: &str) {
     let entry = format!("\"{key}\"=\"{value}\"");
-    if let Some(line_index) = section.lines().position(|line| {
-        line.trim()
-            .starts_with(&format!("\"{key}\"="))
+    let mut lines: Vec<String> = section.lines().map(str::to_string).collect();
+
+    if let Some(index) = lines.iter().position(|line| {
+        line.trim().starts_with(&format!("\"{key}\"="))
     }) {
-        let lines: Vec<&str> = section.lines().collect();
-        let mut rebuilt = String::new();
-        for (index, line) in lines.iter().enumerate() {
-            if index == line_index {
-                rebuilt.push_str(&entry);
-            } else {
-                rebuilt.push_str(line);
-            }
-            if index + 1 < lines.len() {
-                rebuilt.push('\n');
-            }
-        }
-        *section = rebuilt;
-        return;
+        lines[index] = entry;
+    } else {
+        let insert_at = lines
+            .iter()
+            .rposition(|line| !line.trim().is_empty())
+            .map(|index| index + 1)
+            .unwrap_or(lines.len());
+        lines.insert(insert_at, entry);
     }
 
-    if !section.ends_with('\n') {
-        section.push('\n');
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
     }
-    section.push_str(&entry);
+
+    *section = lines.join("\n");
     section.push('\n');
 }
 
@@ -460,7 +554,7 @@ fn apply_via_user_reg(user_reg: &Path, content: &str) -> Result<(), String> {
 fn apply_via_wine_reg(prefix: &Path) -> Result<(), String> {
     let wine = find_wine_binary().ok_or_else(|| "No wine binary found".to_string())?;
 
-    for key in WINHTTP_KEYS {
+    for key in WINE_REG_WINHTTP_KEYS {
         let output = Command::new(&wine)
             .env("WINEPREFIX", prefix)
             .args([
@@ -567,9 +661,18 @@ mod tests {
     fn detects_existing_winhttp_override() {
         let content = r#"REGEDIT4
 
-[Software\Wine\DllOverrides]
+[Software\\Wine\\DllOverrides]
 "winhttp"="native,builtin"
-"*winhttp"="native, builtin"
+"#;
+        assert!(is_winhttp_configured(content));
+    }
+
+    #[test]
+    fn detects_existing_winhttp_override_with_single_backslashes() {
+        let content = r#"REGEDIT4
+
+[Software\Wine\DllOverrides]
+"winhttp"="native, builtin"
 "#;
         assert!(is_winhttp_configured(content));
     }
@@ -578,22 +681,68 @@ mod tests {
     fn merges_missing_winhttp_override_section() {
         let content = "REGEDIT4\n";
         let merged = merge_winhttp_overrides(content);
-        assert!(merged.contains(DLL_OVERRIDES_SECTION));
+        assert!(merged.contains(USER_REG_DLL_OVERRIDES_SECTION));
         assert!(merged.contains("\"winhttp\"=\"native,builtin\""));
-        assert!(merged.contains("\"*winhttp\"=\"native,builtin\""));
         assert!(is_winhttp_configured(&merged));
+    }
+
+    #[test]
+    fn ignores_winhttp_in_duplicate_plain_section_when_timestamped_section_exists() {
+        let content = r#"REGEDIT4
+
+[Software\\Wine\\DllOverrides] 1608830137
+#time=1d6da1865a6084e
+"d3d11"="builtin"
+
+[Software\\Wine\\DllOverrides]
+"winhttp"="native,builtin"
+"#;
+        assert!(!is_winhttp_configured(content));
+
+        let merged = merge_winhttp_overrides(content);
+        assert!(merged.contains(
+            "[Software\\\\Wine\\\\DllOverrides] 1608830137\n#time=1d6da1865a6084e\n\"d3d11\"=\"builtin\"\n\"winhttp\"=\"native,builtin\"\n",
+        ));
+        assert!(!merged.contains("[Software\\\\Wine\\\\DllOverrides]\n\"winhttp\""));
+        assert_eq!(merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(), 1);
+    }
+
+    #[test]
+    fn appends_winhttp_directly_after_last_entry_without_blank_line() {
+        let content = "[Software\\\\Wine\\\\DllOverrides] 1608830137\n#time=1d6da1865a6084e\n\"d3d11\"=\"builtin\"\n";
+        let merged = merge_winhttp_overrides(content);
+        assert!(merged.contains(
+            "#time=1d6da1865a6084e\n\"d3d11\"=\"builtin\"\n\"winhttp\"=\"native,builtin\"\n",
+        ));
+        assert!(!merged.contains("\"d3d11\"=\"builtin\"\n\n\"winhttp\""));
+    }
+
+    #[test]
+    fn merges_into_existing_dll_overrides_section_with_timestamp() {
+        let content = r#"REGEDIT4
+
+[Software\\Wine\\DllOverrides] 1608830137
+#time=1d6da1865a6084e
+"d3d11"="builtin"
+"#;
+        let merged = merge_winhttp_overrides(content);
+        assert!(merged.contains("\"d3d11\"=\"builtin\""));
+        assert!(merged.contains("\"winhttp\"=\"native,builtin\""));
+        assert!(is_winhttp_configured(&merged));
+        assert_eq!(merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(), 1);
     }
 
     #[test]
     fn merges_into_existing_dll_overrides_section() {
         let content = r#"REGEDIT4
 
-[Software\Wine\DllOverrides]
+[Software\\Wine\\DllOverrides]
 "d3d11"="builtin"
 "#;
         let merged = merge_winhttp_overrides(content);
         assert!(merged.contains("\"d3d11\"=\"builtin\""));
         assert!(is_winhttp_configured(&merged));
+        assert!(!merged.contains("[Software\\Wine\\DllOverrides]\n[Software"));
     }
 
     #[test]
