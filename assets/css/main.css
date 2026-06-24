@@ -1,0 +1,164 @@
+:root {
+  --modio-accent: #07c1d8;
+  --modio-accent-hover: #06a8bc;
+  --modio-bg: #121214;
+  --modio-surface: #1a1a1b;
+  --modio-surface-raised: #222225;
+  --modio-surface-hover: #2a2a2e;
+  --modio-border: #2e2e32;
+  --modio-text: #f4f4f5;
+  --modio-text-muted: #9ca3af;
+  --modio-text-subtle: rgba(244, 244, 245, 0.55);
+  --modio-danger: #f87171;
+  --modio-success: #4ade80;
+  --modio-radius: 0.5rem;
+  --modio-radius-sm: 0.375rem;
+  --modio-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+
+  font-family:
+    "SuisseIntl",
+    Montserrat,
+    "Segoe UI",
+    Roboto,
+    Ubuntu,
+    Helvetica,
+    Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--modio-text);
+  background-color: var(--modio-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--modio-bg);
+}
+
+a {
+  font-weight: 500;
+  color: var(--modio-accent);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--modio-accent-hover);
+}
+
+input,
+button,
+select {
+  border-radius: var(--modio-radius-sm);
+  border: 1px solid var(--modio-border);
+  padding: 0.65em 1em;
+  font-size: 0.95rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--modio-text);
+  background-color: var(--modio-surface);
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+input:hover,
+select:hover {
+  background-color: var(--modio-surface-hover);
+}
+
+input:focus,
+select:focus {
+  border-color: var(--modio-accent);
+  box-shadow: 0 0 0 2px rgba(7, 193, 216, 0.2);
+}
+
+input::placeholder {
+  color: var(--modio-text-muted);
+}
+
+button {
+  cursor: pointer;
+  background-color: var(--modio-accent);
+  border-color: var(--modio-accent);
+  color: #041316;
+  font-weight: 600;
+}
+
+button:hover:not(:disabled) {
+  background-color: var(--modio-accent-hover);
+  border-color: var(--modio-accent-hover);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+input,
+button,
+select {
+  outline: none;
+}
+
+.hint,
+.info,
+.error,
+.meta {
+  font-size: 0.9rem;
+}
+
+.error {
+  color: var(--modio-danger);
+}
+
+.hint,
+.meta {
+  color: var(--modio-text-muted);
+}
+
+.info {
+  color: var(--modio-success);
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--modio-accent);
+  box-shadow: none;
+  font-size: inherit;
+  font-weight: 500;
+}
+
+.link-button:hover:not(:disabled) {
+  color: var(--modio-accent-hover);
+  background: none;
+}
+
+.btn-secondary {
+  background-color: var(--modio-surface-raised);
+  border-color: var(--modio-border);
+  color: var(--modio-text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--modio-surface-hover);
+  border-color: var(--modio-border);
+  color: var(--modio-text);
+}

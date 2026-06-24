@@ -5,6 +5,7 @@ export default defineNuxtConfig({
   ssr: false,
   telemetry: false,
   devtools: { enabled: false },
+  css: ["~/assets/css/main.css"],
   devServer: {
     host: host || "localhost",
     port: 1420,
