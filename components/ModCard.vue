@@ -16,12 +16,7 @@ function formatCount(value: number) {
 </script>
 
 <template>
-  <a
-    :href="mod.profileUrl"
-    target="_blank"
-    rel="noopener noreferrer"
-    class="mod-card"
-  >
+  <NuxtLink :to="`/mods/${mod.id}`" class="mod-card">
     <div class="mod-thumb">
       <img
         v-if="mod.logoUrl"
@@ -54,7 +49,7 @@ function formatCount(value: number) {
         Updated {{ formatDate(mod.dateUpdated) }}
       </p>
     </div>
-  </a>
+  </NuxtLink>
 </template>
 
 <style scoped>
@@ -63,6 +58,7 @@ function formatCount(value: number) {
   flex-direction: column;
   height: 100%;
   color: inherit;
+  text-decoration: none;
   background: var(--modio-surface);
   border: 1px solid var(--modio-border);
   border-radius: var(--modio-radius);

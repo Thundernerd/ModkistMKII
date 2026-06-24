@@ -19,6 +19,9 @@ const footerNav = computed(() => [
 
 function isActive(path: string | { path: string }) {
   const target = typeof path === "string" ? path : path.path;
+  if (target === "/home") {
+    return route.path === "/home" || route.path.startsWith("/mods/");
+  }
   return route.path === target;
 }
 </script>
