@@ -57,10 +57,6 @@ function formatCount(value: number) {
 
 onMounted(async () => {
   await refreshAuthStatus();
-  if (!authStatus.value.loggedIn) {
-    await navigateTo("/");
-    return;
-  }
   await checkModioStatus();
   if (modioConfigured.value) {
     await fetchMods();
@@ -76,10 +72,13 @@ onMounted(async () => {
         <h1>Mods</h1>
       </div>
       <nav class="auth-bar">
-        <span class="auth-user">{{ authStatus.username }}</span>
-        <button type="button" class="link-button" @click="handleLogout">
-          Log out
-        </button>
+        <template v-if="authStatus.loggedIn">
+          <span class="auth-user">{{ authStatus.username }}</span>
+          <button type="button" class="link-button" @click="handleLogout">
+            Log out
+          </button>
+        </template>
+        <NuxtLink v-else to="/" class="link-button">Sign in</NuxtLink>
       </nav>
     </header>
 
@@ -252,6 +251,10 @@ onMounted(async () => {
   align-items: center;
   gap: 1rem;
   font-size: 0.9rem;
+}
+
+.auth-bar a.link-button {
+  text-decoration: none;
 }
 
 .auth-user {

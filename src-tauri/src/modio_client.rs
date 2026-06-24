@@ -123,6 +123,14 @@ impl ModioState {
         Ok(client)
     }
 
+    pub fn get_mods_client(&self) -> Result<Arc<Client>, String> {
+        if self.auth_status().logged_in {
+            self.get_session_client()
+        } else {
+            self.get_base_client()
+        }
+    }
+
     pub fn get_session_client(&self) -> Result<Arc<Client>, String> {
         let mut session = self
             .session
@@ -402,7 +410,7 @@ pub async fn list_mods(
     params: ListModsParams,
 ) -> Result<ModListResult, String> {
     let game_id = state.game_id()?;
-    let client = state.get_session_client()?;
+    let client = state.get_mods_client()?;
     let filter = build_mod_filter(&params);
     let response = client
         .get_mods(Id::new(game_id))

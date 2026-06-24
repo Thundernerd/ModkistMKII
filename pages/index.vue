@@ -72,6 +72,10 @@ async function resendCode() {
   await sendCode();
 }
 
+function skipLogin() {
+  navigateTo("/home");
+}
+
 async function verifyCode() {
   if (!otp.value.trim()) {
     error.value = "Enter the security code from your email.";
@@ -176,6 +180,12 @@ onMounted(async () => {
       <p v-if="infoMessage" class="info">{{ infoMessage }}</p>
       <p v-if="error" class="error">{{ error }}</p>
     </section>
+
+      <p class="skip-row">
+        <button type="button" class="link" @click="skipLogin">
+          Continue without signing in
+        </button>
+      </p>
     </div>
   </main>
 </template>
@@ -297,6 +307,11 @@ button.link:hover:not(:disabled) {
   border: 1px dashed var(--modio-border);
   border-radius: var(--modio-radius);
   background: var(--modio-surface);
+}
+
+.skip-row {
+  margin-top: 1.25rem;
+  text-align: center;
 }
 
 .hint,
