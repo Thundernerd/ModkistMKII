@@ -3,6 +3,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineNuxtConfig({
   compatibilityDate: "2025-05-15",
   ssr: false,
+  spaLoadingTemplate: "./spa-loading-template.html",
   telemetry: false,
   devtools: { enabled: false },
   css: ["~/assets/css/main.css"],
