@@ -4,7 +4,7 @@ mod game_path;
 mod modio_client;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
-use bepinex::{bepinex_status, install_bepinex};
+use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex};
 use game_path::{game_path_status, set_game_path};
 use modio_client::{
     get_mod, get_user_profile, list_mod_dependencies, list_mods, list_user_mods, modio_status,
@@ -65,6 +65,7 @@ pub fn run() {
             set_game_path,
             bepinex_status,
             install_bepinex,
+            reinstall_bepinex,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

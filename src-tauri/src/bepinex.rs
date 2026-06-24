@@ -17,6 +17,8 @@ const DOWNLOAD_URL: &str =
 
 const WINHTTP_DLL: &str = "winhttp.dll";
 const DOORSTOP_CONFIG: &str = "doorstop_config.ini";
+const BEPINEX_DIR: &str = "BepInEx";
+const CHANGELOG_TXT: &str = "changelog.txt";
 const PRELOADER_DLL: &str = "BepInEx/core/BepInEx.Preloader.dll";
 const BEPINEX_DLL: &str = "BepInEx/core/BepInEx.dll";
 const BEPINEX_PRELOADER_DLL: &str = "BepInEx/core/BepInEx.Preloader.dll";
@@ -261,21 +263,25 @@ pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
 
     if state == BepInExState::WrongVersion {
         return Err(
-            "A different BepInEx version is already installed. Remove it manually or continue anyway."
+            "A different BepInEx version is already installed. Use reinstall from Settings or remove it manually."
                 .into(),
         );
     }
 
+    perform_install(&game_dir).await
+}
+
+async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
     let temp_dir = std::env::temp_dir().join("modkist-bepinex");
     fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Could not create temp directory: {e}"))?;
     let archive_path = temp_dir.join("BepInEx_x64_5.4.20.0.zip");
 
     download_archive(&archive_path).await?;
-    extract_zip(&archive_path, &game_dir)?;
+    extract_zip(&archive_path, game_dir)?;
     let _ = fs::remove_file(&archive_path);
 
-    let status = status_for_game_dir(&game_dir);
+    let status = status_for_game_dir(game_dir);
     if status.state != "installed" {
         return Err(
             "BepInEx was extracted but verification failed. Check your game directory and try again."
@@ -284,6 +290,36 @@ pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
     }
 
     Ok(status)
+}
+
+fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
+    let bepinex_dir = game_dir.join(BEPINEX_DIR);
+    if bepinex_dir.exists() {
+        fs::remove_dir_all(&bepinex_dir).map_err(|e| {
+            format!(
+                "Could not remove BepInEx directory {}: {e}",
+                bepinex_dir.display()
+            )
+        })?;
+    }
+
+    for file_name in [WINHTTP_DLL, DOORSTOP_CONFIG, CHANGELOG_TXT] {
+        let path = game_dir.join(file_name);
+        if path.is_file() {
+            fs::remove_file(&path).map_err(|e| {
+                format!("Could not remove {}: {e}", path.display())
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reinstall_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
+    let game_dir = game_directory(&app)?;
+    remove_bepinex_installation(&game_dir)?;
+    perform_install(&game_dir).await
 }
 
 #[cfg(test)]
