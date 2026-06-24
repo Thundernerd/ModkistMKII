@@ -8,7 +8,10 @@ onMounted(() => {
   refreshAuthStatus();
 });
 
-const primaryNav = [{ label: "Mods", to: "/home" }];
+const primaryNav = [
+  { label: "Mods", to: "/home" },
+  { label: "Installed", to: "/installed" },
+];
 
 const footerNav = computed(() => [
   { label: "Settings", to: "/settings" },
