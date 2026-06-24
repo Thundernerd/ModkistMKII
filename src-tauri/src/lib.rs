@@ -1,12 +1,17 @@
 mod auth;
 mod bepinex;
 mod game_path;
+mod mod_download;
+mod mod_install;
 mod modio_client;
 mod zip_extract;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex};
 use game_path::{game_path_status, set_game_path};
+use mod_install::{
+    get_mod_install_state, install_mod, list_installed_mods, uninstall_mod,
+};
 use modio_client::{
     get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mods,
     list_user_mods, modio_status, ModioState,
@@ -68,6 +73,10 @@ pub fn run() {
             bepinex_status,
             install_bepinex,
             reinstall_bepinex,
+            list_installed_mods,
+            get_mod_install_state,
+            install_mod,
+            uninstall_mod,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
