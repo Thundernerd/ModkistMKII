@@ -1,7 +1,9 @@
 mod auth;
+mod game_path;
 mod modio_client;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
+use game_path::{game_path_status, set_game_path};
 use modio_client::{list_mods, modio_status, ModioState};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
@@ -26,6 +28,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .on_page_load(|webview, payload| {
             if payload.event() != PageLoadEvent::Finished {
@@ -49,6 +52,8 @@ pub fn run() {
             verify_email_code,
             auth_status,
             logout,
+            game_path_status,
+            set_game_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
