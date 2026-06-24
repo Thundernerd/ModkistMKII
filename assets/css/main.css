@@ -163,6 +163,19 @@ select {
   color: var(--modio-text);
 }
 
+.btn-danger {
+  background-color: var(--modio-danger);
+  border-color: var(--modio-danger);
+  color: #1f0a0a;
+  font-weight: 600;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: #ef4444;
+  border-color: #ef4444;
+  color: #1f0a0a;
+}
+
 .app-shell {
   display: flex;
   height: 100vh;

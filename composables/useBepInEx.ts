@@ -45,6 +45,20 @@ export function useBepInEx() {
     }
   }
 
+  async function reinstallBepInEx() {
+    installing.value = true;
+    error.value = "";
+
+    try {
+      bepinexStatus.value = await invoke<BepInExStatus>("reinstall_bepinex");
+    } catch (err) {
+      error.value = String(err);
+      throw err;
+    } finally {
+      installing.value = false;
+    }
+  }
+
   return {
     bepinexStatus,
     loading,
@@ -52,5 +66,6 @@ export function useBepInEx() {
     error,
     refreshBepInExStatus,
     installBepInEx,
+    reinstallBepInEx,
   };
 }
