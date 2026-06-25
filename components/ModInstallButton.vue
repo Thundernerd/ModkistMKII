@@ -33,13 +33,19 @@ const label = computed(() => {
       return "Uninstall";
     case "unavailable":
       return "Unavailable";
+    case "installBlocked":
+      return "Install blocked";
     default:
       return "Install";
   }
 });
 
 const isDisabled = computed(() => {
-  if (props.status === "installing" || props.status === "unavailable") {
+  if (
+    props.status === "installing" ||
+    props.status === "unavailable" ||
+    props.status === "installBlocked"
+  ) {
     return true;
   }
   if (props.status === "upToDate") {
@@ -153,6 +159,12 @@ function onClick() {
   background: var(--modio-surface-raised);
   border: 1px solid var(--modio-border);
   color: var(--modio-text-muted);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.install-btn:disabled.btn-primary,
+.install-btn:disabled.btn-update {
   opacity: 0.7;
   cursor: not-allowed;
 }

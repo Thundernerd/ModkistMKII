@@ -26,6 +26,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const { authStatus, refreshAuthStatus } = useModioAuth();
 const { resetSessionSync } = useModInstall();
+const { refreshProfiles } = useProfiles();
 
 const route = useRoute();
 const redirect = computed(() => readRedirectParam(route.query.redirect));
@@ -94,6 +95,13 @@ async function verifyCode() {
     await invoke<AuthUser>("verify_email_code", { code: otp.value.trim() });
     resetSessionSync();
     await refreshAuthStatus();
+    await refreshProfiles();
+    const { activeProfileId, switchProfile } = useProfiles();
+    const { resetSessionSync } = useModInstall();
+    if (activeProfileId.value === "vanilla") {
+      await switchProfile("user");
+      resetSessionSync();
+    }
     await navigateToApp(redirect.value);
   } catch (err) {
     error.value = String(err);

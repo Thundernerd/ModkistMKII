@@ -31,6 +31,7 @@ const {
   getInstallError,
   isUninstalling,
   installEnvironmentError,
+  profileInstallBlocked,
 } = useModInstall();
 
 const modId = computed(() => Number(route.params.id));
@@ -355,6 +356,9 @@ function dependencyMeta(dep: ModDependency) {
 
           <p v-if="installEnvironmentError" class="sidebar-install-hint">
             {{ installEnvironmentError }}
+          </p>
+          <p v-else-if="profileInstallBlocked" class="sidebar-install-hint">
+            Installs are disabled on the Vanilla profile.
           </p>
 
           <ModInstallButton

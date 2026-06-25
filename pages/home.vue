@@ -43,6 +43,10 @@ const {
   installEnvironmentError,
   updateCount,
   checkingUpdates,
+  syncingSubscriptions,
+  syncSubscriptionError,
+  profileInstallBlocked,
+  syncSubscribedModsIfNeeded,
 } = useModInstall();
 
 const modioConfigured = ref(false);
@@ -71,6 +75,7 @@ onMounted(async () => {
   await checkModioStatus();
   if (modioConfigured.value) {
     await Promise.all([initialize(), checkForUpdatesOnStartup()]);
+    void syncSubscribedModsIfNeeded();
   }
 });
 </script>
@@ -105,9 +110,26 @@ onMounted(async () => {
         <NuxtLink to="/settings">Check Settings</NuxtLink>
       </p>
 
+      <p v-else-if="profileInstallBlocked" class="hint install-hint">
+        Installs are disabled on the Vanilla profile.
+        <NuxtLink to="/settings">Manage profiles</NuxtLink>
+      </p>
+
       <p v-else-if="checkingUpdates" class="hint updates-check-hint">
         <span class="spinner" aria-hidden="true" />
         Checking installed mods for updates…
+      </p>
+
+      <p v-else-if="syncingSubscriptions" class="hint updates-check-hint">
+        <span class="spinner" aria-hidden="true" />
+        Syncing subscribed mods…
+      </p>
+
+      <p v-else-if="syncSubscriptionError" class="hint sync-error-hint">
+        Subscription sync failed: {{ syncSubscriptionError }}
+        <span class="sync-error-detail">
+          Sync uses your mod.io account (OAuth), not the game API key — try again in about a minute if rate limited.
+        </span>
       </p>
 
       <p
@@ -212,6 +234,22 @@ onMounted(async () => {
 .updates-banner {
   border-color: rgba(7, 193, 216, 0.35);
   background: rgba(7, 193, 216, 0.08);
+}
+
+.sync-error-hint {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--modio-radius-sm);
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: var(--modio-danger);
+}
+
+.sync-error-detail {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--modio-text-muted);
 }
 
 .mods-error {

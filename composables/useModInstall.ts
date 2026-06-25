@@ -5,7 +5,8 @@ export type InstallUiStatus =
   | "upToDate"
   | "updateAvailable"
   | "installing"
-  | "unavailable";
+  | "unavailable"
+  | "installBlocked";
 
 export interface UninstallBlocker {
   modId: number;
@@ -41,6 +42,13 @@ export interface InstallModResult {
   skipped: number[];
 }
 
+interface ActiveProfileInfo {
+  id: string;
+  name: string;
+  kind: "vanilla" | "user" | "custom";
+  installBlocked: boolean;
+}
+
 const installStates = ref<Record<number, ModInstallState>>({});
 const installedMods = ref<InstalledModEntry[]>([]);
 const installingIds = ref<Set<number>>(new Set());
@@ -49,8 +57,12 @@ const installErrors = ref<Record<number, string>>({});
 const installReady = ref(false);
 const installEnvironmentError = ref("");
 const checkingUpdates = ref(false);
+const syncingSubscriptions = ref(false);
+const syncSubscriptionError = ref("");
 const bulkUpdating = ref(false);
 const startupUpdateCheckDone = ref(false);
+
+let refreshInFlight: Promise<void> | null = null;
 
 const modsWithUpdates = computed(() =>
   installedMods.value.filter((mod) => mod.updateAvailable),
@@ -95,50 +107,131 @@ function mapInstallState(state: ModInstallState): ModInstallState {
   };
 }
 
+function applyInstalledList(entries: InstalledModEntry[]) {
+  installedMods.value = entries;
+  const nextStates: Record<number, ModInstallState> = {};
+  for (const mod of entries) {
+    nextStates[mod.modId] = {
+      status: mod.updateAvailable ? "updateAvailable" : "upToDate",
+      installedFileId: mod.fileId,
+      latestFileId: mod.latestFileId ?? mod.fileId,
+      kind: mod.kind,
+      canUninstall: mod.canUninstall,
+      uninstallBlockedBy: mod.uninstallBlockedBy ?? [],
+    };
+  }
+  installStates.value = nextStates;
+  installReady.value = true;
+}
+
 const sessionSyncDone = ref(false);
+
+let subscriptionSyncGeneration = 0;
+
+const SUBSCRIPTION_SYNC_CANCELLED = "Subscription sync cancelled";
+
+export async function cancelSubscriptionSync() {
+  subscriptionSyncGeneration += 1;
+  syncingSubscriptions.value = false;
+  syncSubscriptionError.value = "";
+  await invoke("cancel_subscription_sync").catch(() => {});
+}
 
 function resetSessionSync() {
   sessionSyncDone.value = false;
+  syncSubscriptionError.value = "";
+}
+
+function resetStartupUpdateCheck() {
+  startupUpdateCheckDone.value = false;
+}
+
+async function listInstalledMods(): Promise<InstalledModEntry[]> {
+  return invoke<InstalledModEntry[]>("list_installed_mods");
 }
 
 export function useModInstall() {
-  async function refreshInstalled(options?: { syncSubscriptions?: boolean }) {
-    try {
-      installEnvironmentError.value = "";
-      const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
-      const shouldSync =
-        options?.syncSubscriptions ??
-        (authStatus.loggedIn && !sessionSyncDone.value);
-      if (authStatus.loggedIn && shouldSync) {
-        sessionSyncDone.value = true;
-      }
-      if (!authStatus.loggedIn) {
-        resetSessionSync();
-      }
+  const {
+    installBlocked: profileInstallBlocked,
+    refreshProfiles,
+    switching: profileSwitching,
+  } = useProfiles();
 
-      installedMods.value = await invoke<InstalledModEntry[]>(
-        "refresh_installed_mods",
-        { syncSubscriptions: shouldSync },
-      );
-      const nextStates: Record<number, ModInstallState> = {};
-      for (const mod of installedMods.value) {
-        nextStates[mod.modId] = {
-          status: mod.updateAvailable ? "updateAvailable" : "upToDate",
-          installedFileId: mod.fileId,
-          latestFileId: mod.latestFileId ?? mod.fileId,
-          kind: mod.kind,
-          canUninstall: mod.canUninstall,
-          uninstallBlockedBy: mod.uninstallBlockedBy ?? [],
-        };
+  async function refreshInstalled() {
+    if (refreshInFlight) {
+      await refreshInFlight;
+      return;
+    }
+
+    refreshInFlight = (async () => {
+      try {
+        installEnvironmentError.value = "";
+        await refreshProfiles().catch(() => {});
+
+        const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
+        if (!authStatus.loggedIn) {
+          resetSessionSync();
+        }
+
+        applyInstalledList(await listInstalledMods());
+      } catch (error) {
+        installReady.value = false;
+        installEnvironmentError.value =
+          error instanceof Error ? error.message : String(error);
+        installedMods.value = [];
+        installStates.value = {};
       }
-      installStates.value = nextStates;
-      installReady.value = true;
+    })();
+
+    try {
+      await refreshInFlight;
+    } finally {
+      refreshInFlight = null;
+    }
+  }
+
+  async function syncSubscribedModsIfNeeded() {
+    if (sessionSyncDone.value || syncingSubscriptions.value) {
+      return;
+    }
+
+    const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
+    if (!authStatus.loggedIn) {
+      return;
+    }
+
+    const activeProfile = await invoke<ActiveProfileInfo>("get_active_profile").catch(
+      () => null,
+    );
+    if (activeProfile?.kind !== "user") {
+      return;
+    }
+
+    const generation = subscriptionSyncGeneration;
+    syncingSubscriptions.value = true;
+    syncSubscriptionError.value = "";
+
+    try {
+      await invoke<InstallModResult>("sync_subscribed_mods");
+      if (generation !== subscriptionSyncGeneration) {
+        return;
+      }
+      sessionSyncDone.value = true;
+      await refreshInstalled();
     } catch (error) {
-      installReady.value = false;
-      installEnvironmentError.value =
-        error instanceof Error ? error.message : String(error);
-      installedMods.value = [];
-      installStates.value = {};
+      if (generation !== subscriptionSyncGeneration) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === SUBSCRIPTION_SYNC_CANCELLED) {
+        return;
+      }
+      syncSubscriptionError.value = message;
+      await refreshInstalled().catch(() => {});
+    } finally {
+      if (generation === subscriptionSyncGeneration) {
+        syncingSubscriptions.value = false;
+      }
     }
   }
 
@@ -164,27 +257,29 @@ export function useModInstall() {
     clearInstallError(modId);
     setInstalling(modId, true);
     try {
-      const result = await invoke<InstallModResult>("install_mod", { modId });
-      sessionSyncDone.value = true;
-      installedMods.value = await invoke<InstalledModEntry[]>(
-        "refresh_installed_mods",
-        { syncSubscriptions: false },
-      );
-      const nextStates: Record<number, ModInstallState> = {};
-      for (const mod of installedMods.value) {
-        nextStates[mod.modId] = {
-          status: mod.updateAvailable ? "updateAvailable" : "upToDate",
-          installedFileId: mod.fileId,
-          latestFileId: mod.latestFileId ?? mod.fileId,
-          kind: mod.kind,
-          canUninstall: mod.canUninstall,
-          uninstallBlockedBy: mod.uninstallBlockedBy ?? [],
-        };
+      if (profileSwitching.value) {
+        throw new Error("Wait for the profile switch to finish, then try again.");
       }
-      installStates.value = nextStates;
-      installReady.value = true;
+
+      await cancelSubscriptionSync();
+
+      const activeProfile = await invoke<ActiveProfileInfo>("get_active_profile");
+      if (activeProfile.installBlocked) {
+        throw new Error(
+          "Installing mods is disabled on the Vanilla profile. Switch to your account profile in the sidebar.",
+        );
+      }
+
+      const result = await invoke<InstallModResult>("install_mod", { modId });
+      if (activeProfile.kind === "user") {
+        sessionSyncDone.value = true;
+      }
+
+      applyInstalledList(await listInstalledMods());
       installEnvironmentError.value = "";
-      for (const id of [...result.installed, ...result.skipped]) {
+
+      const refreshIds = new Set([modId, ...result.installed, ...result.skipped]);
+      for (const id of refreshIds) {
         await refreshInstallState(id);
       }
       return result;
@@ -201,6 +296,7 @@ export function useModInstall() {
     clearInstallError(modId);
     setUninstalling(modId, true);
     try {
+      await cancelSubscriptionSync();
       await invoke("uninstall_mod", { modId });
       await refreshInstalled();
     } catch (error) {
@@ -220,6 +316,17 @@ export function useModInstall() {
       return "installing";
     }
     const state = installStates.value[modId];
+    if (profileSwitching.value) {
+      if (state?.status === "upToDate") {
+        return "upToDate";
+      }
+      return "installBlocked";
+    }
+    if (profileInstallBlocked.value) {
+      if (!state || state.status !== "upToDate") {
+        return "installBlocked";
+      }
+    }
     if (!state) return "notInstalled";
     return state.status;
   }
@@ -252,6 +359,10 @@ export function useModInstall() {
   }
 
   async function updateAllMods() {
+    if (profileInstallBlocked.value) {
+      return { updated: [] as number[], failed: [] as number[] };
+    }
+
     const targets = [...modsWithUpdates.value];
     if (targets.length === 0) {
       return { updated: [] as number[], failed: [] as number[] };
@@ -288,10 +399,16 @@ export function useModInstall() {
     installReady,
     installEnvironmentError,
     checkingUpdates,
+    syncingSubscriptions,
+    syncSubscriptionError,
     bulkUpdating,
     startupUpdateCheckDone,
+    profileInstallBlocked,
     refreshInstalled,
     resetSessionSync,
+    resetStartupUpdateCheck,
+    cancelSubscriptionSync,
+    syncSubscribedModsIfNeeded,
     checkForUpdatesOnStartup,
     refreshInstallState,
     installMod,

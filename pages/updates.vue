@@ -14,6 +14,7 @@ const {
   bulkUpdating,
   checkingUpdates,
   updateAllMods,
+  profileInstallBlocked,
 } = useModInstall();
 
 const loading = ref(true);
@@ -72,7 +73,7 @@ onMounted(loadUpdates);
         </div>
 
         <button
-          v-if="!loading && updateCount > 0"
+          v-if="!loading && updateCount > 0 && !profileInstallBlocked"
           type="button"
           class="btn-primary update-all-btn"
           :disabled="bulkUpdating || checkingUpdates"
@@ -87,6 +88,11 @@ onMounted(loadUpdates);
     <p v-if="installEnvironmentError" class="hint install-hint">
       {{ installEnvironmentError }}
       <NuxtLink to="/settings">Check Settings</NuxtLink>
+    </p>
+
+    <p v-else-if="profileInstallBlocked" class="hint install-hint">
+      Updates are disabled on the Vanilla profile.
+      <NuxtLink to="/settings">Manage profiles</NuxtLink>
     </p>
 
     <p v-if="pageError" class="error">{{ pageError }}</p>
