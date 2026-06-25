@@ -191,6 +191,7 @@ export function useModInstall() {
     refreshProfiles,
     switching: profileSwitching,
   } = useProfiles();
+  const { gameRunning, gameRunningMessage } = useGameProcess();
 
   async function refreshInstalled() {
     if (refreshInFlight) {
@@ -328,6 +329,13 @@ export function useModInstall() {
         );
       }
 
+      if (gameRunning.value) {
+        throw new Error(
+          gameRunningMessage.value ??
+            "Zeepkist is running. Close the game before installing, updating, or removing mods.",
+        );
+      }
+
       const result = await invoke<InstallModResult>("install_mod", { modId });
       if (activeProfile.kind === "user") {
         sessionSyncDone.value = true;
@@ -358,6 +366,12 @@ export function useModInstall() {
     logger.info(`Uninstalling mod ${modId}`);
     try {
       await cancelSubscriptionSync();
+      if (gameRunning.value) {
+        throw new Error(
+          gameRunningMessage.value ??
+            "Zeepkist is running. Close the game before installing, updating, or removing mods.",
+        );
+      }
       await invoke("uninstall_mod", { modId });
       await refreshInstalled();
       logger.info(`Uninstalled mod ${modId}`);
@@ -385,6 +399,12 @@ export function useModInstall() {
       }
       return "installBlocked";
     }
+    if (gameRunning.value) {
+      if (state?.status === "upToDate") {
+        return "upToDate";
+      }
+      return "installBlocked";
+    }
     if (profileInstallBlocked.value) {
       if (!state || state.status !== "upToDate") {
         return "installBlocked";
@@ -395,6 +415,9 @@ export function useModInstall() {
   }
 
   function getCanUninstall(modId: number) {
+    if (gameRunning.value) {
+      return false;
+    }
     return installStates.value[modId]?.canUninstall ?? false;
   }
 
@@ -424,7 +447,7 @@ export function useModInstall() {
   }
 
   async function updateAllMods() {
-    if (profileInstallBlocked.value) {
+    if (profileInstallBlocked.value || gameRunning.value) {
       return { updated: [] as number[], failed: [] as number[] };
     }
 
@@ -469,6 +492,8 @@ export function useModInstall() {
     bulkUpdating,
     startupUpdateCheckDone,
     profileInstallBlocked,
+    gameRunning,
+    gameRunningMessage,
     refreshInstalled,
     resetSessionSync,
     resetStartupUpdateCheck,

@@ -46,6 +46,8 @@ const {
   syncingSubscriptions,
   syncSubscriptionError,
   profileInstallBlocked,
+  gameRunning,
+  gameRunningMessage,
   syncSubscribedModsIfNeeded,
 } = useModInstall();
 
@@ -113,6 +115,10 @@ onMounted(async () => {
       <p v-else-if="profileInstallBlocked" class="hint install-hint">
         Installs are disabled on the Vanilla profile.
         <NuxtLink to="/settings">Manage profiles</NuxtLink>
+      </p>
+
+      <p v-else-if="gameRunning" class="hint install-hint">
+        {{ gameRunningMessage ?? "Zeepkist is running. Close the game before installing or updating mods." }}
       </p>
 
       <p v-else-if="checkingUpdates" class="hint updates-check-hint">

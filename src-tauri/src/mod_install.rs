@@ -7,6 +7,7 @@ use tauri::{AppHandle, State};
 
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
+use crate::game_process::ensure_game_not_running;
 use crate::mod_download::download_modfile;
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
@@ -829,6 +830,8 @@ async fn sync_subscribed_mods_inner(
         return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
     }
 
+    ensure_game_not_running()?;
+
     state.reset_subscription_sync_cancel();
 
     let game_dir = game_directory(app)?;
@@ -998,6 +1001,8 @@ pub async fn install_mod(
         return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
     }
 
+    ensure_game_not_running()?;
+
     // Stop any in-flight subscription sync so manual installs are not blocked
     // behind OAuth calls or competing writes to the live mod folders.
     state.cancel_subscription_sync();
@@ -1030,6 +1035,7 @@ pub async fn uninstall_mod(
     mod_id: u64,
 ) -> Result<(), String> {
     log::info!("uninstall_mod command: mod {mod_id}");
+    ensure_game_not_running()?;
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
 

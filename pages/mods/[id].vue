@@ -32,6 +32,8 @@ const {
   isUninstalling,
   installEnvironmentError,
   profileInstallBlocked,
+  gameRunning,
+  gameRunningMessage,
 } = useModInstall();
 
 const modId = computed(() => Number(route.params.id));
@@ -359,6 +361,9 @@ function dependencyMeta(dep: ModDependency) {
           </p>
           <p v-else-if="profileInstallBlocked" class="sidebar-install-hint">
             Installs are disabled on the Vanilla profile.
+          </p>
+          <p v-else-if="gameRunning" class="sidebar-install-hint">
+            {{ gameRunningMessage ?? "Zeepkist is running. Close the game before installing or updating mods." }}
           </p>
 
           <ModInstallButton

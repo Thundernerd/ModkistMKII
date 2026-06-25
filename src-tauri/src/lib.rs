@@ -27,6 +27,7 @@ mod wine_prefix;
 mod auth;
 mod bepinex;
 mod game_path;
+mod game_process;
 mod logging;
 mod mod_api_cache;
 mod mod_download;
@@ -39,6 +40,7 @@ mod zip_extract;
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
 use game_path::{game_path_status, set_game_path};
+use game_process::game_running_status;
 use mod_install::{
     cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mod_records,
     list_installed_mods, refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
@@ -114,6 +116,7 @@ pub fn run() {
             logout,
             game_path_status,
             set_game_path,
+            game_running_status,
             bepinex_status,
             verify_bepinex,
             install_bepinex,

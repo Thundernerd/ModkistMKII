@@ -2,6 +2,7 @@
 import { ensureBepInEx, ensureGamePath } from "~/utils/authNavigation";
 
 const ready = ref(false);
+const { startGameProcessPolling, stopGameProcessPolling } = useGameProcess();
 
 onMounted(async () => {
   if (!(await ensureGamePath())) {
@@ -9,6 +10,13 @@ onMounted(async () => {
   }
 
   ready.value = await ensureBepInEx();
+  if (ready.value) {
+    startGameProcessPolling();
+  }
+});
+
+onUnmounted(() => {
+  stopGameProcessPolling();
 });
 </script>
 

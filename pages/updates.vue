@@ -15,6 +15,8 @@ const {
   checkingUpdates,
   updateAllMods,
   profileInstallBlocked,
+  gameRunning,
+  gameRunningMessage,
 } = useModInstall();
 
 const loading = ref(true);
@@ -73,7 +75,7 @@ onMounted(loadUpdates);
         </div>
 
         <button
-          v-if="!loading && updateCount > 0 && !profileInstallBlocked"
+          v-if="!loading && updateCount > 0 && !profileInstallBlocked && !gameRunning"
           type="button"
           class="btn-primary update-all-btn"
           :disabled="bulkUpdating || checkingUpdates"
@@ -93,6 +95,10 @@ onMounted(loadUpdates);
     <p v-else-if="profileInstallBlocked" class="hint install-hint">
       Updates are disabled on the Vanilla profile.
       <NuxtLink to="/settings">Manage profiles</NuxtLink>
+    </p>
+
+    <p v-else-if="gameRunning" class="hint install-hint">
+      {{ gameRunningMessage ?? "Zeepkist is running. Close the game before installing or updating mods." }}
     </p>
 
     <p v-if="pageError" class="error">{{ pageError }}</p>
