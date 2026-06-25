@@ -128,6 +128,7 @@ function applyInstalledList(entries: InstalledModEntry[]) {
 const sessionSyncDone = ref(false);
 
 let subscriptionSyncGeneration = 0;
+let subscriptionSyncInFlight: { promise: Promise<void> | null } = { promise: null };
 
 const SUBSCRIPTION_SYNC_CANCELLED = "Subscription sync cancelled";
 
@@ -194,52 +195,68 @@ export function useModInstall() {
   }
 
   async function syncSubscribedModsIfNeeded() {
-    if (sessionSyncDone.value || syncingSubscriptions.value) {
+    if (sessionSyncDone.value) {
+      return;
+    }
+    if (subscriptionSyncInFlight.promise) {
+      await subscriptionSyncInFlight.promise;
       return;
     }
 
-    const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
-    if (!authStatus.loggedIn) {
-      return;
-    }
+    subscriptionSyncInFlight.promise = (async () => {
+      if (sessionSyncDone.value || syncingSubscriptions.value) {
+        return;
+      }
 
-    const activeProfile = await invoke<ActiveProfileInfo>("get_active_profile").catch(
-      () => null,
-    );
-    if (activeProfile?.kind !== "user") {
-      return;
-    }
+      const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
+      if (!authStatus.loggedIn) {
+        return;
+      }
 
-    const generation = subscriptionSyncGeneration;
-    syncingSubscriptions.value = true;
-    syncSubscriptionError.value = "";
-    logger.info("Starting subscription sync");
+      const activeProfile = await invoke<ActiveProfileInfo>("get_active_profile").catch(
+        () => null,
+      );
+      if (activeProfile?.kind !== "user") {
+        return;
+      }
+
+      const generation = subscriptionSyncGeneration;
+      syncingSubscriptions.value = true;
+      syncSubscriptionError.value = "";
+      logger.info("Starting subscription sync");
+
+      try {
+        const result = await invoke<InstallModResult>("sync_subscribed_mods");
+        if (generation !== subscriptionSyncGeneration) {
+          logger.debug("Subscription sync result ignored (cancelled)");
+          return;
+        }
+        sessionSyncDone.value = true;
+        logger.info("Subscription sync complete", result);
+        await refreshInstalled();
+      } catch (error) {
+        if (generation !== subscriptionSyncGeneration) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === SUBSCRIPTION_SYNC_CANCELLED) {
+          logger.debug("Subscription sync cancelled");
+          return;
+        }
+        logger.error("Subscription sync failed", message);
+        syncSubscriptionError.value = message;
+        await refreshInstalled().catch(() => {});
+      } finally {
+        if (generation === subscriptionSyncGeneration) {
+          syncingSubscriptions.value = false;
+        }
+      }
+    })();
 
     try {
-      const result = await invoke<InstallModResult>("sync_subscribed_mods");
-      if (generation !== subscriptionSyncGeneration) {
-        logger.debug("Subscription sync result ignored (cancelled)");
-        return;
-      }
-      sessionSyncDone.value = true;
-      logger.info("Subscription sync complete", result);
-      await refreshInstalled();
-    } catch (error) {
-      if (generation !== subscriptionSyncGeneration) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      if (message === SUBSCRIPTION_SYNC_CANCELLED) {
-        logger.debug("Subscription sync cancelled");
-        return;
-      }
-      logger.error("Subscription sync failed", message);
-      syncSubscriptionError.value = message;
-      await refreshInstalled().catch(() => {});
+      await subscriptionSyncInFlight.promise;
     } finally {
-      if (generation === subscriptionSyncGeneration) {
-        syncingSubscriptions.value = false;
-      }
+      subscriptionSyncInFlight.promise = null;
     }
   }
 

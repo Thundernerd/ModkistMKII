@@ -75,7 +75,7 @@ onMounted(async () => {
   await checkModioStatus();
   if (modioConfigured.value) {
     await Promise.all([initialize(), checkForUpdatesOnStartup()]);
-    void syncSubscribedModsIfNeeded();
+    await syncSubscribedModsIfNeeded();
   }
 });
 </script>
@@ -128,7 +128,7 @@ onMounted(async () => {
       <p v-else-if="syncSubscriptionError" class="hint sync-error-hint">
         Subscription sync failed: {{ syncSubscriptionError }}
         <span class="sync-error-detail">
-          Sync uses your mod.io account (OAuth), not the game API key — try again in about a minute if rate limited.
+          Subscription sync uses your mod.io login (OAuth). If rate limited, wait about a minute and try again.
         </span>
       </p>
 
