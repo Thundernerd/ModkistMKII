@@ -19,6 +19,8 @@ export function useModioAuth() {
 
   async function logout() {
     await invoke("logout");
+    const { resetSessionSync } = useModInstall();
+    resetSessionSync();
     await refreshAuthStatus();
   }
 

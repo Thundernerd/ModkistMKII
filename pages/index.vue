@@ -25,6 +25,7 @@ const modioMessage = ref(
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const { authStatus, refreshAuthStatus } = useModioAuth();
+const { resetSessionSync } = useModInstall();
 
 const route = useRoute();
 const redirect = computed(() => readRedirectParam(route.query.redirect));
@@ -91,6 +92,7 @@ async function verifyCode() {
 
   try {
     await invoke<AuthUser>("verify_email_code", { code: otp.value.trim() });
+    resetSessionSync();
     await refreshAuthStatus();
     await navigateToApp(redirect.value);
   } catch (err) {

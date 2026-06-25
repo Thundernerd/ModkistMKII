@@ -95,10 +95,25 @@ function mapInstallState(state: ModInstallState): ModInstallState {
   };
 }
 
+const sessionSyncDone = ref(false);
+
+function resetSessionSync() {
+  sessionSyncDone.value = false;
+}
+
 export function useModInstall() {
   async function refreshInstalled() {
     try {
       installEnvironmentError.value = "";
+      const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
+      if (authStatus.loggedIn && !sessionSyncDone.value) {
+        await invoke("sync_subscribed_mods");
+        sessionSyncDone.value = true;
+      }
+      if (!authStatus.loggedIn) {
+        resetSessionSync();
+      }
+
       installedMods.value = await invoke<InstalledModEntry[]>("list_installed_mods");
       const nextStates: Record<number, ModInstallState> = {};
       for (const mod of installedMods.value) {
@@ -253,6 +268,7 @@ export function useModInstall() {
     bulkUpdating,
     startupUpdateCheckDone,
     refreshInstalled,
+    resetSessionSync,
     checkForUpdatesOnStartup,
     refreshInstallState,
     installMod,

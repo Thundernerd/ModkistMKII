@@ -9,7 +9,9 @@ use tauri::{AppHandle, State};
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
 use crate::mod_download::download_modfile;
-use crate::modio_client::{format_modio_error, is_mod_unavailable, ModioState};
+use crate::modio_client::{
+    fetch_subscribed_mod_ids, format_modio_error, is_mod_unavailable, subscribe_to_mod, ModioState,
+};
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
 const BEPINEX_PLUGINS: &str = "BepInEx/plugins";
@@ -608,6 +610,10 @@ async fn install_mod_internal(
     let mut skipped = Vec::new();
 
     for target_mod_id in order {
+        if state.auth_status().logged_in {
+            subscribe_to_mod(state, target_mod_id).await?;
+        }
+
         let records = scan_installed_mods_after_cleanup(state, game_dir).await?;
         let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
         let dependency_map = build_dependency_map(state, &installed_ids).await?;
@@ -621,6 +627,39 @@ async fn install_mod_internal(
         install_single_mod(state, game_dir, target_mod_id).await?;
         installed.push(target_mod_id);
     }
+
+    Ok(InstallModResult { installed, skipped })
+}
+
+#[tauri::command]
+pub async fn sync_subscribed_mods(
+    app: AppHandle,
+    state: State<'_, ModioState>,
+) -> Result<InstallModResult, String> {
+    if !state.auth_status().logged_in {
+        return Ok(InstallModResult {
+            installed: Vec::new(),
+            skipped: Vec::new(),
+        });
+    }
+
+    let game_dir = game_directory(&app)?;
+    ensure_install_prerequisites(&game_dir)?;
+    let mod_ids = fetch_subscribed_mod_ids(&state).await?;
+
+    let mut installed = Vec::new();
+    let mut skipped = Vec::new();
+
+    for mod_id in mod_ids {
+        let result = install_mod_internal(&state, &game_dir, mod_id).await?;
+        installed.extend(result.installed);
+        skipped.extend(result.skipped);
+    }
+
+    installed.sort_unstable();
+    installed.dedup();
+    skipped.sort_unstable();
+    skipped.dedup();
 
     Ok(InstallModResult { installed, skipped })
 }
