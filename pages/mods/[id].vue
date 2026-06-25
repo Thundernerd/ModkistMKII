@@ -39,6 +39,46 @@ const {
 const modId = computed(() => Number(route.params.id));
 const isValidId = computed(() => Number.isInteger(modId.value) && modId.value > 0);
 
+const router = useRouter();
+const backLabel = ref("← Back");
+
+function resolveBackLabel(previousPath?: string) {
+  switch (previousPath) {
+    case "/user":
+      return "← Back to profile";
+    case "/installed":
+      return "← Back to installed";
+    case "/updates":
+      return "← Back to updates";
+    case "/home":
+      return "← Back to mods";
+    default:
+      return previousPath ? "← Back" : "← Back to mods";
+  }
+}
+
+function goBack() {
+  const previousPath =
+    typeof window.history.state?.back === "string"
+      ? window.history.state.back
+      : undefined;
+
+  if (previousPath?.startsWith("/")) {
+    router.back();
+    return;
+  }
+
+  void navigateTo("/home");
+}
+
+onMounted(() => {
+  const previousPath =
+    typeof window.history.state?.back === "string"
+      ? window.history.state.back
+      : undefined;
+  backLabel.value = resolveBackLabel(previousPath);
+});
+
 type TabId = "description" | "dependencies";
 const activeTab = ref<TabId>("description");
 const mediaIndex = ref(0);
@@ -178,12 +218,16 @@ function dependencyMeta(dep: ModDependency) {
 <template>
   <div class="mod-detail-page">
     <header class="mod-detail-header">
-      <NuxtLink to="/home" class="back-link">← Back to mods</NuxtLink>
+      <button type="button" class="back-link" @click="goBack">
+        {{ backLabel }}
+      </button>
     </header>
 
     <div v-if="!isValidId" class="state">
       <p class="error">Invalid mod ID.</p>
-      <NuxtLink to="/home" class="back-link">← Back to mods</NuxtLink>
+      <button type="button" class="back-link" @click="goBack">
+        {{ backLabel }}
+      </button>
     </div>
 
     <div v-else-if="loading && !mod" class="state">
@@ -193,7 +237,9 @@ function dependencyMeta(dep: ModDependency) {
 
     <div v-else-if="error" class="state">
       <p class="error">{{ error }}</p>
-      <NuxtLink to="/home" class="back-link">← Back to mods</NuxtLink>
+      <button type="button" class="back-link" @click="goBack">
+        {{ backLabel }}
+      </button>
     </div>
 
     <article v-else-if="mod" class="mod-detail">
@@ -507,8 +553,17 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .back-link {
+  padding: 0;
+  border: none;
+  background: none;
   font-size: 0.9rem;
   font-weight: 500;
+  color: var(--modio-accent);
+  cursor: pointer;
+}
+
+.back-link:hover {
+  color: var(--modio-accent-hover);
 }
 
 .mod-detail-layout {

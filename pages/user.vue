@@ -135,10 +135,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.page {
-  max-width: 56rem;
-}
-
 .page-header {
   margin-bottom: 1.5rem;
 }
@@ -211,7 +207,7 @@ onMounted(async () => {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
   gap: 1rem;
 }
 
