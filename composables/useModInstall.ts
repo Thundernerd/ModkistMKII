@@ -102,19 +102,24 @@ function resetSessionSync() {
 }
 
 export function useModInstall() {
-  async function refreshInstalled() {
+  async function refreshInstalled(options?: { syncSubscriptions?: boolean }) {
     try {
       installEnvironmentError.value = "";
       const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
-      if (authStatus.loggedIn && !sessionSyncDone.value) {
-        await invoke("sync_subscribed_mods");
+      const shouldSync =
+        options?.syncSubscriptions ??
+        (authStatus.loggedIn && !sessionSyncDone.value);
+      if (authStatus.loggedIn && shouldSync) {
         sessionSyncDone.value = true;
       }
       if (!authStatus.loggedIn) {
         resetSessionSync();
       }
 
-      installedMods.value = await invoke<InstalledModEntry[]>("list_installed_mods");
+      installedMods.value = await invoke<InstalledModEntry[]>(
+        "refresh_installed_mods",
+        { syncSubscriptions: shouldSync },
+      );
       const nextStates: Record<number, ModInstallState> = {};
       for (const mod of installedMods.value) {
         nextStates[mod.modId] = {
@@ -160,7 +165,25 @@ export function useModInstall() {
     setInstalling(modId, true);
     try {
       const result = await invoke<InstallModResult>("install_mod", { modId });
-      await refreshInstalled();
+      sessionSyncDone.value = true;
+      installedMods.value = await invoke<InstalledModEntry[]>(
+        "refresh_installed_mods",
+        { syncSubscriptions: false },
+      );
+      const nextStates: Record<number, ModInstallState> = {};
+      for (const mod of installedMods.value) {
+        nextStates[mod.modId] = {
+          status: mod.updateAvailable ? "updateAvailable" : "upToDate",
+          installedFileId: mod.fileId,
+          latestFileId: mod.latestFileId ?? mod.fileId,
+          kind: mod.kind,
+          canUninstall: mod.canUninstall,
+          uninstallBlockedBy: mod.uninstallBlockedBy ?? [],
+        };
+      }
+      installStates.value = nextStates;
+      installReady.value = true;
+      installEnvironmentError.value = "";
       for (const id of [...result.installed, ...result.skipped]) {
         await refreshInstallState(id);
       }

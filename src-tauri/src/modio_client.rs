@@ -1,15 +1,18 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use modio::request::filter::prelude::*;
 use modio::request::filter::{custom_filter, custom_order_by_asc, custom_order_by_desc, Filter, Operator};
 use modio::request::user::filters::subscriptions::GameId;
 use modio::types::id::Id;
-use modio::util::Paginate;
 use modio::types::TargetPlatform;
+use modio::util::Paginate;
 use modio::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
+
+use crate::mod_api_cache::ApiCache;
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
@@ -58,6 +61,7 @@ pub struct ModioState {
     config: ModioConfig,
     base_client: Mutex<Option<Arc<Client>>>,
     session: Mutex<SessionData>,
+    api_cache: Mutex<ApiCache>,
 }
 
 impl ModioState {
@@ -76,6 +80,43 @@ impl ModioState {
                 username: None,
                 client: None,
             }),
+            api_cache: Mutex::new(ApiCache::default()),
+        }
+    }
+
+    pub(crate) fn clear_api_cache(&self) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.clear();
+        }
+    }
+
+    pub(crate) fn invalidate_mod_cache(&self, mod_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.invalidate_mod(mod_id);
+        }
+    }
+
+    pub(crate) fn cached_mod_unavailable(&self, mod_id: u64) -> bool {
+        self.api_cache
+            .lock()
+            .ok()
+            .is_some_and(|cache| cache.is_mod_unavailable(mod_id))
+    }
+
+    pub(crate) fn mark_mod_unavailable(&self, mod_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.mark_mod_unavailable(mod_id);
+        }
+    }
+
+    pub(crate) fn cached_dependencies(&self, mod_id: u64) -> Option<Vec<u64>> {
+        let cache = self.api_cache.lock().ok()?;
+        cache.get_dependencies(mod_id)
+    }
+
+    pub(crate) fn store_dependencies(&self, mod_id: u64, dependencies: Vec<u64>) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.store_dependencies(mod_id, dependencies);
         }
     }
 
@@ -210,6 +251,7 @@ impl ModioState {
             session.username = None;
             session.client = None;
         }
+        self.clear_api_cache();
 
         let store = app.store(AUTH_STORE_PATH).map_err(|e| e.to_string())?;
         let _ = store.delete(ACCESS_TOKEN_KEY);
@@ -278,37 +320,62 @@ pub fn is_mod_unavailable(error: &modio::Error) -> bool {
     error.status().is_some_and(|status| status.as_u16() == 404)
 }
 
+pub(crate) fn is_rate_limited_message(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("rate limit")
+}
+
+pub(crate) async fn with_rate_limit_retry<T, F, Fut>(mut operation: F) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    match operation().await {
+        Ok(value) => Ok(value),
+        Err(message) if is_rate_limited_message(&message) => {
+            tokio::time::sleep(Duration::from_secs(61)).await;
+            operation().await
+        }
+        Err(message) => Err(message),
+    }
+}
+
 pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
-    let game_id = state.game_id()?;
-    let client = state.get_session_client()?;
-    let response = client
-        .subscribe_to_mod(Id::new(game_id), Id::new(mod_id))
-        .await
-        .map_err(format_modio_error)?;
-    response.data().await.map_err(|e| e.to_string())?;
-    Ok(())
+    with_rate_limit_retry(|| async {
+        let game_id = state.game_id()?;
+        let client = state.get_session_client()?;
+        let response = client
+            .subscribe_to_mod(Id::new(game_id), Id::new(mod_id))
+            .await
+            .map_err(format_modio_error)?;
+        response.data().await.map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
 }
 
 pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {
-    let game_id = state.game_id()?;
-    let client = state.get_session_client()?;
-    let filter = GameId::eq(game_id);
-    let request = client.get_user_subscriptions().filter(filter);
-    let mut paginator = request.paged();
-    let mut mod_ids = Vec::new();
+    with_rate_limit_retry(|| async {
+        let game_id = state.game_id()?;
+        let client = state.get_session_client()?;
+        let filter = GameId::eq(game_id);
+        let request = client.get_user_subscriptions().filter(filter);
+        let mut paginator = request.paged();
+        let mut mod_ids = Vec::new();
 
-    while let Some(page) = paginator.next().await.map_err(|error| match error {
-        modio::util::PaginateError::Request(err) => format_modio_error(err),
-        modio::util::PaginateError::Body(err) => err.to_string(),
-    })? {
-        for mod_ in page.data.iter() {
-            mod_ids.push(mod_.id.get());
+        while let Some(page) = paginator.next().await.map_err(|error| match error {
+            modio::util::PaginateError::Request(err) => format_modio_error(err),
+            modio::util::PaginateError::Body(err) => err.to_string(),
+        })? {
+            for mod_ in page.data.iter() {
+                mod_ids.push(mod_.id.get());
+            }
         }
-    }
 
-    mod_ids.sort_unstable();
-    mod_ids.dedup();
-    Ok(mod_ids)
+        mod_ids.sort_unstable();
+        mod_ids.dedup();
+        Ok(mod_ids)
+    })
+    .await
 }
 
 #[derive(Serialize)]
