@@ -1,4 +1,5 @@
 import { invoke } from "~/utils/tauri";
+import { logger } from "~/utils/logger";
 
 export type InstallUiStatus =
   | "notInstalled"
@@ -131,6 +132,7 @@ let subscriptionSyncGeneration = 0;
 const SUBSCRIPTION_SYNC_CANCELLED = "Subscription sync cancelled";
 
 export async function cancelSubscriptionSync() {
+  logger.debug("Cancelling subscription sync");
   subscriptionSyncGeneration += 1;
   syncingSubscriptions.value = false;
   syncSubscriptionError.value = "";
@@ -174,6 +176,7 @@ export function useModInstall() {
         }
 
         applyInstalledList(await listInstalledMods());
+        logger.debug(`Refreshed installed mods (${installedMods.value.length} total)`);
       } catch (error) {
         installReady.value = false;
         installEnvironmentError.value =
@@ -210,13 +213,16 @@ export function useModInstall() {
     const generation = subscriptionSyncGeneration;
     syncingSubscriptions.value = true;
     syncSubscriptionError.value = "";
+    logger.info("Starting subscription sync");
 
     try {
-      await invoke<InstallModResult>("sync_subscribed_mods");
+      const result = await invoke<InstallModResult>("sync_subscribed_mods");
       if (generation !== subscriptionSyncGeneration) {
+        logger.debug("Subscription sync result ignored (cancelled)");
         return;
       }
       sessionSyncDone.value = true;
+      logger.info("Subscription sync complete", result);
       await refreshInstalled();
     } catch (error) {
       if (generation !== subscriptionSyncGeneration) {
@@ -224,8 +230,10 @@ export function useModInstall() {
       }
       const message = error instanceof Error ? error.message : String(error);
       if (message === SUBSCRIPTION_SYNC_CANCELLED) {
+        logger.debug("Subscription sync cancelled");
         return;
       }
+      logger.error("Subscription sync failed", message);
       syncSubscriptionError.value = message;
       await refreshInstalled().catch(() => {});
     } finally {
@@ -256,6 +264,7 @@ export function useModInstall() {
   async function installMod(modId: number) {
     clearInstallError(modId);
     setInstalling(modId, true);
+    logger.info(`Installing mod ${modId}`);
     try {
       if (profileSwitching.value) {
         throw new Error("Wait for the profile switch to finish, then try again.");
@@ -282,9 +291,11 @@ export function useModInstall() {
       for (const id of refreshIds) {
         await refreshInstallState(id);
       }
+      logger.info(`Install finished for mod ${modId}`, result);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      logger.error(`Install failed for mod ${modId}`, message);
       installErrors.value = { ...installErrors.value, [modId]: message };
       throw error;
     } finally {
@@ -295,12 +306,15 @@ export function useModInstall() {
   async function uninstallMod(modId: number) {
     clearInstallError(modId);
     setUninstalling(modId, true);
+    logger.info(`Uninstalling mod ${modId}`);
     try {
       await cancelSubscriptionSync();
       await invoke("uninstall_mod", { modId });
       await refreshInstalled();
+      logger.info(`Uninstalled mod ${modId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      logger.error(`Uninstall failed for mod ${modId}`, message);
       installErrors.value = { ...installErrors.value, [modId]: message };
       throw error;
     } finally {

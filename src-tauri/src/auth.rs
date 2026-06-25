@@ -15,6 +15,7 @@ pub async fn request_email_code(
     state: State<'_, ModioState>,
     email: String,
 ) -> Result<String, String> {
+    log::info!("Requesting mod.io login code");
     let client = state.get_base_client()?;
     let response = client
         .request_code(&email)
@@ -46,6 +47,7 @@ pub async fn verify_email_code(
 
     state.set_session(&app, token.value, user.username.clone())?;
 
+    log::info!("Signed in as {}", user.username);
     Ok(AuthUser {
         username: user.username,
         profile_url: user.profile_url.to_string(),
@@ -59,5 +61,6 @@ pub fn auth_status(state: State<'_, ModioState>) -> crate::modio_client::AuthSta
 
 #[tauri::command]
 pub fn logout(app: AppHandle, state: State<'_, ModioState>) -> Result<(), String> {
+    log::info!("Logging out");
     state.clear_session(&app)
 }

@@ -653,6 +653,7 @@ async fn ensure_subscription_sync_may_continue(
     state: &ModioState,
 ) -> Result<(), String> {
     if state.is_subscription_sync_cancelled() {
+        log::debug!("Subscription sync cancelled");
         return Err(SUBSCRIPTION_SYNC_CANCELLED.into());
     }
     if !active_profile_is_user(app, state)? {
@@ -673,6 +674,12 @@ async fn install_targets_internal(
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
 
+    log::debug!(
+        "Installing {} mod target(s){}",
+        order.len(),
+        if app.is_some() { " (subscription sync)" } else { "" }
+    );
+
     for target_mod_id in order {
         if let Some(app) = app {
             ensure_subscription_sync_may_continue(app, state).await?;
@@ -685,6 +692,7 @@ async fn install_targets_internal(
         let state_for_mod =
             install_state_for_mod(state, target_mod_id, records, dependency_map).await?;
         if matches!(state_for_mod.status.as_str(), "upToDate") {
+            log::debug!("Mod {target_mod_id} already up to date, skipping");
             skipped.push(target_mod_id);
             continue;
         }
@@ -693,12 +701,19 @@ async fn install_targets_internal(
             ensure_subscription_sync_may_continue(app, state).await?;
         }
 
+        log::info!("Installing mod {target_mod_id}");
         install_single_mod(state, game_dir, target_mod_id).await?;
+        log::info!("Installed mod {target_mod_id}");
         installed.push(target_mod_id);
         *records = scan_installed_mods(game_dir)?;
         refresh_dependency_map(state, dependency_map, records).await?;
     }
 
+    log::debug!(
+        "Install pass complete: {} installed, {} skipped",
+        installed.len(),
+        skipped.len()
+    );
     Ok(InstallModResult { installed, skipped })
 }
 
@@ -708,7 +723,9 @@ async fn install_mod_internal(
     game_dir: &Path,
     mod_id: u64,
 ) -> Result<InstallModResult, String> {
+    log::info!("Installing mod {mod_id}");
     let order = collect_install_order(state, mod_id).await?;
+    log::debug!("Mod {mod_id} install order: {order:?}");
     let mut records = scan_installed_mods_after_cleanup(state, game_dir).await?;
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await?;
@@ -716,6 +733,7 @@ async fn install_mod_internal(
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
     if should_subscribe {
+        log::debug!("Account profile active — subscribing to mod {mod_id}");
         // Only subscribe to the mod the user chose — not every dependency.
         // Each subscribe is an OAuth write (60/min); subscribing the full
         // dependency chain causes rate-limit sleeps that look like a hang.
@@ -746,7 +764,9 @@ async fn sync_subscribed_mods_inner(
     app: &AppHandle,
     state: &ModioState,
 ) -> Result<InstallModResult, String> {
+    log::info!("Starting subscription sync");
     if !state.auth_status().logged_in {
+        log::debug!("Skipping subscription sync: not logged in");
         return Ok(InstallModResult {
             installed: Vec::new(),
             skipped: Vec::new(),
@@ -754,6 +774,7 @@ async fn sync_subscribed_mods_inner(
     }
 
     if !active_profile_is_user(app, state)? {
+        log::debug!("Skipping subscription sync: not on account profile");
         return Ok(InstallModResult {
             installed: Vec::new(),
             skipped: Vec::new(),
@@ -770,6 +791,7 @@ async fn sync_subscribed_mods_inner(
     ensure_install_prerequisites(&game_dir)?;
     let mod_ids = fetch_subscribed_mod_ids(state).await?;
     ensure_subscription_sync_may_continue(app, state).await?;
+    let subscribed_count = mod_ids.len();
 
     let mut records = scan_installed_mods_after_cleanup(state, &game_dir).await?;
     let mut dependency_map = HashMap::new();
@@ -789,7 +811,12 @@ async fn sync_subscribed_mods_inner(
         }
     }
 
-    install_targets_internal(
+    log::info!(
+        "Syncing {subscribed_count} subscribed mod(s), {} unique install target(s)",
+        install_order.len()
+    );
+
+    let result = install_targets_internal(
         Some(app),
         state,
         &game_dir,
@@ -798,7 +825,19 @@ async fn sync_subscribed_mods_inner(
         &mut dependency_map,
         false,
     )
-    .await
+    .await;
+    match &result {
+        Ok(summary) => log::info!(
+            "Subscription sync complete: {} installed, {} skipped",
+            summary.installed.len(),
+            summary.skipped.len()
+        ),
+        Err(message) if message == SUBSCRIPTION_SYNC_CANCELLED => {
+            log::info!("Subscription sync cancelled");
+        }
+        Err(message) => log::error!("Subscription sync failed: {message}"),
+    }
+    result
 }
 
 async fn refresh_installed_mods_inner(
@@ -896,7 +935,9 @@ pub async fn install_mod(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<InstallModResult, String> {
+    log::info!("install_mod command: mod {mod_id}");
     if active_profile_install_blocked(&app, &state)? {
+        log::warn!("install_mod blocked: vanilla profile active");
         return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
     }
 
@@ -908,11 +949,20 @@ pub async fn install_mod(
     ensure_install_prerequisites(&game_dir)?;
     let result = install_mod_internal(&app, &state, &game_dir, mod_id).await;
     state.reset_subscription_sync_cancel();
+    match &result {
+        Ok(summary) => log::info!(
+            "install_mod complete for {mod_id}: {} installed, {} skipped",
+            summary.installed.len(),
+            summary.skipped.len()
+        ),
+        Err(message) => log::error!("install_mod failed for {mod_id}: {message}"),
+    }
     result
 }
 
 #[tauri::command]
 pub fn cancel_subscription_sync(state: State<'_, ModioState>) {
+    log::debug!("cancel_subscription_sync command invoked");
     state.cancel_subscription_sync();
 }
 
@@ -922,6 +972,7 @@ pub async fn uninstall_mod(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<(), String> {
+    log::info!("uninstall_mod command: mod {mod_id}");
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
 
@@ -941,13 +992,16 @@ pub async fn uninstall_mod(
     let should_unsubscribe =
         state.auth_status().logged_in && active_profile_is_user(&app, &state)?;
     if should_unsubscribe {
+        log::debug!("Account profile active — unsubscribing from mod {mod_id}");
         state.cancel_subscription_sync();
         let result = unsubscribe_from_mod(&state, mod_id).await;
         state.reset_subscription_sync_cancel();
         result?;
     }
 
-    remove_installed_mod_folders(&game_dir, mod_id)
+    remove_installed_mod_folders(&game_dir, mod_id)?;
+    log::info!("Uninstalled mod {mod_id}");
+    Ok(())
 }
 
 #[cfg(test)]

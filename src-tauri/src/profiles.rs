@@ -359,6 +359,7 @@ fn archive_has_valid_mod_folders(game_dir: &Path, profile_id: &str) -> Result<bo
 }
 
 pub fn save_active_profile(game_dir: &Path, profile_id: &str) -> Result<(), String> {
+    log::debug!("Saving live mods to profile archive '{profile_id}'");
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
         let archive_dir = archive_kind_dir(game_dir, profile_id, kind_dir_name);
@@ -368,6 +369,7 @@ pub fn save_active_profile(game_dir: &Path, profile_id: &str) -> Result<(), Stri
 }
 
 pub fn restore_profile(game_dir: &Path, profile_id: &str) -> Result<(), String> {
+    log::debug!("Restoring profile '{profile_id}' to live mod folders");
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
         let archive_dir = archive_kind_dir(game_dir, profile_id, kind_dir_name);
@@ -470,6 +472,7 @@ fn switch_profile_inner(
 ) -> Result<ActiveProfileInfo, String> {
     let mut data = prepare_store(app, modio_state)?;
     if data.active_profile_id == target_profile_id {
+        log::debug!("Profile '{target_profile_id}' is already active");
         return active_profile_info(app, modio_state);
     }
 
@@ -483,6 +486,14 @@ fn switch_profile_inner(
 
     modio_state.cancel_subscription_sync();
 
+    let from_profile_id = data.active_profile_id.clone();
+    log::info!(
+        "Switching profile: {} -> {} ({})",
+        from_profile_id,
+        target_profile_id,
+        target.name
+    );
+
     let game_dir = game_directory(app)?;
     save_active_profile(&game_dir, &data.active_profile_id)?;
     data.active_profile_id = target_profile_id.to_string();
@@ -490,6 +501,7 @@ fn switch_profile_inner(
     restore_profile(&game_dir, target_profile_id)?;
     modio_state.clear_api_cache();
 
+    log::info!("Active profile is now '{}'", target.name);
     Ok(ActiveProfileInfo {
         id: target.id.clone(),
         name: target.name.clone(),
@@ -564,6 +576,7 @@ pub fn create_profile(
     };
     data.profiles.push(profile.clone());
     save_store_data(&app, &data)?;
+    log::info!("Created profile '{}' ({id})", trimmed);
 
     if let Ok(game_dir) = game_directory(&app) {
         for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
@@ -595,9 +608,11 @@ pub fn delete_profile(
         return Err("Switch to another profile before deleting this one.".into());
     }
 
+    let profile_name = profile.name.clone();
     let mut data = data;
     data.profiles.retain(|entry| entry.id != profile_id);
     save_store_data(&app, &data)?;
+    log::info!("Deleted profile '{profile_name}' ({profile_id})");
 
     if let Ok(game_dir) = game_directory(&app) {
         let archive_root = profile_archive_root(&game_dir, profile_id);

@@ -92,6 +92,7 @@ impl ModioState {
     }
 
     pub(crate) fn cancel_subscription_sync(&self) {
+        log::debug!("Subscription sync cancellation requested");
         self.subscription_sync_cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -259,10 +260,15 @@ impl ModioState {
         store.set(USERNAME_KEY, serde_json::json!(username));
         store.save().map_err(|e| e.to_string())?;
 
+        log::info!("mod.io session started for {username}");
         Ok(())
     }
 
     pub fn clear_session(&self, app: &AppHandle) -> Result<(), String> {
+        let username = self
+            .auth_status()
+            .username
+            .unwrap_or_else(|| "user".to_string());
         {
             let mut session = self.session.lock().unwrap();
             session.token = None;
@@ -276,6 +282,7 @@ impl ModioState {
         let _ = store.delete(USERNAME_KEY);
         store.save().map_err(|e| e.to_string())?;
 
+        log::info!("mod.io session cleared for {username}");
         Ok(())
     }
 
@@ -374,6 +381,7 @@ where
     match operation().await {
         Ok(value) => Ok(value),
         Err(message) if is_rate_limited_message(&message) => {
+            log::warn!("mod.io rate limit hit, retrying in 61 seconds: {message}");
             tokio::time::sleep(Duration::from_secs(61)).await;
             operation().await
         }
@@ -382,6 +390,7 @@ where
 }
 
 pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+    log::info!("Subscribing to mod {mod_id}");
     match with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
         let client = state.get_session_client()?;
@@ -399,13 +408,23 @@ pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<
     })
     .await
     {
-        Ok(()) => Ok(()),
-        Err(message) if is_already_subscribed_message(&message) => Ok(()),
-        Err(message) => Err(message),
+        Ok(()) => {
+            log::info!("Subscribed to mod {mod_id}");
+            Ok(())
+        }
+        Err(message) if is_already_subscribed_message(&message) => {
+            log::debug!("Mod {mod_id} already subscribed");
+            Ok(())
+        }
+        Err(message) => {
+            log::error!("Failed to subscribe to mod {mod_id}: {message}");
+            Err(message)
+        }
     }
 }
 
 pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+    log::info!("Unsubscribing from mod {mod_id}");
     match with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
         let client = state.get_session_client()?;
@@ -423,14 +442,24 @@ pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Res
     })
     .await
     {
-        Ok(()) => Ok(()),
-        Err(message) if is_not_subscribed_message(&message) => Ok(()),
-        Err(message) => Err(message),
+        Ok(()) => {
+            log::info!("Unsubscribed from mod {mod_id}");
+            Ok(())
+        }
+        Err(message) if is_not_subscribed_message(&message) => {
+            log::debug!("Mod {mod_id} was not subscribed");
+            Ok(())
+        }
+        Err(message) => {
+            log::error!("Failed to unsubscribe from mod {mod_id}: {message}");
+            Err(message)
+        }
     }
 }
 
 pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {
-    with_rate_limit_retry(|| async {
+    log::debug!("Fetching subscribed mod IDs");
+    let mod_ids = with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
         let client = state.get_session_client()?;
         let filter = GameId::eq(game_id);
@@ -451,7 +480,9 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
         mod_ids.dedup();
         Ok(mod_ids)
     })
-    .await
+    .await?;
+    log::info!("Found {} subscribed mod(s)", mod_ids.len());
+    Ok(mod_ids)
 }
 
 #[derive(Serialize)]

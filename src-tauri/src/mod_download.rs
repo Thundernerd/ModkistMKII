@@ -19,6 +19,7 @@ pub async fn download_modfile(
     destination: &Path,
     expected_size: Option<u64>,
 ) -> Result<(), String> {
+    log::info!("Downloading mod file to {}", destination.display());
     let api_key = state.api_key()?;
     let access_token = state.access_token();
     let request_url = if access_token.is_some() {
@@ -76,6 +77,11 @@ pub async fn download_modfile(
         )
     })?;
 
+    log::info!(
+        "Downloaded {} bytes to {}",
+        bytes.len(),
+        destination.display()
+    );
     Ok(())
 }
 

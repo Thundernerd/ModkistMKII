@@ -84,7 +84,7 @@ pub fn configure_winhttp_override(game_dir: &Path) -> WineWinhttpStatus {
     }
 
     if let Err(error) = apply_via_wine_reg(&prefix.path) {
-        eprintln!("wine reg override failed, falling back to user.reg edit: {error}");
+        log::warn!("wine reg override failed, falling back to user.reg edit: {error}");
         if let Err(error) = apply_via_user_reg(&user_reg, &content) {
             return WineWinhttpStatus::failed(error);
         }

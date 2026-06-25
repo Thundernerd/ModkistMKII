@@ -1,4 +1,5 @@
 import { invoke } from "~/utils/tauri";
+import { logger } from "~/utils/logger";
 
 export interface AuthStatus {
   loggedIn: boolean;
@@ -18,6 +19,7 @@ export function useModioAuth() {
   }
 
   async function logout() {
+    logger.info("Logging out");
     await invoke("logout");
     const { resetSessionSync } = useModInstall();
     const { refreshProfiles } = useProfiles();

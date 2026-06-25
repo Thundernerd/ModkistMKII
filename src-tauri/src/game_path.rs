@@ -105,5 +105,6 @@ pub fn set_game_path(app: AppHandle, path: String) -> Result<GamePathStatus, Str
     store.set(GAME_DIRECTORY_KEY, serde_json::json!(trimmed));
     store.save().map_err(|e| e.to_string())?;
 
+    log::info!("Game directory set to {}", trimmed);
     Ok(build_status(&app))
 }

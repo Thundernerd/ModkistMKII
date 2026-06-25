@@ -27,6 +27,7 @@ mod wine_prefix;
 mod auth;
 mod bepinex;
 mod game_path;
+mod logging;
 mod mod_api_cache;
 mod mod_download;
 mod mod_install;
@@ -69,6 +70,8 @@ fn greet(name: &str) -> String {
 pub fn run() {
     dotenvy::dotenv().ok();
     dotenvy::from_filename("../.env").ok();
+    logging::init();
+    log::info!("Modkist starting");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -83,9 +86,15 @@ pub fn run() {
         .setup(|app| {
             let state = ModioState::from_env();
             if let Err(error) = state.restore_from_store(app.handle()) {
-                eprintln!("Failed to restore mod.io session: {error}");
+                log::warn!("Failed to restore mod.io session: {error}");
+            } else if state.auth_status().logged_in {
+                log::info!(
+                    "Restored mod.io session for {}",
+                    state.auth_status().username.as_deref().unwrap_or("user")
+                );
             }
             app.manage(state);
+            log::info!("Application setup complete");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

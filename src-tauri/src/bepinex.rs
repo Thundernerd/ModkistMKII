@@ -241,6 +241,7 @@ pub fn verify_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
 
 #[tauri::command]
 pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
+    log::info!("Installing BepInEx");
     let game_dir = game_directory(&app)?;
     let (state, _) = detect_bepinex(&game_dir);
 
@@ -259,6 +260,7 @@ pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
 }
 
 async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
+    log::info!("Downloading and extracting BepInEx to {}", game_dir.display());
     let temp_dir = std::env::temp_dir().join("modkist-bepinex");
     fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Could not create temp directory: {e}"))?;
@@ -304,6 +306,7 @@ fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn reinstall_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
+    log::info!("Reinstalling BepInEx");
     let game_dir = game_directory(&app)?;
     remove_bepinex_installation(&game_dir)?;
     perform_install(&game_dir).await

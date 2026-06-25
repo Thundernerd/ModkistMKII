@@ -1,5 +1,6 @@
 import { cancelSubscriptionSync } from "~/composables/useModInstall";
 import { invoke } from "~/utils/tauri";
+import { logger } from "~/utils/logger";
 
 export type ProfileKind = "vanilla" | "user" | "custom";
 
@@ -70,12 +71,14 @@ export function useProfiles() {
     error.value = "";
     await cancelSubscriptionSync();
     try {
+      logger.info(`Switching profile to ${profileId}`);
       const next = await invoke<ActiveProfileInfo>("switch_profile", {
         profileId,
       });
       activeProfile.value = next;
       activeProfileId.value = next.id;
       await refreshProfiles();
+      logger.info(`Active profile is now ${next.name} (${next.kind})`);
       return next;
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err);
