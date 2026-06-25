@@ -6,21 +6,18 @@ import { navigateToApp, readRedirectParam } from "~/utils/authNavigation";
 
 type LoginStep = "enterEmail" | "codeSent";
 
-interface ModioStatus {
-  configured: boolean;
-  message?: string;
-}
-
 const step = ref<LoginStep>("enterEmail");
 const email = ref("");
 const otp = ref("");
 const loading = ref(false);
 const error = ref("");
 const infoMessage = ref("");
-const modioConfigured = ref(false);
-const modioMessage = ref(
-  "Set MODIO_API_KEY and MODIO_GAME_ID in .env (see .env.example).",
-);
+const {
+  modioConfigured,
+  modioMessage,
+  modioStatusChecked,
+  refreshModioStatus,
+} = useModioStatus();
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -30,14 +27,6 @@ const { refreshProfiles } = useProfiles();
 
 const route = useRoute();
 const redirect = computed(() => readRedirectParam(route.query.redirect));
-
-async function checkModioStatus() {
-  const status = await invoke<ModioStatus>("modio_status");
-  modioConfigured.value = status.configured;
-  if (status.message) {
-    modioMessage.value = status.message;
-  }
-}
 
 function validateEmail(): boolean {
   if (!emailPattern.test(email.value.trim())) {
@@ -116,7 +105,7 @@ onMounted(async () => {
     await navigateToApp(redirect.value);
     return;
   }
-  checkModioStatus();
+  await refreshModioStatus();
 });
 </script>
 
@@ -128,11 +117,14 @@ onMounted(async () => {
         <h1>Sign in with mod.io</h1>
       </div>
 
-      <p v-if="!modioConfigured" class="hint">
-        {{ modioMessage }}
+      <p v-if="modioStatusChecked && !modioConfigured" class="hint">
+        {{
+          modioMessage ||
+            "Set MODIO_API_KEY and MODIO_GAME_ID in .env (see .env.example)."
+        }}
       </p>
 
-      <section v-else class="panel">
+      <section v-else-if="modioConfigured" class="panel">
       <form
         v-if="step === 'enterEmail'"
         class="form"

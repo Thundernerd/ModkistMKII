@@ -1,15 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted } from "vue";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { invoke } from "~/utils/tauri";
 import { useModFilters } from "~/composables/useModFilters";
 
 definePageMeta({ layout: "app" });
-
-interface ModioStatus {
-  configured: boolean;
-  message?: string;
-}
 
 const {
   mods,
@@ -51,14 +45,12 @@ const {
   syncSubscribedModsIfNeeded,
 } = useModInstall();
 
-const modioConfigured = ref(false);
-const modioMessage = ref("");
-
-async function checkModioStatus() {
-  const status = await invoke<ModioStatus>("modio_status");
-  modioConfigured.value = status.configured;
-  modioMessage.value = status.message ?? "";
-}
+const {
+  modioConfigured,
+  modioMessage,
+  modioStatusChecked,
+  refreshModioStatus,
+} = useModioStatus();
 
 async function handleInstall(modId: number) {
   await installMod(modId);
@@ -74,7 +66,7 @@ async function handleUninstall(modId: number, modName: string) {
 }
 
 onMounted(async () => {
-  await checkModioStatus();
+  await refreshModioStatus();
   if (modioConfigured.value) {
     await Promise.all([initialize(), checkForUpdatesOnStartup()]);
     await syncSubscribedModsIfNeeded();
@@ -88,7 +80,12 @@ onMounted(async () => {
       <h1>Mods</h1>
     </header>
 
-    <p v-if="!modioConfigured" class="hint mods-hint">
+    <div v-if="!modioStatusChecked" class="state mods-loading">
+      <span class="spinner" aria-hidden="true" />
+      Loading mods…
+    </div>
+
+    <p v-else-if="!modioConfigured" class="hint mods-hint">
       {{ modioMessage || "Configure mod.io in .env (see .env.example)." }}
     </p>
 
@@ -154,7 +151,7 @@ onMounted(async () => {
 
     <p v-if="error" class="error mods-error">{{ error }}</p>
 
-    <div v-if="loading && mods.length === 0" class="state">
+    <div v-if="modioConfigured && loading && mods.length === 0" class="state">
       <span class="spinner" aria-hidden="true" />
       Loading mods…
     </div>
