@@ -1,12 +1,52 @@
 <script setup lang="ts">
 definePageMeta({ layout: "app" });
 
-const { authStatus, refreshAuthStatus, logout } = useModioAuth();
+const {
+  authStatus,
+  refreshAuthStatus,
+  checkLogoutRequiresProfileSelection,
+  completeLogout,
+} = useModioAuth();
 const { profile, userMods, loading, error, fetchUserData } = useUserProfile();
+const {
+  switchProfile,
+  logoutPickerProfiles,
+  refreshProfiles,
+} = useProfiles();
+const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
+
+const profilePickerOpen = ref(false);
+const logoutError = ref("");
 
 async function handleLogout() {
-  await logout();
-  await navigateTo("/");
+  logoutError.value = "";
+  try {
+    const needsPicker = await checkLogoutRequiresProfileSelection();
+    if (needsPicker) {
+      await refreshProfiles();
+      profilePickerOpen.value = true;
+      return;
+    }
+
+    await completeLogout();
+    await navigateTo("/");
+  } catch (err) {
+    logoutError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function handleLogoutProfileSelect(profileId: string) {
+  logoutError.value = "";
+  try {
+    await switchProfile(profileId);
+    resetStartupUpdateCheck();
+    await refreshInstalled();
+    profilePickerOpen.value = false;
+    await completeLogout();
+    await navigateTo("/");
+  } catch (err) {
+    logoutError.value = err instanceof Error ? err.message : String(err);
+  }
 }
 
 onMounted(async () => {
@@ -31,6 +71,7 @@ onMounted(async () => {
     </div>
 
     <p v-else-if="error" class="error">{{ error }}</p>
+    <p v-if="logoutError" class="error">{{ logoutError }}</p>
 
     <template v-else-if="profile">
       <section class="profile-card panel">
@@ -81,12 +122,21 @@ onMounted(async () => {
         </ul>
       </section>
     </template>
+
+    <ProfilePickerDialog
+      :open="profilePickerOpen"
+      :profiles="logoutPickerProfiles()"
+      title="Switch profile before logging out"
+      description="Choose which profile should be active after you sign out."
+      @close="profilePickerOpen = false"
+      @select="handleLogoutProfileSelect"
+    />
   </div>
 </template>
 
 <style scoped>
 .page {
-  max-width: 72rem;
+  max-width: 56rem;
 }
 
 .page-header {
@@ -109,48 +159,45 @@ onMounted(async () => {
 }
 
 .profile-card {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 
 .profile-header {
   display: flex;
   align-items: center;
   gap: 1rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 1rem;
 }
 
 .profile-avatar {
   width: 4rem;
   height: 4rem;
-  border-radius: 999px;
+  border-radius: 50%;
   object-fit: cover;
-  flex-shrink: 0;
+  background: var(--modio-surface-raised);
 }
 
 .profile-avatar--fallback {
-  background: linear-gradient(
-    135deg,
-    var(--modio-surface-raised),
-    var(--modio-surface-hover)
-  );
+  border: 1px solid var(--modio-border);
 }
 
 .profile-name {
   margin: 0 0 0.25rem;
-  font-size: 1.2rem;
+  font-size: 1.15rem;
   font-weight: 600;
 }
 
 .profile-link {
   font-size: 0.9rem;
+  color: var(--modio-accent);
 }
 
 .logout-button {
-  width: fit-content;
+  margin-top: 0.25rem;
 }
 
 .section-title {
-  margin: 0 0 0.35rem;
+  margin: 0 0 0.5rem;
   font-size: 1.1rem;
   font-weight: 600;
 }
@@ -159,48 +206,27 @@ onMounted(async () => {
   margin: 0 0 1rem;
 }
 
-.empty-state {
-  padding: 2rem;
-  text-align: center;
-  border: 1px dashed var(--modio-border);
-  border-radius: var(--modio-radius);
-  background: var(--modio-surface);
-}
-
-.state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 4rem 1rem;
-  color: var(--modio-text-muted);
-}
-
-.state--compact {
-  padding: 2rem 1rem;
-}
-
-.spinner {
-  width: 1.1rem;
-  height: 1.1rem;
-  border: 2px solid var(--modio-border);
-  border-top-color: var(--modio-accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .mod-grid {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
   gap: 1rem;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--modio-text-muted);
+}
+
+.state--compact {
+  padding: 0.5rem 0;
+}
+
+.empty-state {
+  margin: 0;
 }
 </style>

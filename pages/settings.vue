@@ -132,7 +132,61 @@ async function reinstallBepInExInstall() {
 
 onMounted(() => {
   refreshBepInExStatus();
+  refreshProfiles().catch(() => {});
 });
+
+const {
+  profiles,
+  loading: profilesLoading,
+  error: profilesError,
+  refreshProfiles,
+  createProfile,
+  deleteProfile,
+} = useProfiles();
+const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
+
+const newProfileName = ref("");
+const profileActionError = ref("");
+const creatingProfile = ref(false);
+
+async function handleCreateProfile() {
+  const name = newProfileName.value.trim();
+  if (!name) return;
+
+  creatingProfile.value = true;
+  profileActionError.value = "";
+  try {
+    await createProfile(name);
+    newProfileName.value = "";
+    resetStartupUpdateCheck();
+    await refreshInstalled();
+  } catch (err) {
+    profileActionError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    creatingProfile.value = false;
+  }
+}
+
+async function handleDeleteProfile(profileId: string, profileName: string) {
+  const confirmed = await confirm(
+    `Delete profile "${profileName}"? Its saved mod list will be removed.`,
+    { title: "Delete profile?", kind: "warning" },
+  );
+  if (!confirmed) return;
+
+  profileActionError.value = "";
+  try {
+    await deleteProfile(profileId);
+  } catch (err) {
+    profileActionError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function profileKindLabel(kind: string) {
+  if (kind === "vanilla") return "Built-in";
+  if (kind === "user") return "Built-in";
+  return "Custom";
+}
 </script>
 
 <template>
@@ -148,6 +202,65 @@ onMounted(() => {
         Folder that contains <code>zeepkist.exe</code>.
       </p>
       <GamePathForm input-id="settings-game-path" />
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Profiles</h2>
+      <p class="hint panel-desc">
+        Each profile keeps its own installed mod list. Vanilla blocks installs.
+      </p>
+
+      <p v-if="profilesError" class="error feedback">{{ profilesError }}</p>
+      <p v-if="profileActionError" class="error feedback">{{ profileActionError }}</p>
+
+      <ul v-if="profiles.length" class="profile-list">
+        <li
+          v-for="profile in profiles"
+          :key="profile.id"
+          class="profile-list-item"
+        >
+          <div class="profile-list-main">
+            <span class="profile-list-name">{{ profile.name }}</span>
+            <span class="profile-list-meta">
+              {{ profileKindLabel(profile.kind) }}
+              <template v-if="profile.isActive"> · Active</template>
+              <template v-if="profile.installBlocked"> · No installs</template>
+            </span>
+          </div>
+          <button
+            v-if="profile.kind === 'custom' && !profile.isActive"
+            type="button"
+            class="btn-danger profile-delete-btn"
+            :disabled="profilesLoading"
+            @click="handleDeleteProfile(profile.id, profile.name)"
+          >
+            Delete
+          </button>
+        </li>
+      </ul>
+
+      <form class="profile-create-form" @submit.prevent="handleCreateProfile">
+        <label class="profile-create-label" for="new-profile-name">
+          New profile
+        </label>
+        <div class="profile-create-row">
+          <input
+            id="new-profile-name"
+            v-model="newProfileName"
+            type="text"
+            class="profile-create-input"
+            placeholder="Profile name"
+            :disabled="creatingProfile"
+          />
+          <button
+            type="submit"
+            class="btn-secondary"
+            :disabled="creatingProfile || !newProfileName.trim()"
+          >
+            {{ creatingProfile ? "Adding…" : "Add" }}
+          </button>
+        </div>
+      </form>
     </section>
 
     <section class="panel">
@@ -289,5 +402,70 @@ onMounted(() => {
 
 .feedback.warn {
   color: #fbbf24;
+}
+
+.profile-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.profile-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--modio-border);
+  border-radius: var(--modio-radius-sm);
+}
+
+.profile-list-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.profile-list-name {
+  font-weight: 600;
+}
+
+.profile-list-meta {
+  font-size: 0.8rem;
+  color: var(--modio-text-muted);
+}
+
+.profile-delete-btn {
+  flex-shrink: 0;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.profile-create-form {
+  margin-top: 0.5rem;
+}
+
+.profile-create-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.profile-create-row {
+  display: flex;
+  gap: 0.65rem;
+}
+
+.profile-create-input {
+  flex: 1;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--modio-radius-sm);
+  border: 1px solid var(--modio-border);
+  background: var(--modio-surface-raised);
+  color: var(--modio-text);
 }
 </style>

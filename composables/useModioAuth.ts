@@ -20,13 +20,25 @@ export function useModioAuth() {
   async function logout() {
     await invoke("logout");
     const { resetSessionSync } = useModInstall();
+    const { refreshProfiles } = useProfiles();
     resetSessionSync();
     await refreshAuthStatus();
+    await refreshProfiles();
+  }
+
+  async function checkLogoutRequiresProfileSelection() {
+    return invoke<boolean>("logout_requires_profile_selection_command");
+  }
+
+  async function completeLogout() {
+    await logout();
   }
 
   return {
     authStatus,
     refreshAuthStatus,
     logout,
+    checkLogoutRequiresProfileSelection,
+    completeLogout,
   };
 }
