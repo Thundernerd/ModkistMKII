@@ -153,6 +153,55 @@ fn parse_folder_name(name: &str) -> Option<(u64, u64)> {
     Some((mod_part.parse().ok()?, file_part.parse().ok()?))
 }
 
+fn is_valid_install_folder_name(name: &str) -> bool {
+    parse_folder_name(name).is_some()
+}
+
+fn remove_install_directory_entry(path: &Path, is_dir: bool) -> Result<(), String> {
+    if is_dir {
+        fs::remove_dir_all(path).map_err(|e| {
+            format!("Could not remove invalid mod folder {}: {e}", path.display())
+        })
+    } else {
+        fs::remove_file(path).map_err(|e| {
+            format!("Could not remove invalid mod file {}: {e}", path.display())
+        })
+    }
+}
+
+fn remove_invalid_install_entries(game_dir: &Path) -> Result<(), String> {
+    for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
+        let kind_dir = kind_root_dir(game_dir, kind);
+        if !kind_dir.is_dir() {
+            continue;
+        }
+
+        for entry in
+            fs::read_dir(&kind_dir).map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
+        {
+            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("Could not read entry type: {e}"))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+
+            let should_remove = if file_type.is_dir() {
+                !is_valid_install_folder_name(&name)
+            } else {
+                true
+            };
+
+            if should_remove {
+                remove_install_directory_entry(&path, file_type.is_dir())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn mod_kind_from_tags(tags: &[String]) -> Result<InstalledModKind, String> {
     let has_plugin = tags.iter().any(|tag| tag == PLUGIN_TAG);
     let has_blueprint = tags.iter().any(|tag| tag == BLUEPRINT_TAG);
@@ -319,6 +368,7 @@ async fn scan_installed_mods_after_cleanup(
     state: &ModioState,
     game_dir: &Path,
 ) -> Result<Vec<InstalledModRecord>, String> {
+    remove_invalid_install_entries(game_dir)?;
     let records = scan_installed_mods(game_dir)?;
     remove_unavailable_installed_mods(state, game_dir, records).await
 }
@@ -699,6 +749,35 @@ mod tests {
     fn prefers_plugin_when_both_tags_present() {
         let tags = vec!["Plugin".into(), "Blueprint".into()];
         assert_eq!(mod_kind_from_tags(&tags).unwrap(), InstalledModKind::Plugin);
+    }
+
+    #[test]
+    fn rejects_malformed_folder_names() {
+        assert!(!is_valid_install_folder_name("invalid"));
+        assert!(!is_valid_install_folder_name("12345"));
+        assert!(!is_valid_install_folder_name("12345_"));
+        assert!(!is_valid_install_folder_name("_67890"));
+        assert!(!is_valid_install_folder_name("12345_abc"));
+        assert!(is_valid_install_folder_name("12345_67890"));
+    }
+
+    #[test]
+    fn removes_invalid_install_entries() {
+        let root = std::env::temp_dir().join("modkist-mod-install-invalid");
+        let _ = fs::remove_dir_all(&root);
+        let game_dir = root.join("game");
+        let mods_dir = kind_root_dir(&game_dir, InstalledModKind::Plugin);
+        fs::create_dir_all(mods_dir.join("12345_67890")).unwrap();
+        fs::create_dir_all(mods_dir.join("bad-folder")).unwrap();
+        fs::write(mods_dir.join("loose.dll"), b"test").unwrap();
+
+        remove_invalid_install_entries(&game_dir).unwrap();
+
+        assert!(mods_dir.join("12345_67890").is_dir());
+        assert!(!mods_dir.join("bad-folder").exists());
+        assert!(!mods_dir.join("loose.dll").exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
