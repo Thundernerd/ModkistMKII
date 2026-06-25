@@ -31,14 +31,19 @@ mod mod_api_cache;
 mod mod_download;
 mod mod_install;
 mod modio_client;
+mod profiles;
 mod zip_extract;
 
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
 use game_path::{game_path_status, set_game_path};
 use mod_install::{
-    get_mod_install_state, install_mod, list_installed_mods, refresh_installed_mods,
-    sync_subscribed_mods, uninstall_mod,
+    cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mods,
+    refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
+};
+use profiles::{
+    create_profile, delete_profile, get_active_profile, list_profiles,
+    logout_requires_profile_selection_command, rename_profile, switch_profile,
 };
 use modio_client::{
     get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mods,
@@ -106,8 +111,16 @@ pub fn run() {
             refresh_installed_mods,
             get_mod_install_state,
             install_mod,
+            cancel_subscription_sync,
             sync_subscribed_mods,
             uninstall_mod,
+            list_profiles,
+            get_active_profile,
+            switch_profile,
+            create_profile,
+            delete_profile,
+            rename_profile,
+            logout_requires_profile_selection_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
