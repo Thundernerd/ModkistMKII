@@ -59,6 +59,13 @@ impl ApiError {
         self.status == Some(409)
     }
 
+    /// True when mod.io reports the user is not subscribed to the mod
+    /// (error_ref 15005, returned as HTTP 400 by the unsubscribe endpoint).
+    /// Unsubscribing is then a no-op, so callers can treat it as success.
+    pub fn is_not_subscribed(&self) -> bool {
+        self.error_ref == Some(15005)
+    }
+
     fn log(&self, context: &str) {
         log::error!(
             "mod.io API error [{context}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
@@ -754,5 +761,18 @@ mod tests {
         };
         assert!(err.is_rate_limited());
         assert!(!err.is_auth());
+    }
+
+    #[test]
+    fn not_subscribed_classification() {
+        let err = ApiError {
+            status: Some(400),
+            error_ref: Some(15005),
+            message: "not subscribed".to_string(),
+            retry_after_secs: None,
+        };
+        assert!(err.is_not_subscribed());
+        assert!(!err.is_not_found());
+        assert!(!err.is_rate_limited());
     }
 }

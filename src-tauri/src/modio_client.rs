@@ -472,7 +472,7 @@ pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Res
                     log::info!("Unsubscribed from mod {mod_id}");
                     Ok(())
                 }
-                Err(error) if error.is_not_found() => {
+                Err(error) if error.is_not_found() || error.is_not_subscribed() => {
                     state.remove_subscribed_mod_id(mod_id);
                     log::debug!("Mod {mod_id} was not subscribed");
                     Ok(())
