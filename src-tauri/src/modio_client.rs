@@ -62,6 +62,7 @@ pub struct ModioState {
     base_client: Mutex<Option<Arc<Client>>>,
     session: Mutex<SessionData>,
     api_cache: Mutex<ApiCache>,
+    subscription_sync_cancelled: std::sync::atomic::AtomicBool,
 }
 
 impl ModioState {
@@ -81,7 +82,23 @@ impl ModioState {
                 client: None,
             }),
             api_cache: Mutex::new(ApiCache::default()),
+            subscription_sync_cancelled: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn reset_subscription_sync_cancel(&self) {
+        self.subscription_sync_cancelled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn cancel_subscription_sync(&self) {
+        self.subscription_sync_cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn is_subscription_sync_cancelled(&self) -> bool {
+        self.subscription_sync_cancelled
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub(crate) fn clear_api_cache(&self) {
@@ -321,6 +338,30 @@ pub fn is_mod_unavailable(error: &modio::Error) -> bool {
     error.status().is_some_and(|status| status.as_u16() == 404)
 }
 
+fn is_already_subscribed_error(error: &modio::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("already subscrib")
+        || message.contains("already following")
+        || error.status().is_some_and(|status| status.as_u16() == 409)
+}
+
+fn is_not_subscribed_error(error: &modio::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("not subscrib")
+        || message.contains("not following")
+        || error.status().is_some_and(|status| status.as_u16() == 404)
+}
+
+pub(crate) fn is_already_subscribed_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("already subscrib") || message.contains("already following")
+}
+
+pub(crate) fn is_not_subscribed_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("not subscrib") || message.contains("not following")
+}
+
 pub(crate) fn is_rate_limited_message(message: &str) -> bool {
     message.to_ascii_lowercase().contains("rate limit")
 }
@@ -341,17 +382,51 @@ where
 }
 
 pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
-    with_rate_limit_retry(|| async {
+    match with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
         let client = state.get_session_client()?;
         let response = client
             .subscribe_to_mod(Id::new(game_id), Id::new(mod_id))
-            .await
-            .map_err(format_modio_error)?;
-        response.data().await.map_err(|e| e.to_string())?;
-        Ok(())
+            .await;
+        match response {
+            Ok(response) => {
+                response.data().await.map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Err(error) if is_already_subscribed_error(&error) => Ok(()),
+            Err(error) => Err(format_modio_error(error)),
+        }
     })
     .await
+    {
+        Ok(()) => Ok(()),
+        Err(message) if is_already_subscribed_message(&message) => Ok(()),
+        Err(message) => Err(message),
+    }
+}
+
+pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+    match with_rate_limit_retry(|| async {
+        let game_id = state.game_id()?;
+        let client = state.get_session_client()?;
+        let response = client
+            .unsubscribe_from_mod(Id::new(game_id), Id::new(mod_id))
+            .await;
+        match response {
+            Ok(response) => {
+                response.bytes().await.map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Err(error) if is_not_subscribed_error(&error) => Ok(()),
+            Err(error) => Err(format_modio_error(error)),
+        }
+    })
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(message) if is_not_subscribed_message(&message) => Ok(()),
+        Err(message) => Err(message),
+    }
 }
 
 pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {

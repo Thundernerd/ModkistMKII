@@ -9,9 +9,10 @@ use tauri::{AppHandle, State};
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
 use crate::mod_download::download_modfile;
+use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::modio_client::{
     fetch_subscribed_mod_ids, format_modio_error, is_mod_unavailable, subscribe_to_mod,
-    with_rate_limit_retry, ModioState,
+    unsubscribe_from_mod, with_rate_limit_retry, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -645,7 +646,64 @@ async fn install_single_mod(
     Ok(())
 }
 
+const SUBSCRIPTION_SYNC_CANCELLED: &str = "Subscription sync cancelled";
+
+async fn ensure_subscription_sync_may_continue(
+    app: &AppHandle,
+    state: &ModioState,
+) -> Result<(), String> {
+    if state.is_subscription_sync_cancelled() {
+        return Err(SUBSCRIPTION_SYNC_CANCELLED.into());
+    }
+    if !active_profile_is_user(app, state)? {
+        return Err(SUBSCRIPTION_SYNC_CANCELLED.into());
+    }
+    Ok(())
+}
+
+async fn install_targets_internal(
+    app: Option<&AppHandle>,
+    state: &ModioState,
+    game_dir: &Path,
+    order: Vec<u64>,
+    records: &mut Vec<InstalledModRecord>,
+    dependency_map: &mut HashMap<u64, Vec<u64>>,
+    should_subscribe: bool,
+) -> Result<InstallModResult, String> {
+    let mut installed = Vec::new();
+    let mut skipped = Vec::new();
+
+    for target_mod_id in order {
+        if let Some(app) = app {
+            ensure_subscription_sync_may_continue(app, state).await?;
+        }
+
+        if should_subscribe {
+            subscribe_to_mod(state, target_mod_id).await?;
+        }
+
+        let state_for_mod =
+            install_state_for_mod(state, target_mod_id, records, dependency_map).await?;
+        if matches!(state_for_mod.status.as_str(), "upToDate") {
+            skipped.push(target_mod_id);
+            continue;
+        }
+
+        if let Some(app) = app {
+            ensure_subscription_sync_may_continue(app, state).await?;
+        }
+
+        install_single_mod(state, game_dir, target_mod_id).await?;
+        installed.push(target_mod_id);
+        *records = scan_installed_mods(game_dir)?;
+        refresh_dependency_map(state, dependency_map, records).await?;
+    }
+
+    Ok(InstallModResult { installed, skipped })
+}
+
 async fn install_mod_internal(
+    app: &AppHandle,
     state: &ModioState,
     game_dir: &Path,
     mod_id: u64,
@@ -655,28 +713,25 @@ async fn install_mod_internal(
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await?;
 
-    let mut installed = Vec::new();
-    let mut skipped = Vec::new();
-
-    for target_mod_id in order {
-        if state.auth_status().logged_in {
-            subscribe_to_mod(state, target_mod_id).await?;
-        }
-
-        let state_for_mod =
-            install_state_for_mod(state, target_mod_id, &records, &dependency_map).await?;
-        if matches!(state_for_mod.status.as_str(), "upToDate") {
-            skipped.push(target_mod_id);
-            continue;
-        }
-
-        install_single_mod(state, game_dir, target_mod_id).await?;
-        installed.push(target_mod_id);
-        records = scan_installed_mods(game_dir)?;
-        refresh_dependency_map(state, &mut dependency_map, &records).await?;
+    let should_subscribe =
+        state.auth_status().logged_in && active_profile_is_user(app, state)?;
+    if should_subscribe {
+        // Only subscribe to the mod the user chose — not every dependency.
+        // Each subscribe is an OAuth write (60/min); subscribing the full
+        // dependency chain causes rate-limit sleeps that look like a hang.
+        subscribe_to_mod(state, mod_id).await?;
     }
 
-    Ok(InstallModResult { installed, skipped })
+    install_targets_internal(
+        None,
+        state,
+        game_dir,
+        order,
+        &mut records,
+        &mut dependency_map,
+        false,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -698,25 +753,52 @@ async fn sync_subscribed_mods_inner(
         });
     }
 
+    if !active_profile_is_user(app, state)? {
+        return Ok(InstallModResult {
+            installed: Vec::new(),
+            skipped: Vec::new(),
+        });
+    }
+
+    if active_profile_install_blocked(app, state)? {
+        return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
+    }
+
+    state.reset_subscription_sync_cancel();
+
     let game_dir = game_directory(app)?;
     ensure_install_prerequisites(&game_dir)?;
     let mod_ids = fetch_subscribed_mod_ids(state).await?;
+    ensure_subscription_sync_may_continue(app, state).await?;
 
-    let mut installed = Vec::new();
-    let mut skipped = Vec::new();
+    let mut records = scan_installed_mods_after_cleanup(state, &game_dir).await?;
+    let mut dependency_map = HashMap::new();
+    refresh_dependency_map(state, &mut dependency_map, &records).await?;
 
+    // Build one install order for all subscriptions. Mods are already subscribed —
+    // do not call subscribe_to_mod here (OAuth writes are limited to 60/min).
+    let mut install_order = Vec::new();
+    let mut seen_targets = HashSet::new();
     for mod_id in mod_ids {
-        let result = install_mod_internal(state, &game_dir, mod_id).await?;
-        installed.extend(result.installed);
-        skipped.extend(result.skipped);
+        ensure_subscription_sync_may_continue(app, state).await?;
+        let order = collect_install_order(state, mod_id).await?;
+        for target_mod_id in order {
+            if seen_targets.insert(target_mod_id) {
+                install_order.push(target_mod_id);
+            }
+        }
     }
 
-    installed.sort_unstable();
-    installed.dedup();
-    skipped.sort_unstable();
-    skipped.dedup();
-
-    Ok(InstallModResult { installed, skipped })
+    install_targets_internal(
+        Some(app),
+        state,
+        &game_dir,
+        install_order,
+        &mut records,
+        &mut dependency_map,
+        false,
+    )
+    .await
 }
 
 async fn refresh_installed_mods_inner(
@@ -724,7 +806,10 @@ async fn refresh_installed_mods_inner(
     state: &ModioState,
     sync_subscriptions: bool,
 ) -> Result<Vec<InstalledModEntry>, String> {
-    if sync_subscriptions && state.auth_status().logged_in {
+    let should_sync = sync_subscriptions
+        && state.auth_status().logged_in
+        && active_profile_is_user(app, state)?;
+    if should_sync {
         sync_subscribed_mods_inner(app, state).await?;
     }
     list_installed_mods_inner(app, state).await
@@ -811,9 +896,24 @@ pub async fn install_mod(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<InstallModResult, String> {
+    if active_profile_install_blocked(&app, &state)? {
+        return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
+    }
+
+    // Stop any in-flight subscription sync so manual installs are not blocked
+    // behind OAuth calls or competing writes to the live mod folders.
+    state.cancel_subscription_sync();
+
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
-    install_mod_internal(&state, &game_dir, mod_id).await
+    let result = install_mod_internal(&app, &state, &game_dir, mod_id).await;
+    state.reset_subscription_sync_cancel();
+    result
+}
+
+#[tauri::command]
+pub fn cancel_subscription_sync(state: State<'_, ModioState>) {
+    state.cancel_subscription_sync();
 }
 
 #[tauri::command]
@@ -836,6 +936,15 @@ pub async fn uninstall_mod(
     let blockers = uninstall_blockers_for(&state, mod_id, &installed_ids, &dependency_map).await?;
     if !blockers.is_empty() {
         return Err(format_uninstall_blocked_error(&blockers));
+    }
+
+    let should_unsubscribe =
+        state.auth_status().logged_in && active_profile_is_user(&app, &state)?;
+    if should_unsubscribe {
+        state.cancel_subscription_sync();
+        let result = unsubscribe_from_mod(&state, mod_id).await;
+        state.reset_subscription_sync_cancel();
+        result?;
     }
 
     remove_installed_mod_folders(&game_dir, mod_id)
