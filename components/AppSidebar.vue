@@ -16,11 +16,16 @@ const {
   updateCount,
   installingIds,
   uninstallingIds,
+  syncingSubscriptions,
+  bulkUpdating,
+  checkingUpdates,
   resetStartupUpdateCheck,
   resetSessionSync,
   refreshInstalled,
   syncSubscribedModsIfNeeded,
 } = useModInstall();
+const { gameRunning } = useGameProcess();
+const { launching, launchError, launchGame, clearLaunchError } = useGameLaunch();
 
 const profileError = ref("");
 const menuOpen = ref(false);
@@ -58,7 +63,12 @@ const footerNav = computed(() => [
 ]);
 
 const installBusy = computed(
-  () => installingIds.value.size > 0 || uninstallingIds.value.size > 0,
+  () =>
+    installingIds.value.size > 0 ||
+    uninstallingIds.value.size > 0 ||
+    syncingSubscriptions.value ||
+    bulkUpdating.value ||
+    checkingUpdates.value,
 );
 
 const profileSelectDisabled = computed(
@@ -122,6 +132,15 @@ function handleDocumentKeydown(event: KeyboardEvent) {
 function toggleMenu() {
   if (profileSelectDisabled.value) return;
   menuOpen.value = !menuOpen.value;
+}
+
+async function handleLaunchGame() {
+  clearLaunchError();
+  try {
+    await launchGame();
+  } catch {
+    // launchError is set in the composable
+  }
 }
 
 async function selectProfile(profile: ProfileSummary) {
@@ -244,6 +263,19 @@ async function selectProfile(profile: ProfileSummary) {
         <span v-if="statusTone === 'loading'" class="profile-status-spinner" aria-hidden="true" />
         {{ statusMessage }}
       </p>
+    </div>
+
+    <div class="sidebar-play">
+      <button
+        type="button"
+        class="sidebar-play-btn"
+        :disabled="gameRunning || launching || installBusy"
+        @click="handleLaunchGame"
+      >
+        <span class="sidebar-play-icon" aria-hidden="true" />
+        <span>{{ gameRunning ? "Running" : launching ? "Launching…" : "Play" }}</span>
+      </button>
+      <p v-if="launchError" class="sidebar-play-error">{{ launchError }}</p>
     </div>
 
     <nav class="app-sidebar-nav app-sidebar-nav--primary">
@@ -597,5 +629,64 @@ async function selectProfile(profile: ProfileSummary) {
   font-size: 0.7rem;
   font-weight: 700;
   line-height: 1;
+}
+
+.sidebar-play {
+  margin: 0 0.35rem 0.85rem;
+}
+
+.sidebar-play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--modio-radius);
+  border: 1px solid rgba(7, 193, 216, 0.45);
+  background:
+    linear-gradient(180deg, rgba(7, 193, 216, 0.18), rgba(7, 193, 216, 0.08)),
+    var(--modio-surface-raised);
+  color: var(--modio-text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.sidebar-play-btn:hover:not(:disabled) {
+  border-color: rgba(7, 193, 216, 0.7);
+  background:
+    linear-gradient(180deg, rgba(7, 193, 216, 0.24), rgba(7, 193, 216, 0.1)),
+    var(--modio-surface-hover);
+  box-shadow:
+    0 2px 8px rgba(7, 193, 216, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-play-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.sidebar-play-icon {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0.35rem 0 0.35rem 0.55rem;
+  border-color: transparent transparent transparent var(--modio-accent);
+  margin-left: 0.1rem;
+}
+
+.sidebar-play-error {
+  margin: 0.45rem 0.4rem 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--modio-danger);
 }
 </style>

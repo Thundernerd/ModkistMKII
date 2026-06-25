@@ -63,6 +63,23 @@ struct WinePrefix {
     label: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct WineLaunchInfo {
+    pub prefix: PathBuf,
+    pub bottle_name: Option<String>,
+    pub wine: PathBuf,
+}
+
+pub(crate) fn wine_launch_info(game_dir: &Path) -> Option<WineLaunchInfo> {
+    let prefix = find_wine_prefix_for_game_path(game_dir)?;
+    let wine = find_wine_binary()?;
+    Some(WineLaunchInfo {
+        prefix: prefix.path,
+        bottle_name: prefix.label,
+        wine,
+    })
+}
+
 pub fn configure_winhttp_override(game_dir: &Path) -> WineWinhttpStatus {
     let Some(prefix) = find_wine_prefix_for_game_path(game_dir) else {
         return WineWinhttpStatus::not_found();
