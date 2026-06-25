@@ -48,6 +48,15 @@ const uninstallingIds = ref<Set<number>>(new Set());
 const installErrors = ref<Record<number, string>>({});
 const installReady = ref(false);
 const installEnvironmentError = ref("");
+const checkingUpdates = ref(false);
+const bulkUpdating = ref(false);
+const startupUpdateCheckDone = ref(false);
+
+const modsWithUpdates = computed(() =>
+  installedMods.value.filter((mod) => mod.updateAvailable),
+);
+
+const updateCount = computed(() => modsWithUpdates.value.length);
 
 function setUninstalling(modId: number, uninstalling: boolean) {
   const next = new Set(uninstallingIds.value);
@@ -189,18 +198,66 @@ export function useModInstall() {
     return uninstallingIds.value.has(modId);
   }
 
+  async function checkForUpdatesOnStartup() {
+    if (startupUpdateCheckDone.value) {
+      return installedMods.value;
+    }
+
+    checkingUpdates.value = true;
+    try {
+      await refreshInstalled();
+      startupUpdateCheckDone.value = true;
+      return installedMods.value;
+    } finally {
+      checkingUpdates.value = false;
+    }
+  }
+
+  async function updateAllMods() {
+    const targets = [...modsWithUpdates.value];
+    if (targets.length === 0) {
+      return { updated: [] as number[], failed: [] as number[] };
+    }
+
+    bulkUpdating.value = true;
+    const updated: number[] = [];
+    const failed: number[] = [];
+
+    try {
+      for (const mod of targets) {
+        try {
+          await installMod(mod.modId);
+          updated.push(mod.modId);
+        } catch {
+          failed.push(mod.modId);
+        }
+      }
+    } finally {
+      bulkUpdating.value = false;
+    }
+
+    return { updated, failed };
+  }
+
   return {
     installedMods,
+    modsWithUpdates,
+    updateCount,
     installStates,
     installingIds,
     uninstallingIds,
     installErrors,
     installReady,
     installEnvironmentError,
+    checkingUpdates,
+    bulkUpdating,
+    startupUpdateCheckDone,
     refreshInstalled,
+    checkForUpdatesOnStartup,
     refreshInstallState,
     installMod,
     uninstallMod,
+    updateAllMods,
     getUiStatus,
     getCanUninstall,
     getInstallError,
