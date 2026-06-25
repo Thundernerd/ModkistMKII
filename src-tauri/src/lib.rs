@@ -40,8 +40,8 @@ use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
 use game_path::{game_path_status, set_game_path};
 use mod_install::{
-    cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mods,
-    refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
+    cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mod_records,
+    list_installed_mods, refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
 };
 use profiles::{
     create_profile, delete_profile, get_active_profile, list_profiles,
@@ -119,6 +119,7 @@ pub fn run() {
             install_bepinex,
             reinstall_bepinex,
             list_installed_mods,
+            list_installed_mod_records,
             refresh_installed_mods,
             get_mod_install_state,
             install_mod,

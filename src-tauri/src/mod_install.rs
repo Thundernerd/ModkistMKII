@@ -917,6 +917,17 @@ pub async fn list_installed_mods(
     list_installed_mods_inner(&app, &state).await
 }
 
+/// Fast, network-free scan of the install folders. Used at startup to mark mods
+/// as installed instantly while the full `list_installed_mods` (which fetches
+/// metadata and update info over the network) finishes in the background.
+#[tauri::command]
+pub async fn list_installed_mod_records(app: AppHandle) -> Result<Vec<InstalledModRecord>, String> {
+    let game_dir = game_directory(&app)?;
+    ensure_install_prerequisites(&game_dir)?;
+    remove_invalid_install_entries(&game_dir)?;
+    scan_installed_mods(&game_dir)
+}
+
 async fn list_installed_mods_inner(
     app: &AppHandle,
     state: &ModioState,

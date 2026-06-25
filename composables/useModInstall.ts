@@ -23,6 +23,13 @@ export interface ModInstallState {
   uninstallBlockedBy: UninstallBlocker[];
 }
 
+export interface InstalledModRecord {
+  modId: number;
+  fileId: number;
+  kind: "plugin" | "blueprint";
+  folderName: string;
+}
+
 export interface InstalledModEntry {
   modId: number;
   fileId: number;
@@ -151,6 +158,31 @@ function resetStartupUpdateCheck() {
 
 async function listInstalledMods(): Promise<InstalledModEntry[]> {
   return invoke<InstalledModEntry[]>("list_installed_mods");
+}
+
+/// Mark mods present on disk as installed immediately, without waiting for the
+/// network-bound metadata/update lookup. Existing (already enriched) states are
+/// left untouched; update availability and uninstall blockers fill in later.
+async function seedInstalledFromDisk() {
+  try {
+    const records = await invoke<InstalledModRecord[]>("list_installed_mod_records");
+    const next = { ...installStates.value };
+    for (const record of records) {
+      if (next[record.modId]) continue;
+      next[record.modId] = {
+        status: "upToDate",
+        installedFileId: record.fileId,
+        latestFileId: record.fileId,
+        kind: record.kind,
+        canUninstall: false,
+        uninstallBlockedBy: [],
+      };
+    }
+    installStates.value = next;
+    installReady.value = true;
+  } catch (error) {
+    logger.debug("Could not seed installed mods from disk", error);
+  }
 }
 
 export function useModInstall() {
@@ -378,6 +410,8 @@ export function useModInstall() {
     if (startupUpdateCheckDone.value) {
       return installedMods.value;
     }
+
+    await seedInstalledFromDisk();
 
     checkingUpdates.value = true;
     try {
