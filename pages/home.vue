@@ -33,7 +33,7 @@ const {
 } = useModFilters();
 
 const {
-  refreshInstalled,
+  checkForUpdatesOnStartup,
   installMod,
   uninstallMod,
   getUiStatus,
@@ -41,6 +41,8 @@ const {
   getInstallError,
   isUninstalling,
   installEnvironmentError,
+  updateCount,
+  checkingUpdates,
 } = useModInstall();
 
 const modioConfigured = ref(false);
@@ -68,7 +70,7 @@ async function handleUninstall(modId: number, modName: string) {
 onMounted(async () => {
   await checkModioStatus();
   if (modioConfigured.value) {
-    await Promise.all([initialize(), refreshInstalled()]);
+    await Promise.all([initialize(), checkForUpdatesOnStartup()]);
   }
 });
 </script>
@@ -101,6 +103,20 @@ onMounted(async () => {
       <p v-if="installEnvironmentError" class="hint install-hint">
         Installs are unavailable: {{ installEnvironmentError }}
         <NuxtLink to="/settings">Check Settings</NuxtLink>
+      </p>
+
+      <p v-else-if="checkingUpdates" class="hint updates-check-hint">
+        <span class="spinner" aria-hidden="true" />
+        Checking installed mods for updates…
+      </p>
+
+      <p
+        v-else-if="updateCount > 0"
+        class="hint updates-banner"
+      >
+        {{ updateCount }} installed mod{{ updateCount === 1 ? "" : "s" }}
+        {{ updateCount === 1 ? "has" : "have" }} an update available.
+        <NuxtLink to="/updates">View updates</NuxtLink>
       </p>
 
       <p v-if="!loading || mods.length" class="meta mods-count">
@@ -179,6 +195,23 @@ onMounted(async () => {
   border-radius: var(--modio-radius-sm);
   background: var(--modio-surface);
   border: 1px solid var(--modio-border);
+}
+
+.updates-check-hint,
+.updates-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--modio-radius-sm);
+  background: var(--modio-surface);
+  border: 1px solid var(--modio-border);
+}
+
+.updates-banner {
+  border-color: rgba(7, 193, 216, 0.35);
+  background: rgba(7, 193, 216, 0.08);
 }
 
 .mods-error {
