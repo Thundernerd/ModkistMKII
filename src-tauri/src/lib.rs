@@ -31,6 +31,7 @@ mod logging;
 mod mod_api_cache;
 mod mod_download;
 mod mod_install;
+pub mod modio_api;
 mod modio_client;
 mod profiles;
 mod zip_extract;
@@ -93,6 +94,7 @@ pub fn run() {
                     state.auth_status().username.as_deref().unwrap_or("user")
                 );
             }
+            state.load_persisted_cache(app.handle());
             app.manage(state);
             log::info!("Application setup complete");
             Ok(())

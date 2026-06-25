@@ -2,16 +2,16 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use modio::types::id::Id;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
 use crate::mod_download::download_modfile;
+use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::modio_client::{
-    fetch_subscribed_mod_ids, format_modio_error, is_mod_unavailable, subscribe_to_mod,
+    fetch_subscribed_mod_ids, format_api_error, is_mod_unavailable, subscribe_to_mod,
     unsubscribe_from_mod, with_rate_limit_retry, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
@@ -314,7 +314,7 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
 }
 
 enum ModFetchOutcome {
-    Found(modio::types::mods::Mod),
+    Found(ModObject),
     Unavailable,
     Failed(String),
 }
@@ -324,31 +324,38 @@ async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
         return ModFetchOutcome::Unavailable;
     }
 
+    if let Some(mod_) = state.cached_mod(mod_id) {
+        if let Some(file) = &mod_.modfile {
+            state.store_latest_file_id(mod_id, file.id);
+        }
+        return ModFetchOutcome::Found(mod_);
+    }
+
     let game_id = match state.game_id() {
         Ok(game_id) => game_id,
         Err(message) => return ModFetchOutcome::Failed(message),
     };
-    let client = match state.get_base_client() {
-        Ok(client) => client,
+    let api = match state.api() {
+        Ok(api) => api,
         Err(message) => return ModFetchOutcome::Failed(message),
     };
 
-    let outcome = match client
-        .get_mod(Id::new(game_id), Id::new(mod_id))
-        .await
-    {
-        Ok(response) => match response.data().await {
-            Ok(mod_) => ModFetchOutcome::Found(mod_),
-            Err(error) => ModFetchOutcome::Failed(error.to_string()),
-        },
+    let outcome = match api.get_mod(game_id, mod_id).await {
+        Ok(mod_) => {
+            if let Some(file) = &mod_.modfile {
+                state.store_latest_file_id(mod_id, file.id);
+            }
+            state.store_mod(mod_.clone());
+            ModFetchOutcome::Found(mod_)
+        }
         Err(error) => {
             if is_mod_unavailable(&error) {
                 ModFetchOutcome::Unavailable
-            } else if error.is_ratelimited() {
+            } else if error.is_rate_limited() {
                 tokio::time::sleep(std::time::Duration::from_secs(61)).await;
                 return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
-                ModFetchOutcome::Failed(format_modio_error(error))
+                ModFetchOutcome::Failed(format_api_error(error))
             }
         }
     };
@@ -364,7 +371,7 @@ async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
 async fn prepare_installed_records(
     state: &ModioState,
     game_dir: &Path,
-) -> Result<(Vec<InstalledModRecord>, HashMap<u64, modio::types::mods::Mod>), String> {
+) -> Result<(Vec<InstalledModRecord>, HashMap<u64, ModObject>), String> {
     remove_invalid_install_entries(game_dir)?;
     let records = scan_installed_mods(game_dir)?;
     let mut available = Vec::with_capacity(records.len());
@@ -414,7 +421,7 @@ async fn refresh_dependency_map(
 async fn fetch_mod(
     state: &ModioState,
     mod_id: u64,
-) -> Result<modio::types::mods::Mod, String> {
+) -> Result<ModObject, String> {
     match fetch_mod_outcome(state, mod_id).await {
         ModFetchOutcome::Found(mod_) => Ok(mod_),
         ModFetchOutcome::Unavailable => {
@@ -431,13 +438,12 @@ async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64
 
     let dependencies: Vec<u64> = with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
-        let client = state.get_base_client()?;
-        let response = client
-            .get_mod_dependencies(Id::new(game_id), Id::new(mod_id))
+        let api = state.api()?;
+        let list = api
+            .get_mod_dependencies(game_id, mod_id)
             .await
-            .map_err(format_modio_error)?;
-        let list = response.data().await.map_err(|e| e.to_string())?;
-        Ok(list.data.into_iter().map(|dep| dep.mod_id.get()).collect())
+            .map_err(format_api_error)?;
+        Ok(list.data.into_iter().map(|dep| dep.mod_id).collect())
     })
     .await?;
 
@@ -556,12 +562,36 @@ fn format_uninstall_blocked_error(blockers: &[UninstallBlocker]) -> String {
 }
 
 async fn latest_file_id(state: &ModioState, mod_id: u64) -> Result<u64, String> {
+    if let Some(file_id) = state.cached_latest_file_id(mod_id) {
+        return Ok(file_id);
+    }
+
     let mod_ = fetch_mod(state, mod_id).await?;
     let file = mod_
         .modfile
         .as_ref()
         .ok_or_else(|| format!("Mod {mod_id} has no downloadable file."))?;
-    Ok(file.id.get())
+    Ok(file.id)
+}
+
+async fn resolve_latest_file_id(
+    state: &ModioState,
+    mod_id: u64,
+    mods_by_id: Option<&HashMap<u64, ModObject>>,
+) -> Option<u64> {
+    if let Some(mods) = mods_by_id {
+        if let Some(mod_) = mods.get(&mod_id) {
+            if let Some(file) = &mod_.modfile {
+                return Some(file.id);
+            }
+        }
+    }
+
+    if let Some(file_id) = state.cached_latest_file_id(mod_id) {
+        return Some(file_id);
+    }
+
+    None
 }
 
 async fn install_state_for_mod(
@@ -569,10 +599,14 @@ async fn install_state_for_mod(
     mod_id: u64,
     records: &[InstalledModRecord],
     dependency_map: &HashMap<u64, Vec<u64>>,
+    mods_by_id: Option<&HashMap<u64, ModObject>>,
 ) -> Result<ModInstallState, String> {
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let installed = find_installed_record(records, mod_id);
-    let latest_file_id = latest_file_id(state, mod_id).await.ok();
+    let latest_file_id = match resolve_latest_file_id(state, mod_id, mods_by_id).await {
+        Some(file_id) => Some(file_id),
+        None => latest_file_id(state, mod_id).await.ok(),
+    };
 
     let status = match (installed, latest_file_id) {
         (None, _) => InstallStatus::NotInstalled,
@@ -610,10 +644,10 @@ async fn install_single_mod(
         .modfile
         .as_ref()
         .ok_or_else(|| format!("Mod {mod_id} has no downloadable file."))?;
-    let file_id = file.id.get();
+    let file_id = file.id;
     let filename = file.filename.clone();
     let expected_size = file.filesize;
-    let download_url = file.download.binary_url.to_string();
+    let download_url = file.download.binary_url.clone();
     let tags: Vec<String> = mod_.tags.into_iter().map(|tag| tag.name).collect();
     let kind = mod_kind_from_tags(&tags)?;
 
@@ -670,6 +704,7 @@ async fn install_targets_internal(
     records: &mut Vec<InstalledModRecord>,
     dependency_map: &mut HashMap<u64, Vec<u64>>,
     should_subscribe: bool,
+    mods_by_id: Option<&HashMap<u64, ModObject>>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
@@ -689,8 +724,14 @@ async fn install_targets_internal(
             subscribe_to_mod(state, target_mod_id).await?;
         }
 
-        let state_for_mod =
-            install_state_for_mod(state, target_mod_id, records, dependency_map).await?;
+        let state_for_mod = install_state_for_mod(
+            state,
+            target_mod_id,
+            records,
+            dependency_map,
+            mods_by_id,
+        )
+        .await?;
         if matches!(state_for_mod.status.as_str(), "upToDate") {
             log::debug!("Mod {target_mod_id} already up to date, skipping");
             skipped.push(target_mod_id);
@@ -733,11 +774,13 @@ async fn install_mod_internal(
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
     if should_subscribe {
-        log::debug!("Account profile active — subscribing to mod {mod_id}");
-        // Only subscribe to the mod the user chose — not every dependency.
-        // Each subscribe is an OAuth write (60/min); subscribing the full
-        // dependency chain causes rate-limit sleeps that look like a hang.
-        subscribe_to_mod(state, mod_id).await?;
+        let subscribed = fetch_subscribed_mod_ids(state).await?;
+        if subscribed.binary_search(&mod_id).is_ok() {
+            log::debug!("Mod {mod_id} already subscribed on mod.io, skipping subscribe");
+        } else {
+            log::debug!("Account profile active — subscribing to mod {mod_id}");
+            subscribe_to_mod(state, mod_id).await?;
+        }
     }
 
     install_targets_internal(
@@ -748,6 +791,7 @@ async fn install_mod_internal(
         &mut records,
         &mut dependency_map,
         false,
+        None,
     )
     .await
 }
@@ -793,7 +837,7 @@ async fn sync_subscribed_mods_inner(
     ensure_subscription_sync_may_continue(app, state).await?;
     let subscribed_count = mod_ids.len();
 
-    let mut records = scan_installed_mods_after_cleanup(state, &game_dir).await?;
+    let (mut records, mods_by_id) = prepare_installed_records(state, &game_dir).await?;
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await?;
 
@@ -824,6 +868,7 @@ async fn sync_subscribed_mods_inner(
         &mut records,
         &mut dependency_map,
         false,
+        Some(&mods_by_id),
     )
     .await;
     match &result {
@@ -837,6 +882,7 @@ async fn sync_subscribed_mods_inner(
         }
         Err(message) => log::error!("Subscription sync failed: {message}"),
     }
+    state.persist_cache(app);
     result
 }
 
@@ -888,7 +934,7 @@ async fn list_installed_mods_inner(
             continue;
         };
 
-        let latest_file_id = mod_.modfile.as_ref().map(|file| file.id.get());
+        let latest_file_id = mod_.modfile.as_ref().map(|file| file.id);
         let update_available = latest_file_id.is_some_and(|latest| latest != record.file_id);
         let tags: Vec<String> = mod_.tags.iter().map(|tag| tag.name.clone()).collect();
         let blockers =
@@ -902,7 +948,7 @@ async fn list_installed_mods_inner(
             folder_name: record.folder_name,
             name: mod_.name.clone(),
             summary: mod_.summary.clone(),
-            logo_url: mod_.logo.thumb_320x180.to_string(),
+            logo_url: mod_.logo.thumb_320x180.clone(),
             tags,
             update_available,
             latest_file_id,
@@ -926,7 +972,7 @@ pub async fn get_mod_install_state(
     let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let dependency_map = build_dependency_map(&state, &installed_ids).await?;
-    install_state_for_mod(&state, mod_id, &records, &dependency_map).await
+    install_state_for_mod(&state, mod_id, &records, &dependency_map, None).await
 }
 
 #[tauri::command]

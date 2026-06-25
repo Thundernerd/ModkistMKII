@@ -1,27 +1,33 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use modio::request::filter::prelude::*;
-use modio::request::filter::{custom_filter, custom_order_by_asc, custom_order_by_desc, Filter, Operator};
-use modio::request::user::filters::subscriptions::GameId;
-use modio::types::id::Id;
-use modio::types::TargetPlatform;
-use modio::util::Paginate;
-use modio::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
-use crate::mod_api_cache::ApiCache;
+use crate::mod_api_cache::{ApiCache, PersistedCache};
+use crate::modio_api::{ApiClient, ApiError, ModObject, ModQuery};
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
 const USERNAME_KEY: &str = "username";
 
+const CACHE_STORE_PATH: &str = "modio-cache.json";
+const CACHE_PERSIST_KEY: &str = "cache";
+const CACHE_SAVED_AT_KEY: &str = "savedAtUnix";
+/// Persisted dependency cache is reused for a day before being re-fetched.
+const CACHE_PERSIST_TTL_SECS: u64 = 24 * 60 * 60;
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 struct SessionData {
     token: Option<String>,
     username: Option<String>,
-    client: Option<Arc<Client>>,
 }
 
 #[derive(Clone)]
@@ -59,10 +65,13 @@ impl ModioConfig {
 pub struct ModioState {
     api_key: Option<String>,
     config: ModioConfig,
-    base_client: Mutex<Option<Arc<Client>>>,
+    api_client: Mutex<Option<Arc<ApiClient>>>,
     session: Mutex<SessionData>,
     api_cache: Mutex<ApiCache>,
     subscription_sync_cancelled: std::sync::atomic::AtomicBool,
+    /// Serializes OAuth reads/writes so subscription sync and subscribe/unsubscribe
+    /// never hit mod.io concurrently (avoids spurious global rate limits).
+    oauth_request: tokio::sync::Mutex<()>,
 }
 
 impl ModioState {
@@ -75,14 +84,49 @@ impl ModioState {
         Self {
             api_key,
             config: ModioConfig::from_env(),
-            base_client: Mutex::new(None),
+            api_client: Mutex::new(None),
             session: Mutex::new(SessionData {
                 token: None,
                 username: None,
-                client: None,
             }),
             api_cache: Mutex::new(ApiCache::default()),
             subscription_sync_cancelled: std::sync::atomic::AtomicBool::new(false),
+            oauth_request: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    pub(crate) async fn with_oauth_request<T, F, Fut>(&self, label: &str, operation: F) -> Result<T, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, String>>,
+    {
+        let _guard = self.oauth_request.lock().await;
+        log::debug!("OAuth request: {label}");
+        operation().await
+    }
+
+    pub(crate) fn cached_subscribed_mod_ids(&self) -> Option<Vec<u64>> {
+        self.api_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get_subscribed_mod_ids())
+    }
+
+    pub(crate) fn store_subscribed_mod_ids(&self, mod_ids: Vec<u64>) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.store_subscribed_mod_ids(mod_ids);
+        }
+    }
+
+    pub(crate) fn add_subscribed_mod_id(&self, mod_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.add_subscribed_mod_id(mod_id);
+        }
+    }
+
+    pub(crate) fn remove_subscribed_mod_id(&self, mod_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.remove_subscribed_mod_id(mod_id);
         }
     }
 
@@ -138,6 +182,70 @@ impl ModioState {
         }
     }
 
+    pub(crate) fn cached_latest_file_id(&self, mod_id: u64) -> Option<u64> {
+        self.api_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get_latest_file_id(mod_id))
+    }
+
+    pub(crate) fn store_latest_file_id(&self, mod_id: u64, file_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.store_latest_file_id(mod_id, file_id);
+        }
+    }
+
+    pub(crate) fn cached_mod(&self, mod_id: u64) -> Option<ModObject> {
+        self.api_cache.lock().ok().and_then(|cache| cache.get_mod(mod_id))
+    }
+
+    pub(crate) fn store_mod(&self, mod_: ModObject) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.store_mod(mod_);
+        }
+    }
+
+    /// Loads the persisted dependency cache from disk (if recent enough). Called
+    /// once at startup so a cold launch does not re-fetch dependencies.
+    pub fn load_persisted_cache(&self, app: &AppHandle) {
+        let Ok(store) = app.store(CACHE_STORE_PATH) else {
+            return;
+        };
+        let saved_at = store
+            .get(CACHE_SAVED_AT_KEY)
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        if saved_at == 0 || now_unix_secs().saturating_sub(saved_at) > CACHE_PERSIST_TTL_SECS {
+            return;
+        }
+        let Some(value) = store.get(CACHE_PERSIST_KEY) else {
+            return;
+        };
+        let Ok(snapshot) = serde_json::from_value::<PersistedCache>(value) else {
+            return;
+        };
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.restore_persisted(snapshot);
+        }
+        log::debug!("Restored persisted dependency cache");
+    }
+
+    /// Writes the dependency cache to disk so the next launch can skip re-fetching.
+    pub fn persist_cache(&self, app: &AppHandle) {
+        let snapshot = match self.api_cache.lock() {
+            Ok(cache) => cache.dependency_snapshot(),
+            Err(_) => return,
+        };
+        let Ok(store) = app.store(CACHE_STORE_PATH) else {
+            return;
+        };
+        store.set(CACHE_PERSIST_KEY, serde_json::json!(snapshot));
+        store.set(CACHE_SAVED_AT_KEY, serde_json::json!(now_unix_secs()));
+        if let Err(error) = store.save() {
+            log::warn!("Failed to persist dependency cache: {error}");
+        }
+    }
+
     pub fn status(&self) -> ModioStatus {
         if self.api_key.is_none() {
             return ModioStatus {
@@ -163,55 +271,40 @@ impl ModioState {
         }
     }
 
-    pub(crate) fn get_base_client(&self) -> Result<Arc<Client>, String> {
+    /// Shared REST client (built lazily once mod.io is configured). Used for all
+    /// reads and writes; OAuth-authenticated calls pass the session token.
+    pub(crate) fn api(&self) -> Result<Arc<ApiClient>, String> {
         let status = self.status();
         if !status.configured {
             return Err(status.message.unwrap_or_else(|| "mod.io is not configured".into()));
         }
 
         let mut guard = self
-            .base_client
+            .api_client
             .lock()
-            .map_err(|_| "base client lock poisoned".to_string())?;
+            .map_err(|_| "API client lock poisoned".to_string())?;
 
         if let Some(client) = guard.as_ref() {
             return Ok(client.clone());
         }
 
         let api_key = self.api_key.as_deref().unwrap();
-        let client = Arc::new(build_client(api_key, &self.config)?);
+        let client = Arc::new(ApiClient::new(
+            api_key.to_string(),
+            self.config.game_id,
+            self.config.api_host.as_deref(),
+            self.config.use_test_env,
+        )?);
         *guard = Some(client.clone());
         Ok(client)
     }
 
-    /// Read-only mod and game API calls (list mods, get mod, dependencies).
-    /// Always uses the game API key so traffic stays on the unlimited game-key
-    /// rate-limit tier instead of OAuth (120 reads/min).
-    pub fn get_mods_client(&self) -> Result<Arc<Client>, String> {
-        self.get_base_client()
+    pub(crate) fn session_token(&self) -> Option<String> {
+        self.session.lock().ok().and_then(|session| session.token.clone())
     }
 
-    /// OAuth-authenticated client for user-specific reads and writes (subscribe,
-    /// subscriptions, profile). Subject to OAuth rate limits.
-    pub fn get_session_client(&self) -> Result<Arc<Client>, String> {
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|_| "session lock poisoned".to_string())?;
-
-        if let Some(client) = session.client.as_ref() {
-            return Ok(client.clone());
-        }
-
-        let token = session
-            .token
-            .clone()
-            .ok_or_else(|| "Not logged in".to_string())?;
-
-        let base = self.get_base_client()?;
-        let client = Arc::new(base.with_token(token));
-        session.client = Some(client.clone());
-        Ok(client)
+    pub(crate) fn require_token(&self) -> Result<String, String> {
+        self.session_token().ok_or_else(|| "Not logged in".to_string())
     }
 
     pub fn auth_status(&self) -> AuthStatus {
@@ -235,7 +328,6 @@ impl ModioState {
             let mut session = self.session.lock().unwrap();
             session.token = token;
             session.username = username;
-            session.client = None;
         }
 
         Ok(())
@@ -247,12 +339,10 @@ impl ModioState {
         token: String,
         username: String,
     ) -> Result<(), String> {
-        let base = self.get_base_client()?;
         {
             let mut session = self.session.lock().unwrap();
             session.token = Some(token.clone());
             session.username = Some(username.clone());
-            session.client = Some(Arc::new(base.with_token(token.clone())));
         }
 
         let store = app.store(AUTH_STORE_PATH).map_err(|e| e.to_string())?;
@@ -273,7 +363,6 @@ impl ModioState {
             let mut session = self.session.lock().unwrap();
             session.token = None;
             session.username = None;
-            session.client = None;
         }
         self.clear_api_cache();
 
@@ -297,76 +386,33 @@ impl ModioState {
             .as_deref()
             .ok_or_else(|| "MODIO_API_KEY is not set in .env".to_string())
     }
-
-    pub(crate) fn access_token(&self) -> Option<String> {
-        let session = self.session.lock().ok()?;
-        session.token.clone()
-    }
 }
 
-fn build_client(api_key: &str, config: &ModioConfig) -> Result<Client, String> {
-    let mut builder = Client::builder(api_key.to_string());
-
-    if config.use_test_env {
-        builder = builder.use_test_env();
-    } else if let Some(host) = &config.api_host {
-        builder = builder.host(host.as_str());
-    } else if let Some(game_id) = config.game_id {
-        builder = builder.game_host(Id::new(game_id));
-    } else {
-        return Err(
-            "MODIO_GAME_ID or MODIO_API_HOST is required for mod.io authentication".into(),
+/// Converts an `ApiError` into a user-facing message, preserving the rate-limit
+/// and auth hints we surfaced previously.
+pub fn format_api_error(error: ApiError) -> String {
+    if error.is_rate_limited() {
+        let error_ref = error
+            .error_ref
+            .map(|code| format!(" (error_ref {code})"))
+            .unwrap_or_default();
+        return format!(
+            "{}{error_ref} This applies to your mod.io login session (OAuth). Wait about a minute, then try again.",
+            error.message
         );
     }
-
-    builder = builder.target_platform(game_target_platform());
-
-    builder.build().map_err(|e| e.to_string())
-}
-
-fn game_target_platform() -> TargetPlatform {
-    // Zeepkist is a Windows game; modfiles must be resolved for Windows even when
-    // Modkist itself runs on macOS or Linux during development.
-    TargetPlatform::WINDOWS
-}
-
-pub fn format_modio_error(error: modio::Error) -> String {
-    let message = error.to_string();
     if error.is_auth() {
         return format!(
-            "{message}. Email login requires your game's API key and MODIO_GAME_ID — not a personal read-only key from mod.io/me/access."
+            "{}. Email login requires your game's API key and MODIO_GAME_ID — not a personal read-only key from mod.io/me/access.",
+            error.message
         );
     }
-    message
+    error.message
 }
 
 /// True when mod.io reports the mod no longer exists (deleted or removed).
-pub fn is_mod_unavailable(error: &modio::Error) -> bool {
-    error.status().is_some_and(|status| status.as_u16() == 404)
-}
-
-fn is_already_subscribed_error(error: &modio::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
-    message.contains("already subscrib")
-        || message.contains("already following")
-        || error.status().is_some_and(|status| status.as_u16() == 409)
-}
-
-fn is_not_subscribed_error(error: &modio::Error) -> bool {
-    let message = error.to_string().to_ascii_lowercase();
-    message.contains("not subscrib")
-        || message.contains("not following")
-        || error.status().is_some_and(|status| status.as_u16() == 404)
-}
-
-pub(crate) fn is_already_subscribed_message(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("already subscrib") || message.contains("already following")
-}
-
-pub(crate) fn is_not_subscribed_message(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("not subscrib") || message.contains("not following")
+pub fn is_mod_unavailable(error: &ApiError) -> bool {
+    error.is_not_found()
 }
 
 pub(crate) fn is_rate_limited_message(message: &str) -> bool {
@@ -391,96 +437,101 @@ where
 
 pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
     log::info!("Subscribing to mod {mod_id}");
-    match with_rate_limit_retry(|| async {
-        let game_id = state.game_id()?;
-        let client = state.get_session_client()?;
-        let response = client
-            .subscribe_to_mod(Id::new(game_id), Id::new(mod_id))
-            .await;
-        match response {
-            Ok(response) => {
-                response.data().await.map_err(|e| e.to_string())?;
-                Ok(())
+    state
+        .with_oauth_request("subscribe_to_mod", || async {
+            let game_id = state.game_id()?;
+            let api = state.api()?;
+            let token = state.require_token()?;
+            match api.subscribe(&token, game_id, mod_id).await {
+                Ok(()) => {
+                    state.add_subscribed_mod_id(mod_id);
+                    log::info!("Subscribed to mod {mod_id}");
+                    Ok(())
+                }
+                Err(error) if error.is_conflict() => {
+                    state.add_subscribed_mod_id(mod_id);
+                    log::debug!("Mod {mod_id} already subscribed");
+                    Ok(())
+                }
+                Err(error) => Err(format_api_error(error)),
             }
-            Err(error) if is_already_subscribed_error(&error) => Ok(()),
-            Err(error) => Err(format_modio_error(error)),
-        }
-    })
-    .await
-    {
-        Ok(()) => {
-            log::info!("Subscribed to mod {mod_id}");
-            Ok(())
-        }
-        Err(message) if is_already_subscribed_message(&message) => {
-            log::debug!("Mod {mod_id} already subscribed");
-            Ok(())
-        }
-        Err(message) => {
-            log::error!("Failed to subscribe to mod {mod_id}: {message}");
-            Err(message)
-        }
-    }
+        })
+        .await
 }
 
 pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
     log::info!("Unsubscribing from mod {mod_id}");
-    match with_rate_limit_retry(|| async {
-        let game_id = state.game_id()?;
-        let client = state.get_session_client()?;
-        let response = client
-            .unsubscribe_from_mod(Id::new(game_id), Id::new(mod_id))
-            .await;
-        match response {
-            Ok(response) => {
-                response.bytes().await.map_err(|e| e.to_string())?;
-                Ok(())
+    state
+        .with_oauth_request("unsubscribe_from_mod", || async {
+            let game_id = state.game_id()?;
+            let api = state.api()?;
+            let token = state.require_token()?;
+            match api.unsubscribe(&token, game_id, mod_id).await {
+                Ok(()) => {
+                    state.remove_subscribed_mod_id(mod_id);
+                    log::info!("Unsubscribed from mod {mod_id}");
+                    Ok(())
+                }
+                Err(error) if error.is_not_found() => {
+                    state.remove_subscribed_mod_id(mod_id);
+                    log::debug!("Mod {mod_id} was not subscribed");
+                    Ok(())
+                }
+                Err(error) => Err(format_api_error(error)),
             }
-            Err(error) if is_not_subscribed_error(&error) => Ok(()),
-            Err(error) => Err(format_modio_error(error)),
-        }
-    })
-    .await
-    {
-        Ok(()) => {
-            log::info!("Unsubscribed from mod {mod_id}");
-            Ok(())
-        }
-        Err(message) if is_not_subscribed_message(&message) => {
-            log::debug!("Mod {mod_id} was not subscribed");
-            Ok(())
-        }
-        Err(message) => {
-            log::error!("Failed to unsubscribe from mod {mod_id}: {message}");
-            Err(message)
-        }
-    }
+        })
+        .await
 }
 
 pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {
-    log::debug!("Fetching subscribed mod IDs");
-    let mod_ids = with_rate_limit_retry(|| async {
-        let game_id = state.game_id()?;
-        let client = state.get_session_client()?;
-        let filter = GameId::eq(game_id);
-        let request = client.get_user_subscriptions().filter(filter);
-        let mut paginator = request.paged();
-        let mut mod_ids = Vec::new();
+    if let Some(cached) = state.cached_subscribed_mod_ids() {
+        log::debug!("Using cached subscription list ({} mod(s))", cached.len());
+        return Ok(cached);
+    }
 
-        while let Some(page) = paginator.next().await.map_err(|error| match error {
-            modio::util::PaginateError::Request(err) => format_modio_error(err),
-            modio::util::PaginateError::Body(err) => err.to_string(),
-        })? {
-            for mod_ in page.data.iter() {
-                mod_ids.push(mod_.id.get());
+    let mod_ids = state
+        .with_oauth_request("fetch_subscribed_mod_ids", || async {
+            const PAGE_LIMIT: u32 = 100;
+            let game_id = state.game_id()?;
+            let api = state.api()?;
+            let token = state.require_token()?;
+
+            let mut mod_ids: Vec<u64> = Vec::new();
+            let mut offset: u32 = 0;
+            loop {
+                let list = api
+                    .get_user_subscriptions(&token, game_id, PAGE_LIMIT, offset)
+                    .await
+                    .map_err(format_api_error)?;
+                let count = list.data.len() as u32;
+                let total = list.result_total;
+                // The subscriptions response already contains full mod objects.
+                // Seed the caches so the install/sync flow doesn't re-fetch each
+                // mod, its latest file, or (for dependency-free mods) its deps.
+                for mod_ in list.data {
+                    let mod_id = mod_.id;
+                    mod_ids.push(mod_id);
+                    if let Some(file) = &mod_.modfile {
+                        state.store_latest_file_id(mod_id, file.id);
+                    }
+                    if !mod_.dependencies {
+                        state.store_dependencies(mod_id, Vec::new());
+                    }
+                    state.store_mod(mod_);
+                }
+                offset = offset.saturating_add(count);
+                if count < PAGE_LIMIT || count == 0 || offset >= total {
+                    break;
+                }
             }
-        }
 
-        mod_ids.sort_unstable();
-        mod_ids.dedup();
-        Ok(mod_ids)
-    })
-    .await?;
+            mod_ids.sort_unstable();
+            mod_ids.dedup();
+            Ok(mod_ids)
+        })
+        .await?;
+
+    state.store_subscribed_mod_ids(mod_ids.clone());
     log::info!("Found {} subscribed mod(s)", mod_ids.len());
     Ok(mod_ids)
 }
@@ -632,35 +683,27 @@ pub enum SortDir {
     Asc,
 }
 
-/// Higher values first when `descending` is true (downloads, ratings, dates, etc.).
-fn sort_by_value(field: &'static str, descending: bool) -> Filter {
-    if descending {
-        custom_order_by_desc(field)
-    } else {
-        custom_order_by_asc(field)
-    }
-}
-
-fn mod_sort_filter(sort: ModSort, dir: SortDir) -> Filter {
-    let descending = matches!(dir, SortDir::Desc);
-
+fn mod_sort_field(sort: ModSort) -> &'static str {
     match sort {
         // https://docs.mod.io/restapiref/#get-mods
-        ModSort::RecentlyAdded => sort_by_value("date_live", descending),
-        ModSort::LastUpdated => sort_by_value("date_updated", descending),
-        ModSort::Trending => sort_by_value("downloads_today", descending),
-        ModSort::MostPopular => sort_by_value("downloads_total", descending),
-        ModSort::MostSubscribers => sort_by_value("subscribers_total", descending),
-        ModSort::HighestRated => sort_by_value("ratings_weighted_aggregate", descending),
-        ModSort::Alphabetical => sort_by_value("name", descending),
+        ModSort::RecentlyAdded => "date_live",
+        ModSort::LastUpdated => "date_updated",
+        ModSort::Trending => "downloads_today",
+        ModSort::MostPopular => "downloads_total",
+        ModSort::MostSubscribers => "subscribers_total",
+        ModSort::HighestRated => "ratings_weighted_aggregate",
+        ModSort::Alphabetical => "name",
     }
 }
 
-fn build_mod_filter(params: &ListModsParams) -> Filter {
-    let limit = params.limit.clamp(1, 100) as usize;
-    let offset = params.offset as usize;
-
-    let mut filter = with_limit(limit).offset(offset);
+fn build_mod_query(params: &ListModsParams) -> ModQuery {
+    let mut query = ModQuery {
+        limit: params.limit.clamp(1, 100),
+        offset: params.offset,
+        sort_field: Some(mod_sort_field(params.sort)),
+        sort_desc: matches!(params.sort_dir, SortDir::Desc),
+        ..Default::default()
+    };
 
     if let Some(search) = params
         .search
@@ -668,30 +711,22 @@ fn build_mod_filter(params: &ListModsParams) -> Filter {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
-        filter = filter.and(Fulltext::eq(search.to_string()));
+        query.search = Some(search.to_string());
     }
 
     if let Some(tag) = mod_type_tag(params.mod_type) {
-        filter = filter.and(custom_filter("tags", Operator::Equals, tag));
+        query.tags.push(tag.to_string());
     }
 
     if !params.category_tags.is_empty() {
         if params.category_tags.len() == 1 {
-            filter = filter.and(custom_filter(
-                "tags",
-                Operator::Equals,
-                params.category_tags[0].clone(),
-            ));
+            query.tags.push(params.category_tags[0].clone());
         } else {
-            filter = filter.and(custom_filter(
-                "tags",
-                Operator::In,
-                params.category_tags.clone(),
-            ));
+            query.tags_in = params.category_tags.clone();
         }
     }
 
-    filter.order_by(mod_sort_filter(params.sort, params.sort_dir))
+    query
 }
 
 fn timestamp_to_iso(secs: i64) -> String {
@@ -707,77 +742,77 @@ fn timestamp_to_iso(secs: i64) -> String {
         .unwrap_or_default()
 }
 
-fn mod_to_summary(mod_: modio::types::mods::Mod) -> ModSummary {
+fn mod_to_summary(mod_: ModObject) -> ModSummary {
     ModSummary {
-        id: mod_.id.get(),
+        id: mod_.id,
         name: mod_.name,
         summary: mod_.summary,
-        profile_url: mod_.profile_url.to_string(),
-        logo_url: mod_.logo.thumb_320x180.to_string(),
+        profile_url: mod_.profile_url,
+        logo_url: mod_.logo.thumb_320x180,
         downloads_total: mod_.stats.downloads_total,
         subscribers_total: mod_.stats.subscribers_total,
-        popularity_rank: Some(mod_.stats.popularity.rank_position),
+        popularity_rank: Some(mod_.stats.popularity_rank_position),
         tags: mod_.tags.into_iter().map(|tag| tag.name).collect(),
-        date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
+        date_updated: timestamp_to_iso(mod_.date_updated),
     }
 }
 
-fn mod_to_detail(mod_: modio::types::mods::Mod) -> ModDetail {
+fn mod_to_detail(mod_: ModObject) -> ModDetail {
     let media_image_urls: Vec<String> = mod_
         .media
         .images
         .iter()
-        .map(|image| image.original.to_string())
+        .map(|image| image.original.clone())
         .collect();
     let hero_image_url = media_image_urls
         .first()
         .cloned()
-        .unwrap_or_else(|| mod_.logo.original.to_string());
+        .unwrap_or_else(|| mod_.logo.original.clone());
+    let file_id = mod_.modfile.as_ref().map(|file| file.id);
+    let submitted_by_avatar_url = mod_.submitted_by.avatar_thumb();
+    let tags: Vec<String> = mod_.tags.into_iter().map(|tag| tag.name).collect();
 
     ModDetail {
-        id: mod_.id.get(),
+        id: mod_.id,
         name: mod_.name,
         summary: mod_.summary,
-        profile_url: mod_.profile_url.to_string(),
-        logo_url: mod_.logo.thumb_320x180.to_string(),
+        profile_url: mod_.profile_url,
+        logo_url: mod_.logo.thumb_320x180,
         hero_image_url,
         downloads_total: mod_.stats.downloads_total,
         downloads_today: mod_.stats.downloads_today,
         subscribers_total: mod_.stats.subscribers_total,
-        popularity_rank: Some(mod_.stats.popularity.rank_position),
-        tags: mod_.tags.into_iter().map(|tag| tag.name).collect(),
-        date_added: timestamp_to_iso(mod_.date_added.as_secs()),
-        date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
-        date_live: timestamp_to_iso(mod_.date_live.as_secs()),
+        popularity_rank: Some(mod_.stats.popularity_rank_position),
+        tags,
+        date_added: timestamp_to_iso(mod_.date_added),
+        date_updated: timestamp_to_iso(mod_.date_updated),
+        date_live: timestamp_to_iso(mod_.date_live),
         description_html: mod_.description,
         submitted_by_username: mod_.submitted_by.username,
-        submitted_by_profile_url: mod_.submitted_by.profile_url.to_string(),
-        submitted_by_avatar_url: mod_
-            .submitted_by
-            .avatar
-            .as_ref()
-            .map(|avatar| avatar.thumb_100x100.to_string()),
-        ratings_display_text: mod_.stats.ratings.display_text,
-        ratings_percentage_positive: mod_.stats.ratings.percentage_positive,
-        ratings_positive: mod_.stats.ratings.positive,
-        ratings_negative: mod_.stats.ratings.negative,
+        submitted_by_profile_url: mod_.submitted_by.profile_url,
+        submitted_by_avatar_url,
+        ratings_display_text: mod_.stats.ratings_display_text,
+        ratings_percentage_positive: mod_.stats.ratings_percentage_positive,
+        ratings_positive: mod_.stats.ratings_positive,
+        ratings_negative: mod_.stats.ratings_negative,
         media_image_urls,
         has_dependencies: mod_.dependencies,
-        homepage_url: mod_.homepage_url.map(|url| url.to_string()),
-        file_id: mod_.modfile.as_ref().map(|file| file.id.get()),
+        homepage_url: mod_.homepage_url,
+        file_id,
     }
 }
 
-fn mod_to_dependency(mod_: modio::types::mods::Mod) -> ModDependency {
+fn mod_to_dependency(mod_: ModObject) -> ModDependency {
+    let file_size_bytes = mod_.modfile.as_ref().map(|file| file.filesize);
     ModDependency {
-        id: mod_.id.get(),
+        id: mod_.id,
         name: mod_.name,
-        profile_url: mod_.profile_url.to_string(),
-        logo_url: mod_.logo.thumb_320x180.to_string(),
+        profile_url: mod_.profile_url,
+        logo_url: mod_.logo.thumb_320x180,
         submitted_by_username: mod_.submitted_by.username,
-        date_updated: timestamp_to_iso(mod_.date_updated.as_secs()),
+        date_updated: timestamp_to_iso(mod_.date_updated),
         downloads_total: mod_.stats.downloads_total,
-        file_size_bytes: mod_.modfile.as_ref().map(|file| file.filesize),
+        file_size_bytes,
     }
 }
 
@@ -804,12 +839,8 @@ pub fn modio_status(state: State<'_, ModioState>) -> ModioStatus {
 #[tauri::command]
 pub async fn get_mod_tag_options(state: State<'_, ModioState>) -> Result<ModTagOptions, String> {
     let game_id = state.game_id()?;
-    let client = state.get_base_client()?;
-    let response = client
-        .get_game_tags(Id::new(game_id))
-        .await
-        .map_err(format_modio_error)?;
-    let list = response.data().await.map_err(|e| e.to_string())?;
+    let api = state.api()?;
+    let list = api.get_game_tags(game_id).await.map_err(format_api_error)?;
 
     let mut plugin_types = Vec::new();
     let mut blueprint_types = Vec::new();
@@ -834,32 +865,21 @@ pub async fn list_mods(
     params: ListModsParams,
 ) -> Result<ModListResult, String> {
     let game_id = state.game_id()?;
-    let client = state.get_mods_client()?;
-    let filter = build_mod_filter(&params);
-    let response = client
-        .get_mods(Id::new(game_id))
-        .filter(filter)
-        .await
-        .map_err(format_modio_error)?;
-    let list = response.data().await.map_err(|e| e.to_string())?;
+    let api = state.api()?;
+    let query = build_mod_query(&params);
+    let list = api.get_mods(game_id, &query).await.map_err(format_api_error)?;
 
+    let total = list.result_total;
     let mods = list.data.into_iter().map(mod_to_summary).collect();
 
-    Ok(ModListResult {
-        mods,
-        total: list.total,
-    })
+    Ok(ModListResult { mods, total })
 }
 
 #[tauri::command]
 pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
     let game_id = state.game_id()?;
-    let client = state.get_mods_client()?;
-    let response = client
-        .get_mod(Id::new(game_id), Id::new(mod_id))
-        .await
-        .map_err(format_modio_error)?;
-    let mod_ = response.data().await.map_err(|e| e.to_string())?;
+    let api = state.api()?;
+    let mod_ = api.get_mod(game_id, mod_id).await.map_err(format_api_error)?;
 
     Ok(mod_to_detail(mod_))
 }
@@ -870,20 +890,18 @@ pub async fn list_mod_dependencies(
     mod_id: u64,
 ) -> Result<ModDependencyListResult, String> {
     let game_id = state.game_id()?;
-    let client = state.get_mods_client()?;
-    let response = client
-        .get_mod_dependencies(Id::new(game_id), Id::new(mod_id))
+    let api = state.api()?;
+    let list = api
+        .get_mod_dependencies(game_id, mod_id)
         .await
-        .map_err(format_modio_error)?;
-    let list = response.data().await.map_err(|e| e.to_string())?;
+        .map_err(format_api_error)?;
 
     let mut mods = Vec::with_capacity(list.data.len());
     for dependency in list.data {
-        let mod_response = client
-            .get_mod(Id::new(game_id), dependency.mod_id)
+        let mod_ = api
+            .get_mod(game_id, dependency.mod_id)
             .await
-            .map_err(format_modio_error)?;
-        let mod_ = mod_response.data().await.map_err(|e| e.to_string())?;
+            .map_err(format_api_error)?;
         mods.push(mod_to_dependency(mod_));
     }
 
@@ -895,39 +913,32 @@ pub async fn list_mod_dependencies(
 
 #[tauri::command]
 pub async fn get_user_profile(state: State<'_, ModioState>) -> Result<UserProfile, String> {
-    let client = state.get_session_client()?;
-    let response = client
-        .get_authenticated_user()
+    let api = state.api()?;
+    let token = state.require_token()?;
+    let user = api
+        .get_authenticated_user(&token)
         .await
-        .map_err(format_modio_error)?;
-    let user = response.data().await.map_err(|e| e.to_string())?;
+        .map_err(format_api_error)?;
 
     Ok(UserProfile {
+        avatar_url: user.avatar_thumb(),
         username: user.username,
-        profile_url: user.profile_url.to_string(),
-        avatar_url: user
-            .avatar
-            .as_ref()
-            .map(|avatar| avatar.thumb_100x100.to_string()),
+        profile_url: user.profile_url,
     })
 }
 
 #[tauri::command]
 pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResult, String> {
     let game_id = state.game_id()?;
-    let client = state.get_session_client()?;
-    let filter = custom_filter("game_id", Operator::Equals, game_id.to_string());
-    let response = client
-        .get_user_mods()
-        .filter(filter)
+    let api = state.api()?;
+    let token = state.require_token()?;
+    let list = api
+        .get_user_mods(&token, game_id)
         .await
-        .map_err(format_modio_error)?;
-    let list = response.data().await.map_err(|e| e.to_string())?;
+        .map_err(format_api_error)?;
 
+    let total = list.result_total;
     let mods = list.data.into_iter().map(mod_to_summary).collect();
 
-    Ok(ModListResult {
-        mods,
-        total: list.total,
-    })
+    Ok(ModListResult { mods, total })
 }

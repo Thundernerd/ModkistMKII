@@ -21,22 +21,13 @@ pub async fn download_modfile(
 ) -> Result<(), String> {
     log::info!("Downloading mod file to {}", destination.display());
     let api_key = state.api_key()?;
-    let access_token = state.access_token();
-    let request_url = if access_token.is_some() {
-        download_url.to_string()
-    } else {
-        with_api_key(download_url, api_key)
-    };
+    // Always use the game API key for file downloads so traffic stays on the
+    // unlimited game-key tier instead of OAuth (120 reads/min).
+    let request_url = with_api_key(download_url, api_key);
 
-    let mut request = reqwest::Client::new()
+    let response = reqwest::Client::new()
         .get(request_url)
-        .header("X-Modio-Platform", PLATFORM_HEADER);
-
-    if let Some(token) = access_token {
-        request = request.bearer_auth(token);
-    }
-
-    let response = request
+        .header("X-Modio-Platform", PLATFORM_HEADER)
         .send()
         .await
         .map_err(|e| format!("Mod download request failed: {e}"))?;

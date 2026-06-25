@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::modio_client::{format_modio_error, ModioState};
+use crate::modio_client::{format_api_error, ModioState};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,12 +16,8 @@ pub async fn request_email_code(
     email: String,
 ) -> Result<String, String> {
     log::info!("Requesting mod.io login code");
-    let client = state.get_base_client()?;
-    let response = client
-        .request_code(&email)
-        .await
-        .map_err(format_modio_error)?;
-    let message = response.data().await.map_err(|e| e.to_string())?;
+    let api = state.api()?;
+    let message = api.request_email_code(&email).await.map_err(format_api_error)?;
     Ok(message.message)
 }
 
@@ -31,26 +27,20 @@ pub async fn verify_email_code(
     state: State<'_, ModioState>,
     code: String,
 ) -> Result<AuthUser, String> {
-    let base = state.get_base_client()?;
-    let response = base
-        .request_token(&code)
-        .await
-        .map_err(format_modio_error)?;
-    let token = response.data().await.map_err(|e| e.to_string())?;
+    let api = state.api()?;
+    let token = api.exchange_email_code(&code).await.map_err(format_api_error)?;
 
-    let authed = base.with_token(token.value.clone());
-    let user_response = authed
-        .get_authenticated_user()
+    let user = api
+        .get_authenticated_user(&token.access_token)
         .await
-        .map_err(format_modio_error)?;
-    let user = user_response.data().await.map_err(|e| e.to_string())?;
+        .map_err(format_api_error)?;
 
-    state.set_session(&app, token.value, user.username.clone())?;
+    state.set_session(&app, token.access_token, user.username.clone())?;
 
     log::info!("Signed in as {}", user.username);
     Ok(AuthUser {
         username: user.username,
-        profile_url: user.profile_url.to_string(),
+        profile_url: user.profile_url,
     })
 }
 
