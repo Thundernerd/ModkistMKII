@@ -271,6 +271,11 @@ pub fn format_modio_error(error: modio::Error) -> String {
     message
 }
 
+/// True when mod.io reports the mod no longer exists (deleted or removed).
+pub fn is_mod_unavailable(error: &modio::Error) -> bool {
+    error.status().is_some_and(|status| status.as_u16() == 404)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModioStatus {

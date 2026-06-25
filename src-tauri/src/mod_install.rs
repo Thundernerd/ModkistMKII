@@ -9,7 +9,7 @@ use tauri::{AppHandle, State};
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
 use crate::mod_download::download_modfile;
-use crate::modio_client::{format_modio_error, ModioState};
+use crate::modio_client::{format_modio_error, is_mod_unavailable, ModioState};
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
 const BEPINEX_PLUGINS: &str = "BepInEx/plugins";
@@ -220,6 +220,16 @@ fn find_installed_record(records: &[InstalledModRecord], mod_id: u64) -> Option<
     records.iter().find(|record| record.mod_id == mod_id)
 }
 
+fn remove_installed_record_folder(game_dir: &Path, record: &InstalledModRecord) -> Result<(), String> {
+    let path = kind_root_dir(game_dir, record.kind).join(&record.folder_name);
+    if path.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| {
+            format!("Could not remove installed mod folder {}: {e}", path.display())
+        })?;
+    }
+    Ok(())
+}
+
 fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
     for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
         let kind_dir = kind_root_dir(game_dir, kind);
@@ -250,17 +260,80 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
     Ok(())
 }
 
+enum ModFetchOutcome {
+    Found(modio::types::mods::Mod),
+    Unavailable,
+    Failed(String),
+}
+
+async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
+    let game_id = match state.game_id() {
+        Ok(game_id) => game_id,
+        Err(message) => return ModFetchOutcome::Failed(message),
+    };
+    let client = match state.get_mods_client() {
+        Ok(client) => client,
+        Err(message) => return ModFetchOutcome::Failed(message),
+    };
+
+    let response = match client
+        .get_mod(Id::new(game_id), Id::new(mod_id))
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            if is_mod_unavailable(&error) {
+                return ModFetchOutcome::Unavailable;
+            }
+            return ModFetchOutcome::Failed(format_modio_error(error));
+        }
+    };
+
+    match response.data().await {
+        Ok(mod_) => ModFetchOutcome::Found(mod_),
+        Err(error) => ModFetchOutcome::Failed(error.to_string()),
+    }
+}
+
+async fn remove_unavailable_installed_mods(
+    state: &ModioState,
+    game_dir: &Path,
+    records: Vec<InstalledModRecord>,
+) -> Result<Vec<InstalledModRecord>, String> {
+    let mut available = Vec::with_capacity(records.len());
+
+    for record in records {
+        match fetch_mod_outcome(state, record.mod_id).await {
+            ModFetchOutcome::Found(_) => available.push(record),
+            ModFetchOutcome::Unavailable => {
+                remove_installed_record_folder(game_dir, &record)?;
+            }
+            ModFetchOutcome::Failed(_) => available.push(record),
+        }
+    }
+
+    Ok(available)
+}
+
+async fn scan_installed_mods_after_cleanup(
+    state: &ModioState,
+    game_dir: &Path,
+) -> Result<Vec<InstalledModRecord>, String> {
+    let records = scan_installed_mods(game_dir)?;
+    remove_unavailable_installed_mods(state, game_dir, records).await
+}
+
 async fn fetch_mod(
     state: &ModioState,
     mod_id: u64,
 ) -> Result<modio::types::mods::Mod, String> {
-    let game_id = state.game_id()?;
-    let client = state.get_mods_client()?;
-    let response = client
-        .get_mod(Id::new(game_id), Id::new(mod_id))
-        .await
-        .map_err(format_modio_error)?;
-    response.data().await.map_err(|e| e.to_string())
+    match fetch_mod_outcome(state, mod_id).await {
+        ModFetchOutcome::Found(mod_) => Ok(mod_),
+        ModFetchOutcome::Unavailable => {
+            Err(format!("Mod {mod_id} is no longer available on mod.io."))
+        }
+        ModFetchOutcome::Failed(message) => Err(message),
+    }
 }
 
 async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, String> {
@@ -485,7 +558,7 @@ async fn install_mod_internal(
     let mut skipped = Vec::new();
 
     for target_mod_id in order {
-        let records = scan_installed_mods(game_dir)?;
+        let records = scan_installed_mods_after_cleanup(state, game_dir).await?;
         let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
         let dependency_map = build_dependency_map(state, &installed_ids).await?;
         let state_for_mod =
@@ -510,7 +583,7 @@ pub async fn list_installed_mods(
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
 
-    let records = scan_installed_mods(&game_dir)?;
+    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let dependency_map = build_dependency_map(&state, &installed_ids).await?;
     let mut entries = Vec::with_capacity(records.len());
@@ -556,7 +629,7 @@ pub async fn get_mod_install_state(
 ) -> Result<ModInstallState, String> {
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
-    let records = scan_installed_mods(&game_dir)?;
+    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let dependency_map = build_dependency_map(&state, &installed_ids).await?;
     install_state_for_mod(&state, mod_id, &records, &dependency_map).await
@@ -582,7 +655,7 @@ pub async fn uninstall_mod(
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
 
-    let records = scan_installed_mods(&game_dir)?;
+    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
 
     if !installed_ids.contains(&mod_id) {
@@ -626,5 +699,26 @@ mod tests {
     fn prefers_plugin_when_both_tags_present() {
         let tags = vec!["Plugin".into(), "Blueprint".into()];
         assert_eq!(mod_kind_from_tags(&tags).unwrap(), InstalledModKind::Plugin);
+    }
+
+    #[test]
+    fn removes_installed_record_folder_by_name() {
+        let root = std::env::temp_dir().join("modkist-mod-install-cleanup");
+        let _ = fs::remove_dir_all(&root);
+        let game_dir = root.join("game");
+        let folder = kind_root_dir(&game_dir, InstalledModKind::Plugin).join("12345_67890");
+        fs::create_dir_all(&folder).unwrap();
+
+        let record = InstalledModRecord {
+            mod_id: 12345,
+            file_id: 67890,
+            kind: InstalledModKind::Plugin,
+            folder_name: "12345_67890".into(),
+        };
+
+        remove_installed_record_folder(&game_dir, &record).unwrap();
+        assert!(!folder.exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
