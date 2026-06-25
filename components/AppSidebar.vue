@@ -26,6 +26,14 @@ const {
 } = useModInstall();
 const { gameRunning } = useGameProcess();
 const { launching, launchError, launchGame, clearLaunchError } = useGameLaunch();
+const {
+  profileSwitchActive,
+  profileSwitchMessage,
+  profileSwitchTargetName,
+  beginProfileSwitch,
+  setProfileSwitchMessage,
+  endProfileSwitch,
+} = useProfileSwitchUi();
 
 const profileError = ref("");
 const menuOpen = ref(false);
@@ -72,14 +80,40 @@ const installBusy = computed(
 );
 
 const profileSelectDisabled = computed(
-  () => switching.value || profilesLoading.value || installBusy.value,
+  () =>
+    profileSwitchActive.value ||
+    switching.value ||
+    profilesLoading.value ||
+    installBusy.value,
 );
 
-const activeProfileMeta = computed(() =>
-  profileKindMeta(activeProfile.value?.kind),
+const profileTriggerBusy = computed(
+  () => profileSwitchActive.value || switching.value || profilesLoading.value,
 );
+
+const profileTriggerName = computed(() => {
+  if (profileSwitchActive.value) {
+    return profileSwitchTargetName.value ?? "Switching…";
+  }
+  return activeProfile.value?.name ?? "Loading…";
+});
+
+const profileTriggerMeta = computed(() => {
+  if (profileSwitchActive.value) {
+    return { label: profileSwitchPhaseLabel(), tone: "accent" as const };
+  }
+  return profileKindMeta(activeProfile.value?.kind);
+});
+
+function profileSwitchPhaseLabel() {
+  const text = profileSwitchMessage.value.toLowerCase();
+  if (text.includes("syncing")) return "Syncing subscriptions";
+  if (text.includes("loading")) return "Loading mods";
+  return "Switching profile";
+}
 
 const statusMessage = computed(() => {
+  if (profileSwitchActive.value) return profileSwitchMessage.value;
   if (switching.value) return "Switching profile…";
   if (profileError.value) return profileError.value;
   if (activeProfile.value?.installBlocked) {
@@ -90,7 +124,7 @@ const statusMessage = computed(() => {
 
 const statusTone = computed(() => {
   if (profileError.value) return "error";
-  if (switching.value) return "loading";
+  if (profileSwitchActive.value || switching.value) return "loading";
   return "hint";
 });
 
@@ -150,18 +184,24 @@ async function selectProfile(profile: ProfileSummary) {
 
   menuOpen.value = false;
   profileError.value = "";
+  beginProfileSwitch(profile.name);
 
   try {
+    setProfileSwitchMessage(`Switching to ${profile.name}…`);
     await switchProfile(profile.id);
     resetStartupUpdateCheck();
+    setProfileSwitchMessage("Loading installed mods…");
     await refreshInstalled();
     if (profile.kind === "user") {
       resetSessionSync();
-      void syncSubscribedModsIfNeeded();
+      setProfileSwitchMessage("Syncing subscribed mods…");
+      await syncSubscribedModsIfNeeded();
     }
   } catch (error) {
     profileError.value =
       error instanceof Error ? error.message : String(error);
+  } finally {
+    endProfileSwitch();
   }
 }
 </script>
@@ -181,7 +221,7 @@ async function selectProfile(profile: ProfileSummary) {
         class="profile-trigger"
         :class="{
           'profile-trigger--open': menuOpen,
-          'profile-trigger--busy': switching || profilesLoading,
+          'profile-trigger--busy': profileTriggerBusy,
         }"
         :disabled="profileSelectDisabled"
         :aria-expanded="menuOpen"
@@ -189,19 +229,25 @@ async function selectProfile(profile: ProfileSummary) {
         @click="toggleMenu"
       >
         <span
+          v-if="profileTriggerBusy"
+          class="profile-trigger-spinner"
+          aria-hidden="true"
+        />
+        <span
+          v-else
           class="profile-trigger-icon"
           :class="`profile-trigger-icon--${activeProfile?.kind ?? 'custom'}`"
           aria-hidden="true"
         />
         <span class="profile-trigger-body">
           <span class="profile-trigger-name">
-            {{ activeProfile?.name ?? "Loading…" }}
+            {{ profileTriggerName }}
           </span>
           <span
             class="profile-trigger-meta"
-            :class="`profile-trigger-meta--${activeProfileMeta.tone}`"
+            :class="`profile-trigger-meta--${profileTriggerMeta.tone}`"
           >
-            {{ activeProfileMeta.label }}
+            {{ profileTriggerMeta.label }}
           </span>
         </span>
         <span class="profile-chevron" :class="{ 'profile-chevron--open': menuOpen }" />
@@ -388,6 +434,16 @@ async function selectProfile(profile: ProfileSummary) {
   border-radius: 0.55rem;
   border: 1px solid var(--modio-border);
   background: var(--modio-surface);
+}
+
+.profile-trigger-spinner {
+  flex-shrink: 0;
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 2px solid var(--modio-border);
+  border-top-color: var(--modio-accent);
+  border-radius: 50%;
+  animation: profile-spin 0.7s linear infinite;
 }
 
 .profile-trigger-icon::after,

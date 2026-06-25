@@ -24,6 +24,7 @@ onUnmounted(() => {
   <div v-if="ready" class="app-shell">
     <AppSidebar />
     <div class="app-main">
+      <ProfileSwitchOverlay />
       <slot />
     </div>
   </div>
