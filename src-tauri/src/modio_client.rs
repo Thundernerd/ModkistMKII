@@ -166,14 +166,15 @@ impl ModioState {
         Ok(client)
     }
 
+    /// Read-only mod and game API calls (list mods, get mod, dependencies).
+    /// Always uses the game API key so traffic stays on the unlimited game-key
+    /// rate-limit tier instead of OAuth (120 reads/min).
     pub fn get_mods_client(&self) -> Result<Arc<Client>, String> {
-        if self.auth_status().logged_in {
-            self.get_session_client()
-        } else {
-            self.get_base_client()
-        }
+        self.get_base_client()
     }
 
+    /// OAuth-authenticated client for user-specific reads and writes (subscribe,
+    /// subscriptions, profile). Subject to OAuth rate limits.
     pub fn get_session_client(&self) -> Result<Arc<Client>, String> {
         let mut session = self
             .session

@@ -327,7 +327,7 @@ async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
         Ok(game_id) => game_id,
         Err(message) => return ModFetchOutcome::Failed(message),
     };
-    let client = match state.get_mods_client() {
+    let client = match state.get_base_client() {
         Ok(client) => client,
         Err(message) => return ModFetchOutcome::Failed(message),
     };
@@ -430,7 +430,7 @@ async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64
 
     let dependencies: Vec<u64> = with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
-        let client = state.get_mods_client()?;
+        let client = state.get_base_client()?;
         let response = client
             .get_mod_dependencies(Id::new(game_id), Id::new(mod_id))
             .await
