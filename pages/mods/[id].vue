@@ -555,15 +555,17 @@ function dependencyMeta(dep: ModDependency) {
 .back-link {
   padding: 0;
   border: none;
-  background: none;
+  background-color: transparent;
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--modio-accent);
   cursor: pointer;
 }
 
-.back-link:hover {
+.back-link:hover:not(:disabled) {
   color: var(--modio-accent-hover);
+  background-color: transparent;
+  border-color: transparent;
 }
 
 .mod-detail-layout {
