@@ -142,7 +142,7 @@ function confirmSelection() {
 
 .profile-picker-option:has(input:checked) {
   border-color: var(--modio-accent);
-  background: rgba(7, 193, 216, 0.08);
+  background: rgba(var(--modio-accent-rgb), 0.08);
 }
 
 .profile-picker-option-body {

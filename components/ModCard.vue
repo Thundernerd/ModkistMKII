@@ -94,7 +94,7 @@ function formatCount(value: number) {
 
 .mod-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(7, 193, 216, 0.45);
+  border-color: rgba(var(--modio-accent-rgb), 0.45);
   box-shadow: var(--modio-shadow);
 }
 

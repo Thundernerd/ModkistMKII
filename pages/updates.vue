@@ -214,8 +214,8 @@ onMounted(loadUpdates);
 
 .bulk-result {
   border-style: solid;
-  border-color: rgba(7, 193, 216, 0.35);
-  background: rgba(7, 193, 216, 0.08);
+  border-color: rgba(var(--modio-accent-rgb), 0.35);
+  background: rgba(var(--modio-accent-rgb), 0.08);
 }
 
 .state {
@@ -258,7 +258,7 @@ onMounted(loadUpdates);
   align-items: center;
   padding: 0.9rem 1rem;
   border-radius: var(--modio-radius);
-  border: 1px solid rgba(7, 193, 216, 0.28);
+  border: 1px solid rgba(var(--modio-accent-rgb), 0.28);
   background: var(--modio-surface);
 }
 

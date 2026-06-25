@@ -357,16 +357,16 @@ async function selectProfile(profile: ProfileSummary) {
 }
 
 .profile-trigger:hover:not(:disabled) {
-  border-color: rgba(7, 193, 216, 0.35);
+  border-color: rgba(var(--modio-accent-rgb), 0.35);
   background:
-    linear-gradient(180deg, rgba(7, 193, 216, 0.06), transparent),
+    linear-gradient(180deg, rgba(var(--modio-accent-rgb), 0.06), transparent),
     var(--modio-surface-hover);
 }
 
 .profile-trigger--open {
-  border-color: rgba(7, 193, 216, 0.55);
+  border-color: rgba(var(--modio-accent-rgb), 0.55);
   box-shadow:
-    0 0 0 1px rgba(7, 193, 216, 0.15),
+    0 0 0 1px rgba(var(--modio-accent-rgb), 0.15),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
@@ -428,8 +428,8 @@ async function selectProfile(profile: ProfileSummary) {
 
 .profile-trigger-icon--user,
 .profile-menu-icon--user {
-  border-color: rgba(7, 193, 216, 0.35);
-  background: rgba(7, 193, 216, 0.08);
+  border-color: rgba(var(--modio-accent-rgb), 0.35);
+  background: rgba(var(--modio-accent-rgb), 0.08);
 }
 
 .profile-trigger-body {
@@ -516,11 +516,11 @@ async function selectProfile(profile: ProfileSummary) {
 }
 
 .profile-menu-item--active {
-  background: rgba(7, 193, 216, 0.1);
+  background: rgba(var(--modio-accent-rgb), 0.1);
 }
 
 .profile-menu-item--active:hover:not(:disabled) {
-  background: rgba(7, 193, 216, 0.14);
+  background: rgba(var(--modio-accent-rgb), 0.14);
 }
 
 .profile-menu-item--disabled {
@@ -625,7 +625,7 @@ async function selectProfile(profile: ProfileSummary) {
   padding: 0 0.35rem;
   border-radius: 999px;
   background: var(--modio-accent);
-  color: #041316;
+  color: var(--modio-on-accent);
   font-size: 0.7rem;
   font-weight: 700;
   line-height: 1;
@@ -643,9 +643,9 @@ async function selectProfile(profile: ProfileSummary) {
   width: 100%;
   padding: 0.65rem 0.75rem;
   border-radius: var(--modio-radius);
-  border: 1px solid rgba(7, 193, 216, 0.45);
+  border: 1px solid rgba(var(--modio-accent-rgb), 0.45);
   background:
-    linear-gradient(180deg, rgba(7, 193, 216, 0.18), rgba(7, 193, 216, 0.08)),
+    linear-gradient(180deg, rgba(var(--modio-accent-rgb), 0.18), rgba(var(--modio-accent-rgb), 0.08)),
     var(--modio-surface-raised);
   color: var(--modio-text);
   font-size: 0.88rem;
@@ -660,12 +660,12 @@ async function selectProfile(profile: ProfileSummary) {
 }
 
 .sidebar-play-btn:hover:not(:disabled) {
-  border-color: rgba(7, 193, 216, 0.7);
+  border-color: rgba(var(--modio-accent-rgb), 0.7);
   background:
-    linear-gradient(180deg, rgba(7, 193, 216, 0.24), rgba(7, 193, 216, 0.1)),
+    linear-gradient(180deg, rgba(var(--modio-accent-rgb), 0.24), rgba(var(--modio-accent-rgb), 0.1)),
     var(--modio-surface-hover);
   box-shadow:
-    0 2px 8px rgba(7, 193, 216, 0.12),
+    0 2px 8px rgba(var(--modio-accent-rgb), 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 

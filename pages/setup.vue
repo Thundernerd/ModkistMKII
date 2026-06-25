@@ -56,7 +56,7 @@ onMounted(async () => {
   background:
     radial-gradient(
       ellipse 70% 45% at 50% -10%,
-      rgba(7, 193, 216, 0.14),
+      rgba(var(--modio-accent-rgb), 0.14),
       transparent
     ),
     var(--modio-bg);

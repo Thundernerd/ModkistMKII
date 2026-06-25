@@ -1,6 +1,8 @@
 :root {
-  --modio-accent: #07c1d8;
-  --modio-accent-hover: #06a8bc;
+  --modio-accent: #ff7808;
+  --modio-accent-hover: #e66c07;
+  --modio-accent-rgb: 255, 120, 8;
+  --modio-on-accent: #041316;
   --modio-bg: #121214;
   --modio-surface: #1a1a1b;
   --modio-surface-raised: #222225;
@@ -85,7 +87,7 @@ select:hover {
 input:focus,
 select:focus {
   border-color: var(--modio-accent);
-  box-shadow: 0 0 0 2px rgba(7, 193, 216, 0.2);
+  box-shadow: 0 0 0 2px rgba(var(--modio-accent-rgb), 0.2);
 }
 
 input::placeholder {
@@ -96,7 +98,7 @@ button {
   cursor: pointer;
   background-color: var(--modio-accent);
   border-color: var(--modio-accent);
-  color: #041316;
+  color: var(--modio-on-accent);
   font-weight: 600;
 }
 
@@ -184,7 +186,7 @@ select {
   background:
     radial-gradient(
       ellipse 80% 50% at 50% -20%,
-      rgba(7, 193, 216, 0.12),
+      rgba(var(--modio-accent-rgb), 0.12),
       transparent
     ),
     var(--modio-bg);

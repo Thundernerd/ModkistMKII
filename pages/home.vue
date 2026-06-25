@@ -235,8 +235,8 @@ onMounted(async () => {
 }
 
 .updates-banner {
-  border-color: rgba(7, 193, 216, 0.35);
-  background: rgba(7, 193, 216, 0.08);
+  border-color: rgba(var(--modio-accent-rgb), 0.35);
+  background: rgba(var(--modio-accent-rgb), 0.08);
 }
 
 .sync-error-hint {

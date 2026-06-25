@@ -640,7 +640,7 @@ function dependencyMeta(dep: ModDependency) {
   padding: 0 0.3rem;
   border-radius: 999px;
   background: var(--modio-accent);
-  color: #041316;
+  color: var(--modio-on-accent);
   font-size: 0.68rem;
   font-weight: 700;
   display: inline-flex;
@@ -743,7 +743,7 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .dependency-card:hover {
-  border-color: rgba(7, 193, 216, 0.45);
+  border-color: rgba(var(--modio-accent-rgb), 0.45);
   background: var(--modio-surface-raised);
 }
 
@@ -847,7 +847,7 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .subscribe-button:hover {
-  background: rgba(7, 193, 216, 0.12);
+  background: rgba(var(--modio-accent-rgb), 0.12);
   color: var(--modio-accent);
 }
 
@@ -988,7 +988,7 @@ function dependencyMeta(dep: ModDependency) {
 .tag-pill {
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
-  border: 1px solid rgba(7, 193, 216, 0.35);
+  border: 1px solid rgba(var(--modio-accent-rgb), 0.35);
   color: var(--modio-accent);
   font-size: 0.75rem;
   font-weight: 600;

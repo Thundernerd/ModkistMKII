@@ -164,7 +164,7 @@ const emit = defineEmits<{
 }
 
 .type-toggle-btn.active {
-  background: rgba(7, 193, 216, 0.14);
+  background: rgba(var(--modio-accent-rgb), 0.14);
   color: var(--modio-accent);
 }
 
@@ -225,14 +225,14 @@ const emit = defineEmits<{
 }
 
 .category-tag:hover:not(:disabled) {
-  border-color: rgba(7, 193, 216, 0.45);
+  border-color: rgba(var(--modio-accent-rgb), 0.45);
   color: var(--modio-text);
   background: var(--modio-surface-hover);
 }
 
 .category-tag.active {
-  border-color: rgba(7, 193, 216, 0.55);
-  background: rgba(7, 193, 216, 0.12);
+  border-color: rgba(var(--modio-accent-rgb), 0.55);
+  background: rgba(var(--modio-accent-rgb), 0.12);
   color: var(--modio-accent);
 }
 

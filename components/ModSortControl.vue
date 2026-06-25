@@ -248,7 +248,7 @@ onUnmounted(() => {
 }
 
 .sort-menu-item.active {
-  background: rgba(7, 193, 216, 0.12);
+  background: rgba(var(--modio-accent-rgb), 0.12);
   color: var(--modio-accent);
 }
 

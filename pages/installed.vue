@@ -283,7 +283,7 @@ onMounted(loadInstalled);
 }
 
 .update-badge {
-  background: rgba(7, 193, 216, 0.14);
+  background: rgba(var(--modio-accent-rgb), 0.14);
   color: var(--modio-accent);
 }
 

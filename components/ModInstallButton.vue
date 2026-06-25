@@ -125,7 +125,7 @@ function onClick() {
 .btn-primary {
   background: var(--modio-accent);
   border-color: var(--modio-accent);
-  color: #041316;
+  color: var(--modio-on-accent);
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -134,13 +134,13 @@ function onClick() {
 }
 
 .btn-update {
-  background: rgba(7, 193, 216, 0.16);
-  border-color: rgba(7, 193, 216, 0.55);
+  background: rgba(var(--modio-accent-rgb), 0.16);
+  border-color: rgba(var(--modio-accent-rgb), 0.55);
   color: var(--modio-accent);
 }
 
 .btn-update:hover:not(:disabled) {
-  background: rgba(7, 193, 216, 0.24);
+  background: rgba(var(--modio-accent-rgb), 0.24);
 }
 
 .btn-uninstall {
