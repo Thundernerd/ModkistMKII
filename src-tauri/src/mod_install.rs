@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+use crate::app_settings::auto_update_mods_enabled;
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
 use crate::game_process::ensure_game_not_running;
@@ -705,6 +706,7 @@ async fn install_targets_internal(
     records: &mut Vec<InstalledModRecord>,
     dependency_map: &mut HashMap<u64, Vec<u64>>,
     should_subscribe: bool,
+    auto_update: bool,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
@@ -735,6 +737,14 @@ async fn install_targets_internal(
         .await?;
         if matches!(state_for_mod.status.as_str(), "upToDate") {
             log::debug!("Mod {target_mod_id} already up to date, skipping");
+            skipped.push(target_mod_id);
+            continue;
+        }
+
+        if state_for_mod.status.as_str() == "updateAvailable" && !auto_update {
+            log::debug!(
+                "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
+            );
             skipped.push(target_mod_id);
             continue;
         }
@@ -792,6 +802,7 @@ async fn install_mod_internal(
         &mut records,
         &mut dependency_map,
         false,
+        true,
         None,
     )
     .await
@@ -863,6 +874,8 @@ async fn sync_subscribed_mods_inner(
         install_order.len()
     );
 
+    let auto_update = auto_update_mods_enabled(app);
+
     let result = install_targets_internal(
         Some(app),
         state,
@@ -871,6 +884,7 @@ async fn sync_subscribed_mods_inner(
         &mut records,
         &mut dependency_map,
         false,
+        auto_update,
         Some(&mods_by_id),
     )
     .await;
