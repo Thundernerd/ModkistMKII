@@ -1,0 +1,83 @@
+# Manual release builds for macOS, Windows, and Linux.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   MODIO_API_KEY  — game API key from mod.io
+#   MODIO_GAME_ID  — numeric game ID from mod.io
+#
+# Run from Actions → Build → Run workflow. Bundles appear as workflow artifacts
+# on the completed run (dmg/msi/nsis/deb/AppImage per platform).
+
+name: Build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-universal
+            tauri_args: --target universal-apple-darwin
+          - os: windows-latest
+            platform: windows
+            tauri_args: ""
+          - os: ubuntu-22.04
+            platform: linux
+            tauri_args: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install macOS universal targets
+        if: matrix.platform == 'macos-universal'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri bundles
+        env:
+          MODIO_API_KEY: ${{ secrets.MODIO_API_KEY }}
+          MODIO_GAME_ID: ${{ secrets.MODIO_GAME_ID }}
+        run: npm run tauri build -- ${{ matrix.tauri_args }}
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: modkist-${{ matrix.platform }}
+          path: src-tauri/target/**/release/bundle/**
+          if-no-files-found: error
