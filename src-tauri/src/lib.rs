@@ -55,8 +55,8 @@ use profiles::{
     logout_requires_profile_selection_command, rename_profile, switch_profile,
 };
 use modio_client::{
-    get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mods,
-    list_user_mods, modio_status, ModioState,
+    get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mod_files,
+    list_mods, list_user_mods, modio_status, ModioState,
 };
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
@@ -112,6 +112,7 @@ pub fn run() {
             get_mod_tag_options,
             list_mods,
             get_mod,
+            list_mod_files,
             list_mod_dependencies,
             get_user_profile,
             list_user_mods,

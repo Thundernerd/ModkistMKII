@@ -640,12 +640,21 @@ async fn install_single_mod(
     state: &ModioState,
     game_dir: &Path,
     mod_id: u64,
+    file_id: Option<u64>,
 ) -> Result<(), String> {
     let mod_ = fetch_mod(state, mod_id).await?;
-    let file = mod_
-        .modfile
-        .as_ref()
-        .ok_or_else(|| format!("Mod {mod_id} has no downloadable file."))?;
+    let file = match file_id {
+        Some(file_id) => {
+            let game_id = state.game_id()?;
+            let api = state.api()?;
+            api.get_mod_file(game_id, mod_id, file_id)
+                .await
+                .map_err(crate::modio_client::format_api_error)?
+        }
+        None => mod_
+            .modfile
+            .ok_or_else(|| format!("Mod {mod_id} has no downloadable file."))?,
+    };
     let file_id = file.id;
     let filename = file.filename.clone();
     let expected_size = file.filesize;
@@ -707,6 +716,7 @@ async fn install_targets_internal(
     dependency_map: &mut HashMap<u64, Vec<u64>>,
     should_subscribe: bool,
     auto_update: bool,
+    file_override: Option<(u64, u64)>,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
@@ -736,9 +746,21 @@ async fn install_targets_internal(
         )
         .await?;
         if matches!(state_for_mod.status.as_str(), "upToDate") {
-            log::debug!("Mod {target_mod_id} already up to date, skipping");
-            skipped.push(target_mod_id);
-            continue;
+            if let Some((override_mod, override_file)) = file_override {
+                if override_mod == target_mod_id
+                    && state_for_mod.installed_file_id != Some(override_file)
+                {
+                    // Install a specific older or alternate file version.
+                } else {
+                    log::debug!("Mod {target_mod_id} already up to date, skipping");
+                    skipped.push(target_mod_id);
+                    continue;
+                }
+            } else {
+                log::debug!("Mod {target_mod_id} already up to date, skipping");
+                skipped.push(target_mod_id);
+                continue;
+            }
         }
 
         if state_for_mod.status.as_str() == "updateAvailable" && !auto_update {
@@ -754,7 +776,10 @@ async fn install_targets_internal(
         }
 
         log::info!("Installing mod {target_mod_id}");
-        install_single_mod(state, game_dir, target_mod_id).await?;
+        let target_file_id = file_override
+            .filter(|(override_mod, _)| *override_mod == target_mod_id)
+            .map(|(_, file_id)| file_id);
+        install_single_mod(state, game_dir, target_mod_id, target_file_id).await?;
         log::info!("Installed mod {target_mod_id}");
         installed.push(target_mod_id);
         *records = scan_installed_mods(game_dir)?;
@@ -774,6 +799,7 @@ async fn install_mod_internal(
     state: &ModioState,
     game_dir: &Path,
     mod_id: u64,
+    file_id: Option<u64>,
 ) -> Result<InstallModResult, String> {
     log::info!("Installing mod {mod_id}");
     let order = collect_install_order(state, mod_id).await?;
@@ -803,6 +829,7 @@ async fn install_mod_internal(
         &mut dependency_map,
         false,
         true,
+        file_id.map(|file_id| (mod_id, file_id)),
         None,
     )
     .await
@@ -885,6 +912,7 @@ async fn sync_subscribed_mods_inner(
         &mut dependency_map,
         false,
         auto_update,
+        None,
         Some(&mods_by_id),
     )
     .await;
@@ -1008,6 +1036,7 @@ pub async fn install_mod(
     app: AppHandle,
     state: State<'_, ModioState>,
     mod_id: u64,
+    file_id: Option<u64>,
 ) -> Result<InstallModResult, String> {
     log::info!("install_mod command: mod {mod_id}");
     if active_profile_install_blocked(&app, &state)? {
@@ -1023,7 +1052,7 @@ pub async fn install_mod(
 
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
-    let result = install_mod_internal(&app, &state, &game_dir, mod_id).await;
+    let result = install_mod_internal(&app, &state, &game_dir, mod_id, file_id).await;
     state.reset_subscription_sync_cancel();
     match &result {
         Ok(summary) => log::info!(

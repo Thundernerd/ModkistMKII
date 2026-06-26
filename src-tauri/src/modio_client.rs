@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::mod_api_cache::{ApiCache, PersistedCache};
-use crate::modio_api::{ApiClient, ApiError, ModObject, ModQuery};
+use crate::modio_api::{ApiClient, ApiError, ModObject, ModQuery, Modfile};
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
@@ -593,6 +593,25 @@ pub struct ModDetail {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModFileEntry {
+    pub id: u64,
+    pub version: String,
+    pub filename: String,
+    pub filesize: u64,
+    pub date_added: String,
+    pub changelog: String,
+    pub downloadable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModFileListResult {
+    pub files: Vec<ModFileEntry>,
+    pub latest_file_id: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModDependency {
     pub id: u64,
     pub name: String,
@@ -797,6 +816,22 @@ fn mod_to_detail(mod_: ModObject) -> ModDetail {
     }
 }
 
+fn mod_file_to_entry(file: Modfile) -> ModFileEntry {
+    ModFileEntry {
+        id: file.id,
+        version: if file.version.trim().is_empty() {
+            file.filename.clone()
+        } else {
+            file.version
+        },
+        filename: file.filename,
+        filesize: file.filesize,
+        date_added: timestamp_to_iso(file.date_added),
+        changelog: file.changelog,
+        downloadable: !file.download.binary_url.is_empty(),
+    }
+}
+
 fn mod_to_dependency(mod_: ModObject) -> ModDependency {
     let file_size_bytes = mod_.modfile.as_ref().map(|file| file.filesize);
     ModDependency {
@@ -877,6 +912,32 @@ pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDet
     let mod_ = api.get_mod(game_id, mod_id).await.map_err(format_api_error)?;
 
     Ok(mod_to_detail(mod_))
+}
+
+#[tauri::command]
+pub async fn list_mod_files(
+    state: State<'_, ModioState>,
+    mod_id: u64,
+) -> Result<ModFileListResult, String> {
+    let game_id = state.game_id()?;
+    let api = state.api()?;
+    let latest_file_id = api
+        .get_mod(game_id, mod_id)
+        .await
+        .map_err(format_api_error)?
+        .modfile
+        .as_ref()
+        .map(|file| file.id);
+    let list = api
+        .get_mod_files(game_id, mod_id)
+        .await
+        .map_err(format_api_error)?;
+    let files = list.data.into_iter().map(mod_file_to_entry).collect();
+
+    Ok(ModFileListResult {
+        files,
+        latest_file_id,
+    })
 }
 
 #[tauri::command]
