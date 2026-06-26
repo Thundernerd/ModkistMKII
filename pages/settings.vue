@@ -133,6 +133,7 @@ async function reinstallBepInExInstall() {
 onMounted(() => {
   refreshBepInExStatus();
   refreshProfiles().catch(() => {});
+  refreshAppSettings().catch(() => {});
 });
 
 const {
@@ -144,6 +145,28 @@ const {
   deleteProfile,
 } = useProfiles();
 const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
+const {
+  autoUpdateMods,
+  settingsReady,
+  refreshAppSettings,
+  setAutoUpdateMods,
+} = useAppSettings();
+
+const savingAutoUpdate = ref(false);
+const autoUpdateError = ref("");
+
+async function handleAutoUpdateToggle() {
+  const next = !autoUpdateMods.value;
+  savingAutoUpdate.value = true;
+  autoUpdateError.value = "";
+  try {
+    await setAutoUpdateMods(next);
+  } catch (err) {
+    autoUpdateError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    savingAutoUpdate.value = false;
+  }
+}
 
 const newProfileName = ref("");
 const profileActionError = ref("");
@@ -195,6 +218,37 @@ function profileKindLabel(kind: string) {
       <h1>Settings</h1>
       <p class="hint">Manage your Modkist preferences.</p>
     </header>
+
+    <section class="panel">
+      <h2 class="panel-title">Mods</h2>
+      <p class="hint panel-desc">
+        Control how Modkist keeps your installed mods up to date.
+      </p>
+
+      <div class="setting-row">
+        <div class="setting-copy">
+          <span class="setting-label">Auto-update mods</span>
+          <span class="setting-hint">
+            When enabled, subscribed mods are updated automatically during sync.
+            You can still update mods manually from the Updates page.
+          </span>
+        </div>
+        <button
+          type="button"
+          class="setting-toggle"
+          role="switch"
+          :aria-checked="autoUpdateMods"
+          :disabled="!settingsReady || savingAutoUpdate"
+          @click="handleAutoUpdateToggle"
+        >
+          <span class="setting-toggle-track" :class="{ on: autoUpdateMods }">
+            <span class="setting-toggle-thumb" />
+          </span>
+        </button>
+      </div>
+
+      <p v-if="autoUpdateError" class="error feedback">{{ autoUpdateError }}</p>
+    </section>
 
     <section class="panel">
       <h2 class="panel-title">Game directory</h2>
@@ -467,5 +521,78 @@ function profileKindLabel(kind: string) {
   border: 1px solid var(--modio-border);
   background: var(--modio-surface-raised);
   color: var(--modio-text);
+}
+
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.setting-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.setting-label {
+  font-weight: 600;
+}
+
+.setting-hint {
+  font-size: 0.85rem;
+  color: var(--modio-text-muted);
+  max-width: 28rem;
+}
+
+.setting-toggle {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.setting-toggle:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.setting-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.setting-toggle-track {
+  display: block;
+  width: 2.75rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--modio-surface-raised);
+  border: 1px solid var(--modio-border);
+  position: relative;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.setting-toggle-track.on {
+  background: rgba(var(--modio-accent-rgb), 0.22);
+  border-color: rgba(var(--modio-accent-rgb), 0.55);
+}
+
+.setting-toggle-thumb {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  background: var(--modio-text-muted);
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.setting-toggle-track.on .setting-toggle-thumb {
+  transform: translateX(1.25rem);
+  background: var(--modio-accent);
 }
 </style>
