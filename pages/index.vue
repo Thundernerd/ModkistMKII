@@ -86,7 +86,6 @@ async function verifyCode() {
     await refreshAuthStatus();
     await refreshProfiles();
     const { activeProfileId, switchProfile } = useProfiles();
-    const { resetSessionSync } = useModInstall();
     if (activeProfileId.value === "vanilla") {
       await switchProfile("user");
       resetSessionSync();
