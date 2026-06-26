@@ -34,6 +34,7 @@ const {
   profileInstallBlocked,
   gameRunning,
   gameRunningMessage,
+  installStates,
 } = useModInstall();
 
 const modId = computed(() => Number(route.params.id));
@@ -84,6 +85,18 @@ const activeTab = ref<TabId>("description");
 const mediaIndex = ref(0);
 const dependencySort = ref<DependencySort>("mostPopular");
 const copiedId = ref(false);
+const versionsOpen = ref(false);
+
+const installedFileId = computed(
+  () => installStates.value[modId.value]?.installedFileId ?? null,
+);
+
+const versionsInstallBlocked = computed(
+  () =>
+    !!installEnvironmentError.value ||
+    profileInstallBlocked.value ||
+    gameRunning.value,
+);
 
 const mediaImages = computed(() => {
   if (!mod.value) return [];
@@ -191,9 +204,14 @@ async function copyModId() {
   }
 }
 
-async function handleInstall(targetModId = modId.value) {
-  await installMod(targetModId);
+async function handleInstall(targetModId = modId.value, fileId?: number) {
+  await installMod(targetModId, fileId);
   await refreshInstalled();
+}
+
+async function handleInstallVersion(fileId: number) {
+  versionsOpen.value = false;
+  await handleInstall(modId.value, fileId);
 }
 
 async function handleUninstall(targetModId = modId.value, modName?: string) {
@@ -420,6 +438,25 @@ function dependencyMeta(dep: ModDependency) {
             :error="getInstallError(mod.id)"
             @install="handleInstall(mod.id)"
             @uninstall="handleUninstall(mod.id, mod.name)"
+          />
+
+          <button
+            type="button"
+            class="versions-button"
+            @click="versionsOpen = true"
+          >
+            Versions
+          </button>
+
+          <ModVersionsDialog
+            :open="versionsOpen"
+            :mod-id="mod.id"
+            :mod-name="mod.name"
+            :installed-file-id="installedFileId"
+            :install-blocked="versionsInstallBlocked"
+            :game-running="gameRunning"
+            @close="versionsOpen = false"
+            @install="handleInstallVersion"
           />
 
           <a
@@ -886,6 +923,23 @@ function dependencyMeta(dep: ModDependency) {
   margin: 0;
   font-size: 0.82rem;
   color: var(--modio-danger);
+}
+
+.versions-button {
+  width: 100%;
+  padding: 0.55rem 1rem;
+  border-radius: var(--modio-radius-sm);
+  border: 1px solid var(--modio-border);
+  background: transparent;
+  color: var(--modio-text-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.versions-button:hover {
+  background: var(--modio-surface-hover);
+  border-color: var(--modio-border);
+  color: var(--modio-text);
 }
 
 .subscribe-button {

@@ -311,10 +311,10 @@ export function useModInstall() {
     }
   }
 
-  async function installMod(modId: number) {
+  async function installMod(modId: number, fileId?: number) {
     clearInstallError(modId);
     setInstalling(modId, true);
-    logger.info(`Installing mod ${modId}`);
+    logger.info(`Installing mod ${modId}`, fileId ? { fileId } : undefined);
     try {
       if (profileSwitching.value) {
         throw new Error("Wait for the profile switch to finish, then try again.");
@@ -336,7 +336,10 @@ export function useModInstall() {
         );
       }
 
-      const result = await invoke<InstallModResult>("install_mod", { modId });
+      const result = await invoke<InstallModResult>("install_mod", {
+        modId,
+        fileId: fileId ?? null,
+      });
       if (activeProfile.kind === "user") {
         sessionSyncDone.value = true;
       }

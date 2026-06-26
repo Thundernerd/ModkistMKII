@@ -40,6 +40,21 @@ export interface ModDependency {
   fileSizeBytes?: number;
 }
 
+export interface ModFileEntry {
+  id: number;
+  version: string;
+  filename: string;
+  filesize: number;
+  dateAdded: string;
+  changelog: string;
+  downloadable: boolean;
+}
+
+export interface ModFileListResult {
+  files: ModFileEntry[];
+  latestFileId: number | null;
+}
+
 export type DependencySort = "mostPopular" | "lastUpdated" | "alphabetical";
 
 export function useModDetail() {
@@ -85,6 +100,10 @@ export function useModDetail() {
     }
   }
 
+  async function fetchModFiles(modId: number) {
+    return invoke<ModFileListResult>("list_mod_files", { modId });
+  }
+
   return {
     mod,
     dependencies,
@@ -94,5 +113,6 @@ export function useModDetail() {
     dependenciesError,
     fetchMod,
     fetchDependencies,
+    fetchModFiles,
   };
 }
