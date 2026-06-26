@@ -180,7 +180,7 @@ pub struct ModStats {
 
 #[derive(Deserialize, Default, Clone)]
 pub struct Download {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_string")]
     pub binary_url: String,
 }
 
@@ -188,12 +188,34 @@ pub struct Download {
 pub struct Modfile {
     #[serde(default)]
     pub id: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_string")]
     pub filename: String,
     #[serde(default)]
     pub filesize: u64,
     #[serde(default)]
+    pub date_added: i64,
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub version: String,
+    #[serde(default, deserialize_with = "deserialize_null_string")]
+    pub changelog: String,
+    #[serde(default, deserialize_with = "deserialize_null_download")]
     pub download: Download,
+}
+
+fn deserialize_null_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
+}
+
+fn deserialize_null_download<'de, D>(deserializer: D) -> Result<Download, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Download>::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
 }
 
 /// mod.io returns `modfile` as `null` (no published file) or occasionally as an
@@ -505,6 +527,30 @@ impl ApiClient {
         self.send(reqwest::Method::GET, &path, None, &[], None).await
     }
 
+    pub async fn get_mod_files(
+        &self,
+        game_id: u64,
+        mod_id: u64,
+    ) -> Result<ListResponse<Modfile>, ApiError> {
+        let path = format!("/games/{game_id}/mods/{mod_id}/files");
+        let params = vec![
+            ("_sort".to_string(), "-date_added".to_string()),
+            ("_limit".to_string(), "100".to_string()),
+        ];
+        self.send(reqwest::Method::GET, &path, None, &params, None)
+            .await
+    }
+
+    pub async fn get_mod_file(
+        &self,
+        game_id: u64,
+        mod_id: u64,
+        file_id: u64,
+    ) -> Result<Modfile, ApiError> {
+        let path = format!("/games/{game_id}/mods/{mod_id}/files/{file_id}");
+        self.send(reqwest::Method::GET, &path, None, &[], None).await
+    }
+
     pub async fn get_mod_dependencies(
         &self,
         game_id: u64,
@@ -742,6 +788,28 @@ mod tests {
         assert_eq!(file.id, 42);
         assert_eq!(file.filesize, 10);
         assert_eq!(file.download.binary_url, "https://example.com/a.zip");
+    }
+
+    #[test]
+    fn modfile_null_string_fields_deserialize_to_empty() {
+        let file: Modfile = serde_json::from_str(
+            r#"{"id":7,"filename":"a.zip","version":null,"changelog":null,"download":{"binary_url":null}}"#,
+        )
+        .unwrap();
+        assert_eq!(file.version, "");
+        assert_eq!(file.changelog, "");
+        assert_eq!(file.download.binary_url, "");
+    }
+
+    #[test]
+    fn modfile_list_response_tolerates_null_fields() {
+        let list: ListResponse<Modfile> = serde_json::from_str(
+            r#"{"data":[{"id":1,"filename":"one.zip","version":null,"changelog":null,"download":null},{"id":2,"filename":"two.zip","version":"2.0","changelog":"fixes","download":{"binary_url":"https://example.com/two.zip"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(list.data.len(), 2);
+        assert_eq!(list.data[0].version, "");
+        assert_eq!(list.data[1].version, "2.0");
     }
 
     #[test]
