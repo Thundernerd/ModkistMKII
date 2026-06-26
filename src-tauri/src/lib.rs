@@ -32,6 +32,7 @@ mod game_process;
 mod logging;
 mod mod_api_cache;
 mod mod_download;
+mod modio_env;
 mod mod_install;
 pub mod modio_api;
 mod modio_client;

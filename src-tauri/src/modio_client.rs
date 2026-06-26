@@ -39,9 +39,7 @@ struct ModioConfig {
 
 impl ModioConfig {
     fn from_env() -> Self {
-        let game_id = std::env::var("MODIO_GAME_ID")
-            .ok()
-            .and_then(|value| value.trim().parse().ok());
+        let game_id = crate::modio_env::modio_game_id();
         let api_host = std::env::var("MODIO_API_HOST")
             .ok()
             .map(|value| value.trim().trim_start_matches("https://").to_string())
@@ -76,10 +74,7 @@ pub struct ModioState {
 
 impl ModioState {
     pub fn from_env() -> Self {
-        let api_key = std::env::var("MODIO_API_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let api_key = crate::modio_env::modio_api_key();
 
         Self {
             api_key,
