@@ -13,7 +13,7 @@ use serde::Deserialize;
 const PLATFORM_HEADER: &str = "windows";
 const DEFAULT_HOST: &str = "api.mod.io";
 const TEST_HOST: &str = "api.test.mod.io";
-const USER_AGENT: &str = concat!("ModkistMKII/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Modkist/", env!("CARGO_PKG_VERSION"));
 
 /// Minimum spacing between any two mod.io requests. mod.io enforces a global
 /// "too many requests in a short period" limiter (error_ref 11008) that trips on
