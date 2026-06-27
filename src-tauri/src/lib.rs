@@ -53,6 +53,7 @@ use game_detect::detect_game_paths_command;
 use game_launch::launch_game;
 use game_path::{game_path_status, set_game_path};
 use game_process::game_running_status;
+use logging::log_directory_path;
 use mod_install::{
     cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mod_records,
     list_installed_mods, refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
@@ -85,8 +86,6 @@ fn greet(name: &str) -> String {
 pub fn run() {
     dotenvy::dotenv().ok();
     dotenvy::from_filename("../.env").ok();
-    logging::init();
-    log::info!("Modkist starting");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -99,6 +98,16 @@ pub fn run() {
             let _ = webview.eval(RELOAD_IF_BLANK_JS);
         })
         .setup(|app| {
+            match logging::init(app.handle()) {
+                Ok(log_dir) => {
+                    log::info!("Modkist starting");
+                    log::info!("Writing logs to {}", log_dir.display());
+                }
+                Err(error) => {
+                    eprintln!("Failed to initialize file logging: {error}");
+                }
+            }
+
             let state = ModioState::from_env();
             if let Err(error) = state.restore_from_store(app.handle()) {
                 log::warn!("Failed to restore mod.io session: {error}");
@@ -115,6 +124,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            log_directory_path,
             modio_status,
             get_mod_tag_options,
             list_mods,

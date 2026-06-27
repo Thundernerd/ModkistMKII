@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
+import { invoke } from "~/utils/tauri";
 import { BEPINEX_REQUIRED_VERSION, useBepInEx } from "~/composables/useBepInEx";
 
 definePageMeta({ layout: "app" });
@@ -164,6 +166,22 @@ const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
 
 const savingAutoUpdate = ref(false);
 const autoUpdateError = ref("");
+const openingLogsFolder = ref(false);
+const logsFolderError = ref("");
+
+async function openLogsFolder() {
+  openingLogsFolder.value = true;
+  logsFolderError.value = "";
+
+  try {
+    const logDir = await invoke<string>("log_directory_path");
+    await revealItemInDir(logDir);
+  } catch (err) {
+    logsFolderError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    openingLogsFolder.value = false;
+  }
+}
 
 async function handleAutoUpdateToggle() {
   const next = !autoUpdateMods.value;
@@ -266,6 +284,22 @@ function profileKindLabel(kind: string) {
         Folder that contains <code>zeepkist.exe</code>.
       </p>
       <GamePathForm input-id="settings-game-path" />
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Logs</h2>
+      <p class="hint panel-desc">
+        Modkist writes rotating log files here for troubleshooting.
+      </p>
+      <button
+        type="button"
+        class="btn-secondary"
+        :disabled="openingLogsFolder"
+        @click="openLogsFolder"
+      >
+        {{ openingLogsFolder ? "Opening…" : "Open logs folder" }}
+      </button>
+      <p v-if="logsFolderError" class="error feedback">{{ logsFolderError }}</p>
     </section>
 
     <section class="panel">
