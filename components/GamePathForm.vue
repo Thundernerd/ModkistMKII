@@ -10,12 +10,10 @@ const props = withDefaults(
   defineProps<{
     submitLabel?: string;
     inputId?: string;
-    autoDetectOnMount?: boolean;
   }>(),
   {
     submitLabel: "Save",
     inputId: "game-path",
-    autoDetectOnMount: false,
   },
 );
 
@@ -32,6 +30,12 @@ const detecting = ref(false);
 const error = ref("");
 const hint = ref("");
 const candidates = ref<GamePathCandidate[]>([]);
+const showManualEntry = ref(false);
+
+const busy = computed(() => loading.value || detecting.value);
+const showPathField = computed(
+  () => showManualEntry.value || candidates.value.length > 0 || !!path.value,
+);
 
 function applyCandidate(candidate: GamePathCandidate) {
   path.value = candidate.path;
@@ -51,10 +55,10 @@ function applyDetectionResults(found: GamePathCandidate[]) {
     return;
   }
 
-  hint.value = "No Zeepkist install found. Browse to your game folder.";
+  hint.value = "No Zeepkist install found. Try browsing to your game folder manually.";
 }
 
-async function runAutoDetect() {
+async function runDetect() {
   detecting.value = true;
   error.value = "";
 
@@ -67,8 +71,12 @@ async function runAutoDetect() {
   }
 }
 
-async function browseFolder() {
+async function browseManually() {
   error.value = "";
+  showManualEntry.value = true;
+  candidates.value = [];
+  hint.value = "";
+
   const selected = await open({
     directory: true,
     multiple: false,
@@ -77,8 +85,6 @@ async function browseFolder() {
 
   if (typeof selected === "string") {
     path.value = selected;
-    candidates.value = [];
-    hint.value = "";
   }
 }
 
@@ -107,67 +113,79 @@ onMounted(async () => {
   await refreshGamePathStatus();
   if (gamePathStatus.value.path) {
     path.value = gamePathStatus.value.path;
-    return;
-  }
-
-  if (props.autoDetectOnMount) {
-    await runAutoDetect();
+    showManualEntry.value = true;
   }
 });
 </script>
 
 <template>
   <form class="game-path-form" @submit.prevent="submitPath">
-    <label :for="inputId">Game directory</label>
-    <div class="path-row">
-      <input
-        :id="inputId"
-        v-model="path"
-        type="text"
-        placeholder="/path/to/Zeepkist"
-        :disabled="loading || detecting"
-      />
-      <button
-        type="button"
-        class="btn-secondary browse-button"
-        :disabled="loading || detecting"
-        @click="browseFolder"
-      >
-        Browse…
-      </button>
-    </div>
-
-    <div class="action-row">
-      <button type="submit" :disabled="loading || detecting">
-        {{ loading ? "Saving…" : submitLabel }}
+    <div v-if="!showPathField" class="choice-actions">
+      <button type="button" :disabled="busy" @click="runDetect">
+        {{ detecting ? "Detecting…" : "Detect Zeepkist installation…" }}
       </button>
       <button
         type="button"
         class="btn-secondary"
-        :disabled="loading || detecting"
-        @click="runAutoDetect"
+        :disabled="busy"
+        @click="browseManually"
       >
-        {{ detecting ? "Detecting…" : "Auto-detect" }}
+        Browse path manually
       </button>
     </div>
 
-    <div v-if="candidates.length > 1" class="candidate-list">
-      <p class="hint candidate-label">Detected installs</p>
-      <button
-        v-for="candidate in candidates"
-        :key="candidate.path"
-        type="button"
-        class="candidate-button"
-        :disabled="loading || detecting"
-        @click="applyCandidate(candidate)"
-      >
-        <span class="candidate-path">{{ candidate.path }}</span>
-        <span class="candidate-source">{{ candidate.source }}</span>
+    <template v-else>
+      <label :for="inputId">Game directory</label>
+      <div class="path-row">
+        <input
+          :id="inputId"
+          v-model="path"
+          type="text"
+          placeholder="/path/to/Zeepkist"
+          :disabled="busy"
+        />
+        <button
+          type="button"
+          class="btn-secondary browse-button"
+          :disabled="busy"
+          @click="browseManually"
+        >
+          Browse…
+        </button>
+      </div>
+
+      <div v-if="candidates.length > 1" class="candidate-list">
+        <p class="hint candidate-label">Detected installs</p>
+        <button
+          v-for="candidate in candidates"
+          :key="candidate.path"
+          type="button"
+          class="candidate-button"
+          :disabled="busy"
+          @click="applyCandidate(candidate)"
+        >
+          <span class="candidate-path">{{ candidate.path }}</span>
+          <span class="candidate-source">{{ candidate.source }}</span>
+        </button>
+      </div>
+
+      <button type="submit" :disabled="busy">
+        {{ loading ? "Saving…" : submitLabel }}
       </button>
-    </div>
+
+      <button
+        v-if="!showManualEntry && candidates.length > 0"
+        type="button"
+        class="btn-secondary detect-again-button"
+        :disabled="busy"
+        @click="runDetect"
+      >
+        {{ detecting ? "Detecting…" : "Detect again" }}
+      </button>
+    </template>
 
     <p v-if="hint && !error" class="hint status-hint">{{ hint }}</p>
-    <p v-else-if="gamePathStatus.message && !error" class="hint status-hint">
+    <p v-else-if="gamePathStatus.message && !error && showPathField" class="hint status-hint">
       {{ gamePathStatus.message }}
     </p>
     <p v-if="error" class="error">{{ error }}</p>
@@ -179,6 +197,16 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.choice-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.choice-actions button {
+  width: 100%;
 }
 
 label {
@@ -203,10 +231,8 @@ label {
   flex-shrink: 0;
 }
 
-.action-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+.detect-again-button {
+  width: 100%;
 }
 
 .candidate-list {

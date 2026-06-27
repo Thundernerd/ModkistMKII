@@ -30,16 +30,10 @@ onMounted(async () => {
         <h1>Locate Zeepkist</h1>
       </div>
 
-      <p class="hint setup-intro">
-        Point Modkist to the folder that contains
-        <code>zeepkist.exe</code>.
-      </p>
-
       <section class="panel">
         <GamePathForm
           input-id="setup-game-path"
           submit-label="Continue"
-          auto-detect-on-mount
           @saved="onPathSaved"
         />
       </section>
@@ -88,16 +82,6 @@ onMounted(async () => {
   font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-}
-
-.setup-intro {
-  text-align: center;
-  margin: 0 0 1.25rem;
-}
-
-.setup-intro code {
-  color: var(--modio-text);
-  font-size: 0.85em;
 }
 
 .panel {
