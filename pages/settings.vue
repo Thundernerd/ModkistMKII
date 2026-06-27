@@ -14,6 +14,13 @@ const {
   verifyBepInEx,
   reinstallBepInEx,
 } = useBepInEx();
+const {
+  autoUpdateMods,
+  ignoreBepInExVersionWarning,
+  settingsReady,
+  refreshAppSettings,
+  setAutoUpdateMods,
+} = useAppSettings();
 
 const verifyMessage = ref("");
 const verifyTone = ref<"info" | "success" | "error" | "warn">("info");
@@ -43,7 +50,7 @@ const statusClass = computed(() => {
     case "installed":
       return "status-ok";
     case "wrongVersion":
-      return "status-warn";
+      return ignoreBepInExVersionWarning.value ? "status-ok" : "status-warn";
     default:
       return "status-bad";
   }
@@ -81,6 +88,16 @@ async function verifyBepInExInstall() {
     }
 
     if (status.state === "wrongVersion") {
+      if (ignoreBepInExVersionWarning.value) {
+        setVerifyResult(
+          "info",
+          status.foundVersion
+            ? `BepInEx ${status.foundVersion} is installed. Version warnings are suppressed.`
+            : `A different BepInEx version is installed. Version warnings are suppressed.`,
+        );
+        return;
+      }
+
       setVerifyResult(
         "error",
         status.message ||
@@ -144,12 +161,6 @@ const {
   deleteProfile,
 } = useProfiles();
 const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
-const {
-  autoUpdateMods,
-  settingsReady,
-  refreshAppSettings,
-  setAutoUpdateMods,
-} = useAppSettings();
 
 const savingAutoUpdate = ref(false);
 const autoUpdateError = ref("");

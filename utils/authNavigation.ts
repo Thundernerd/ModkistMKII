@@ -1,5 +1,6 @@
 import { invoke } from "~/utils/tauri";
 import type { AuthStatus } from "~/composables/useModioAuth";
+import type { AppSettings } from "~/composables/useAppSettings";
 import type { BepInExStatus } from "~/composables/useBepInEx";
 import type { GamePathStatus } from "~/composables/useGamePath";
 
@@ -25,8 +26,17 @@ async function resolveDestination(redirect?: string): Promise<string> {
   return auth.loggedIn ? destination : "/home";
 }
 
-function needsBepInExOnboarding(status: BepInExStatus) {
-  return status.state === "missing" || status.state === "wrongVersion";
+async function needsBepInExOnboarding(status: BepInExStatus) {
+  if (status.state === "missing") {
+    return true;
+  }
+
+  if (status.state === "wrongVersion") {
+    const settings = await invoke<AppSettings>("get_app_settings");
+    return !settings.ignoreBepInExVersionWarning;
+  }
+
+  return false;
 }
 
 export function readRedirectParam(value: unknown): string | undefined {
@@ -45,7 +55,7 @@ export async function navigateToApp(redirect?: string) {
   }
 
   const bepinex = await invoke<BepInExStatus>("bepinex_status");
-  if (needsBepInExOnboarding(bepinex)) {
+  if (await needsBepInExOnboarding(bepinex)) {
     await navigateTo(bepinexRoute(redirect));
     return;
   }

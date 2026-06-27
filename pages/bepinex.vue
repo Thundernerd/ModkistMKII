@@ -16,6 +16,8 @@ const {
   refreshBepInExStatus,
   installBepInEx,
 } = useBepInEx();
+const { refreshAppSettings, ignoreBepInExVersionWarning, setIgnoreBepInExVersionWarning } =
+  useAppSettings();
 
 const redirect = computed(() => readRedirectParam(route.query.redirect));
 const phase = ref<"checking" | "installing" | "warning" | "wineWarning" | "error">(
@@ -25,6 +27,8 @@ const phase = ref<"checking" | "installing" | "warning" | "wineWarning" | "error
 const wineFeedback = computed(() =>
   wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
 );
+const dontShowVersionWarningAgain = ref(false);
+const savingPreference = ref(false);
 
 async function runInstall() {
   phase.value = "installing";
@@ -52,6 +56,11 @@ async function handleStatus() {
   }
 
   if (status.state === "wrongVersion") {
+    if (ignoreBepInExVersionWarning.value) {
+      await continueAnyway();
+      return;
+    }
+
     phase.value = "warning";
     return;
   }
@@ -60,7 +69,20 @@ async function handleStatus() {
 }
 
 async function continueAnyway() {
-  await continuePastBepInEx(redirect.value);
+  savingPreference.value = true;
+  error.value = "";
+
+  try {
+    if (dontShowVersionWarningAgain.value) {
+      await setIgnoreBepInExVersionWarning(true);
+    }
+    await continuePastBepInEx(redirect.value);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+    phase.value = "error";
+  } finally {
+    savingPreference.value = false;
+  }
 }
 
 async function continueAfterWineWarning() {
@@ -78,6 +100,7 @@ async function retry() {
 }
 
 onMounted(async () => {
+  await refreshAppSettings().catch(() => {});
   await refreshBepInExStatus();
   if (error.value) {
     phase.value = "error";
@@ -121,8 +144,21 @@ onMounted(async () => {
           <p v-if="bepinexStatus.foundVersion" class="meta">
             Detected version: {{ bepinexStatus.foundVersion }}
           </p>
-          <button type="button" class="continue-button" @click="continueAnyway">
-            Continue anyway
+          <label class="warning-option">
+            <input
+              v-model="dontShowVersionWarningAgain"
+              type="checkbox"
+              :disabled="savingPreference"
+            />
+            <span>Don't show this warning again</span>
+          </label>
+          <button
+            type="button"
+            class="continue-button"
+            :disabled="savingPreference"
+            @click="continueAnyway"
+          >
+            {{ savingPreference ? "Continuing…" : "Continue anyway" }}
           </button>
         </div>
 
@@ -234,6 +270,22 @@ onMounted(async () => {
 
 .meta {
   margin: 0 0 1rem;
+}
+
+.warning-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  margin: 0 0 1rem;
+  color: var(--modio-text);
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.warning-option input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: var(--modio-accent);
 }
 
 .continue-button,
