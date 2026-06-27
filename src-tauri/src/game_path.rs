@@ -5,8 +5,9 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 pub const GAME_STORE_PATH: &str = "zeepkist-game.json";
+pub const STEAM_APP_ID: &str = "1440670";
+pub const GAME_EXECUTABLE: &str = "zeepkist.exe";
 const GAME_DIRECTORY_KEY: &str = "gameDirectoryPath";
-const GAME_EXECUTABLE: &str = "zeepkist.exe";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,7 +18,7 @@ pub struct GamePathStatus {
     pub message: Option<String>,
 }
 
-fn validate_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_directory(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err("This directory does not exist.".into());
     }

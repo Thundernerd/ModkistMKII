@@ -27,6 +27,7 @@ mod wine_prefix;
 mod app_settings;
 mod auth;
 mod bepinex;
+mod game_detect;
 mod game_launch;
 mod game_path;
 mod game_process;
@@ -43,6 +44,7 @@ mod zip_extract;
 use app_settings::{get_app_settings, set_auto_update_mods};
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
+use game_detect::detect_game_paths_command;
 use game_launch::launch_game;
 use game_path::{game_path_status, set_game_path};
 use game_process::game_running_status;
@@ -122,6 +124,7 @@ pub fn run() {
             logout,
             game_path_status,
             set_game_path,
+            detect_game_paths_command,
             get_app_settings,
             set_auto_update_mods,
             game_running_status,

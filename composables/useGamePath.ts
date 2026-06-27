@@ -7,6 +7,11 @@ export interface GamePathStatus {
   message?: string;
 }
 
+export interface GamePathCandidate {
+  path: string;
+  source: string;
+}
+
 const gamePathStatus = ref<GamePathStatus>({
   configured: false,
   valid: false,
@@ -23,9 +28,14 @@ export function useGamePath() {
     });
   }
 
+  async function detectGamePaths() {
+    return invoke<GamePathCandidate[]>("detect_game_paths_command");
+  }
+
   return {
     gamePathStatus,
     refreshGamePathStatus,
     setGamePath,
+    detectGamePaths,
   };
 }

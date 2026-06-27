@@ -39,6 +39,7 @@ onMounted(async () => {
         <GamePathForm
           input-id="setup-game-path"
           submit-label="Continue"
+          auto-detect-on-mount
           @saved="onPathSaved"
         />
       </section>

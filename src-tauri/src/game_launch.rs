@@ -6,11 +6,11 @@ use std::process::{Command, Stdio};
 use tauri::AppHandle;
 
 use crate::game_path::game_directory;
+use crate::game_path::GAME_EXECUTABLE;
 use crate::game_process::is_zeepkist_running;
 
 #[cfg(any(windows, target_os = "linux"))]
-const STEAM_APP_ID: &str = "1440670";
-const GAME_EXECUTABLE: &str = "zeepkist.exe";
+use crate::game_path::STEAM_APP_ID;
 
 fn spawn_detached(command: &mut Command) -> Result<(), String> {
     command
