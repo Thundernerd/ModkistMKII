@@ -30,8 +30,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Require at least one platform
         if: ${{ !inputs.macos && !inputs.windows && !inputs.linux }}
@@ -39,27 +41,35 @@ jobs:
           echo "::error::Select at least one platform to build."
           exit 1
 
+      - name: Build platform matrix
+        id: set-matrix
+        env:
+          MACOS: ${{ inputs.macos }}
+          WINDOWS: ${{ inputs.windows }}
+          LINUX: ${{ inputs.linux }}
+        run: |
+          matrix=$(jq -n \
+            --arg macos "$MACOS" \
+            --arg windows "$WINDOWS" \
+            --arg linux "$LINUX" \
+            '
+            {include: (
+              [
+                (if $macos == "true" then {os:"macos-latest", platform:"macos-universal", tauri_args:"--target universal-apple-darwin"} else empty end),
+                (if $windows == "true" then {os:"windows-latest", platform:"windows", tauri_args:"--bundles msi"} else empty end),
+                (if $linux == "true" then {os:"ubuntu-22.04", platform:"linux", tauri_args:""} else empty end)
+              ]
+            )}
+            ')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.platform }}
-    needs: validate
-    if: ${{ matrix.build }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            platform: macos-universal
-            tauri_args: --target universal-apple-darwin
-            build: ${{ inputs.macos }}
-          - os: windows-latest
-            platform: windows
-            tauri_args: --bundles msi
-            build: ${{ inputs.windows }}
-          - os: ubuntu-22.04
-            platform: linux
-            tauri_args: ""
-            build: ${{ inputs.linux }}
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
 
     steps:
       - name: Checkout
