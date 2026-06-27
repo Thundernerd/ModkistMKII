@@ -20,12 +20,15 @@ export function useModioAuth() {
 
   async function logout() {
     logger.info("Logging out");
-    await invoke("logout");
-    const { resetSessionSync } = useModInstall();
+    const { resetSessionSync, cancelSubscriptionSync } = useModInstall();
     const { refreshProfiles } = useProfiles();
+    await cancelSubscriptionSync().catch(() => {});
+    await invoke("logout");
     resetSessionSync();
     await refreshAuthStatus();
-    await refreshProfiles();
+    await refreshProfiles().catch((err) => {
+      logger.debug("Could not refresh profiles after logout", err);
+    });
   }
 
   async function checkLogoutRequiresProfileSelection() {

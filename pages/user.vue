@@ -13,7 +13,7 @@ const {
   logoutPickerProfiles,
   refreshProfiles,
 } = useProfiles();
-const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
+const { resetStartupUpdateCheck } = useModInstall();
 
 const profilePickerOpen = ref(false);
 const logoutError = ref("");
@@ -39,10 +39,9 @@ async function handleLogoutProfileSelect(profileId: string) {
   logoutError.value = "";
   try {
     await switchProfile(profileId);
-    resetStartupUpdateCheck();
-    await refreshInstalled();
     profilePickerOpen.value = false;
     await completeLogout();
+    resetStartupUpdateCheck();
     await navigateTo("/");
   } catch (err) {
     logoutError.value = err instanceof Error ? err.message : String(err);
@@ -70,12 +69,9 @@ onMounted(async () => {
       Loading profile…
     </div>
 
-    <p v-else-if="error" class="error">{{ error }}</p>
-    <p v-if="logoutError" class="error">{{ logoutError }}</p>
-
-    <template v-else-if="profile">
+    <template v-else-if="authStatus.loggedIn">
       <section class="profile-card panel">
-        <div class="profile-header">
+        <div v-if="profile" class="profile-header">
           <img
             v-if="profile.avatarUrl"
             :src="profile.avatarUrl"
@@ -95,12 +91,24 @@ onMounted(async () => {
             </a>
           </div>
         </div>
+        <div v-else class="profile-header">
+          <div class="profile-avatar profile-avatar--fallback" />
+          <div>
+            <h2 class="profile-name">{{ authStatus.username ?? "Account" }}</h2>
+            <p v-if="error" class="hint profile-warning">
+              Profile details could not be loaded right now.
+            </p>
+          </div>
+        </div>
         <button type="button" class="btn-secondary logout-button" @click="handleLogout">
           Log out
         </button>
       </section>
 
-      <section class="user-mods">
+      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="logoutError" class="error">{{ logoutError }}</p>
+
+      <section v-if="profile" class="user-mods">
         <h2 class="section-title">Your mods</h2>
         <p v-if="userMods.total" class="meta mods-count">
           {{ userMods.total }} mod{{ userMods.total === 1 ? "" : "s" }} for this game
@@ -186,6 +194,10 @@ onMounted(async () => {
 .profile-link {
   font-size: 0.9rem;
   color: var(--modio-accent);
+}
+
+.profile-warning {
+  margin: 0.35rem 0 0;
 }
 
 .logout-button {
