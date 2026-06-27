@@ -24,9 +24,13 @@ pub fn detect_game_paths() -> Vec<GamePathCandidate> {
         }
     }
 
-    for root in prefix_scan_roots() {
-        for path in find_zeepkist_dirs_in_tree(&root, 12) {
-            push_candidate(&mut candidates, &mut seen, path, "Wine prefix");
+    // Wine/CrossOver prefix trees can be huge; only scan them when Steam
+    // did not already find a valid install.
+    if candidates.is_empty() {
+        for root in prefix_scan_roots() {
+            for path in find_zeepkist_dirs_in_tree(&root, 8) {
+                push_candidate(&mut candidates, &mut seen, path, "Wine prefix");
+            }
         }
     }
 
@@ -247,8 +251,11 @@ fn walk_for_zeepkist(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
 }
 
 #[tauri::command]
-pub fn detect_game_paths_command() -> Vec<GamePathCandidate> {
-    let candidates = detect_game_paths();
+pub async fn detect_game_paths_command() -> Result<Vec<GamePathCandidate>, String> {
+    let candidates = tokio::task::spawn_blocking(detect_game_paths)
+        .await
+        .map_err(|error| format!("Game detection failed: {error}"))?;
+
     log::info!(
         "Detected {} Zeepkist install candidate(s)",
         candidates.len()
@@ -260,7 +267,7 @@ pub fn detect_game_paths_command() -> Vec<GamePathCandidate> {
             candidate.path
         );
     }
-    candidates
+    Ok(candidates)
 }
 
 #[cfg(test)]
