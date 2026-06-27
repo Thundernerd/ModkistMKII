@@ -2,10 +2,10 @@
 //!
 //! Replaces the `modio` crate so we control headers, error handling, logging
 //! and rate-limit behavior directly. All requests target a single host
-//! (`https://g-{game_id}.modapi.io/v1` by default). Reads use the game
-//! `api_key` query param; OAuth reads/writes use a bearer token. Mod metadata,
-//! dependencies, and file downloads for private mods require the user's OAuth
-//! token when they are logged in.
+//! (`https://g-{game_id}.modapi.io/v1` by default). Mod metadata and dependency
+//! reads try the game `api_key` first; when that fails and a bearer token is
+//! available, the same request is retried with OAuth (e.g. private subscribed
+//! mods). Other OAuth-only endpoints always use the bearer token.
 
 use std::time::{Duration, Instant};
 
@@ -514,6 +514,12 @@ impl ApiClient {
         self.send_raw(method, path, token, &[], None).await.map(|_| ())
     }
 
+    /// When an api-key read fails, retry with OAuth unless mod.io is rate
+    /// limiting us (a bearer retry would just consume more quota).
+    fn should_retry_with_bearer(error: &ApiError) -> bool {
+        !error.is_rate_limited()
+    }
+
     pub async fn get_mods(
         &self,
         game_id: u64,
@@ -531,8 +537,18 @@ impl ApiClient {
         token: Option<&str>,
     ) -> Result<ModObject, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}");
-        self.send(reqwest::Method::GET, &path, token, &[], None)
+        match self
+            .send::<ModObject>(reqwest::Method::GET, &path, None, &[], None)
             .await
+        {
+            Ok(mod_) => Ok(mod_),
+            Err(error) if token.is_some() && Self::should_retry_with_bearer(&error) => {
+                log::debug!("get_mod {mod_id} failed with api key, retrying with bearer token");
+                self.send(reqwest::Method::GET, &path, token, &[], None)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn get_mod_files(
@@ -569,8 +585,20 @@ impl ApiClient {
         token: Option<&str>,
     ) -> Result<ListResponse<DependencyObject>, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/dependencies");
-        self.send(reqwest::Method::GET, &path, token, &[], None)
+        match self
+            .send::<ListResponse<DependencyObject>>(reqwest::Method::GET, &path, None, &[], None)
             .await
+        {
+            Ok(list) => Ok(list),
+            Err(error) if token.is_some() && Self::should_retry_with_bearer(&error) => {
+                log::debug!(
+                    "get_mod_dependencies {mod_id} failed with api key, retrying with bearer token"
+                );
+                self.send(reqwest::Method::GET, &path, token, &[], None)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn get_game_tags(
