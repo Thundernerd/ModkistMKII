@@ -20,11 +20,42 @@ pub async fn download_modfile(
     expected_size: Option<u64>,
 ) -> Result<(), String> {
     log::info!("Downloading mod file to {}", destination.display());
-    let api_key = state.api_key()?;
-    // Always use the game API key for file downloads so traffic stays on the
-    // unlimited game-key tier instead of OAuth (120 reads/min).
-    let request_url = with_api_key(download_url, api_key);
 
+    if let Some(token) = state.session_token() {
+        if let Ok(()) = download_with_bearer(download_url, destination, expected_size, &token).await
+        {
+            return Ok(());
+        }
+        log::debug!("OAuth mod download failed, retrying with game API key");
+    }
+
+    let api_key = state.api_key()?;
+    let request_url = with_api_key(download_url, api_key);
+    download_with_api_key(&request_url, destination, expected_size).await
+}
+
+async fn download_with_bearer(
+    download_url: &str,
+    destination: &Path,
+    expected_size: Option<u64>,
+    token: &str,
+) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .get(download_url)
+        .header("X-Modio-Platform", PLATFORM_HEADER)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mod download request failed: {e}"))?;
+
+    write_download_response(response, destination, expected_size).await
+}
+
+async fn download_with_api_key(
+    request_url: &str,
+    destination: &Path,
+    expected_size: Option<u64>,
+) -> Result<(), String> {
     let response = reqwest::Client::new()
         .get(request_url)
         .header("X-Modio-Platform", PLATFORM_HEADER)
@@ -32,6 +63,14 @@ pub async fn download_modfile(
         .await
         .map_err(|e| format!("Mod download request failed: {e}"))?;
 
+    write_download_response(response, destination, expected_size).await
+}
+
+async fn write_download_response(
+    response: reqwest::Response,
+    destination: &Path,
+    expected_size: Option<u64>,
+) -> Result<(), String> {
     let status = response.status();
     let bytes = response
         .bytes()
