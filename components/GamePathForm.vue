@@ -21,18 +21,19 @@ const emit = defineEmits<{
   saved: [];
 }>();
 
-const { gamePathStatus, refreshGamePathStatus, setGamePath, detectGamePaths } =
+const { gamePathStatus, refreshGamePathStatus, setGamePath, detectGamePaths, openGameFolder } =
   useGamePath();
 
 const path = ref("");
 const loading = ref(false);
 const detecting = ref(false);
+const openingFolder = ref(false);
 const error = ref("");
 const hint = ref("");
 const candidates = ref<GamePathCandidate[]>([]);
 const showManualEntry = ref(false);
 
-const busy = computed(() => loading.value || detecting.value);
+const busy = computed(() => loading.value || detecting.value || openingFolder.value);
 const showPathField = computed(
   () => showManualEntry.value || candidates.value.length > 0 || !!path.value,
 );
@@ -106,6 +107,19 @@ async function submitPath() {
     error.value = String(err);
   } finally {
     loading.value = false;
+  }
+}
+
+async function openFolder() {
+  openingFolder.value = true;
+  error.value = "";
+
+  try {
+    await openGameFolder();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    openingFolder.value = false;
   }
 }
 
@@ -188,6 +202,17 @@ onMounted(async () => {
     <p v-else-if="gamePathStatus.message && !error && showPathField" class="hint status-hint">
       {{ gamePathStatus.message }}
     </p>
+
+    <button
+      v-if="gamePathStatus.valid && gamePathStatus.path"
+      type="button"
+      class="btn-secondary open-folder-button"
+      :disabled="busy"
+      @click="openFolder"
+    >
+      {{ openingFolder ? "Opening…" : "Open game folder" }}
+    </button>
+
     <p v-if="error" class="error">{{ error }}</p>
   </form>
 </template>
@@ -231,7 +256,8 @@ label {
   flex-shrink: 0;
 }
 
-.detect-again-button {
+.detect-again-button,
+.open-folder-button {
   width: 100%;
 }
 

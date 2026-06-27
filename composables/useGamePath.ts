@@ -1,4 +1,5 @@
 import { invoke } from "~/utils/tauri";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 export interface GamePathStatus {
   configured: boolean;
@@ -32,10 +33,24 @@ export function useGamePath() {
     return invoke<GamePathCandidate[]>("detect_game_paths_command");
   }
 
+  async function openGameFolder() {
+    await refreshGamePathStatus();
+    const status = gamePathStatus.value;
+
+    if (!status.valid || !status.path) {
+      throw new Error(
+        status.message ?? "Select a valid Zeepkist game directory first.",
+      );
+    }
+
+    await revealItemInDir(status.path);
+  }
+
   return {
     gamePathStatus,
     refreshGamePathStatus,
     setGamePath,
     detectGamePaths,
+    openGameFolder,
   };
 }
