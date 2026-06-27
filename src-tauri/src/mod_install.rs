@@ -159,10 +159,6 @@ fn parse_folder_name(name: &str) -> Option<(u64, u64)> {
     Some((mod_part.parse().ok()?, file_part.parse().ok()?))
 }
 
-fn is_valid_install_folder_name(name: &str) -> bool {
-    parse_folder_name(name).is_some()
-}
-
 fn mod_kind_from_tags(tags: &[String]) -> Result<InstalledModKind, String> {
     let has_plugin = tags.iter().any(|tag| tag == PLUGIN_TAG);
     let has_blueprint = tags.iter().any(|tag| tag == BLUEPRINT_TAG);
@@ -1101,12 +1097,12 @@ mod tests {
 
     #[test]
     fn rejects_malformed_folder_names() {
-        assert!(!is_valid_install_folder_name("invalid"));
-        assert!(!is_valid_install_folder_name("12345"));
-        assert!(!is_valid_install_folder_name("12345_"));
-        assert!(!is_valid_install_folder_name("_67890"));
-        assert!(!is_valid_install_folder_name("12345_abc"));
-        assert!(is_valid_install_folder_name("12345_67890"));
+        assert_eq!(parse_folder_name("invalid"), None);
+        assert_eq!(parse_folder_name("12345"), None);
+        assert_eq!(parse_folder_name("12345_"), None);
+        assert_eq!(parse_folder_name("_67890"), None);
+        assert_eq!(parse_folder_name("12345_abc"), None);
+        assert_eq!(parse_folder_name("12345_67890"), Some((12345, 67890)));
     }
 
     #[test]
