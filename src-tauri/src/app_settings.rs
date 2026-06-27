@@ -31,6 +31,10 @@ fn read_ignore_bepinex_version_warning(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+pub fn ignore_bepinex_version_warning_enabled(app: &AppHandle) -> bool {
+    read_ignore_bepinex_version_warning(app)
+}
+
 fn app_settings_for(app: &AppHandle) -> AppSettings {
     AppSettings {
         auto_update_mods: auto_update_mods_enabled(app),
@@ -60,6 +64,11 @@ pub fn get_app_settings(app: AppHandle) -> AppSettings {
 }
 
 #[tauri::command]
+pub fn get_ignore_bepinex_version_warning_enabled(app: AppHandle) -> bool {
+    ignore_bepinex_version_warning_enabled(&app)
+}
+
+#[tauri::command]
 pub fn set_auto_update_mods(app: AppHandle, enabled: bool) -> Result<AppSettings, String> {
     let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
     store.set(AUTO_UPDATE_MODS_KEY, serde_json::json!(enabled));
@@ -86,6 +95,18 @@ pub fn set_ignore_bepinex_version_warning(
         "BepInEx version warning {}",
         if enabled { "suppressed" } else { "enabled" }
     );
+    Ok(app_settings_for(&app))
+}
+
+#[tauri::command]
+pub fn remember_ignore_bepinex_version_warning(app: AppHandle) -> Result<AppSettings, String> {
+    let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
+    store.set(
+        IGNORE_BEPINEX_VERSION_WARNING_KEY,
+        serde_json::json!(true),
+    );
+    store.save().map_err(|e| e.to_string())?;
+    log::info!("BepInEx version warning suppressed for future launches");
     Ok(app_settings_for(&app))
 }
 

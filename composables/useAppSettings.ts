@@ -41,6 +41,18 @@ export function useAppSettings() {
     return settings;
   }
 
+  async function rememberIgnoreBepInExVersionWarning() {
+    const settings = await invoke<AppSettings>(
+      "remember_ignore_bepinex_version_warning",
+    );
+    syncSettings(settings);
+    return settings;
+  }
+
+  async function isBepInExVersionWarningSuppressed() {
+    return invoke<boolean>("get_ignore_bepinex_version_warning_enabled");
+  }
+
   async function rememberSkipSignIn() {
     const settings = await invoke<AppSettings>("remember_skip_sign_in");
     syncSettings(settings);
@@ -55,6 +67,8 @@ export function useAppSettings() {
     refreshAppSettings,
     setAutoUpdateMods,
     setIgnoreBepInExVersionWarning,
+    rememberIgnoreBepInExVersionWarning,
+    isBepInExVersionWarningSuppressed,
     rememberSkipSignIn,
   };
 }

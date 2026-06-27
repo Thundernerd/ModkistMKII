@@ -1,6 +1,5 @@
 import { invoke } from "~/utils/tauri";
 import type { AuthStatus } from "~/composables/useModioAuth";
-import type { AppSettings } from "~/composables/useAppSettings";
 import type { BepInExStatus } from "~/composables/useBepInEx";
 import type { GamePathStatus } from "~/composables/useGamePath";
 
@@ -32,8 +31,10 @@ async function needsBepInExOnboarding(status: BepInExStatus) {
   }
 
   if (status.state === "wrongVersion") {
-    const settings = await invoke<AppSettings>("get_app_settings");
-    return !settings.ignoreBepInExVersionWarning;
+    const suppressed = await invoke<boolean>(
+      "get_ignore_bepinex_version_warning_enabled",
+    );
+    return !suppressed;
   }
 
   return false;

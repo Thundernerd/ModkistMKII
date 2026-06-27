@@ -16,8 +16,10 @@ const {
   refreshBepInExStatus,
   installBepInEx,
 } = useBepInEx();
-const { refreshAppSettings, ignoreBepInExVersionWarning, setIgnoreBepInExVersionWarning } =
-  useAppSettings();
+const {
+  rememberIgnoreBepInExVersionWarning,
+  isBepInExVersionWarningSuppressed,
+} = useAppSettings();
 
 const redirect = computed(() => readRedirectParam(route.query.redirect));
 const phase = ref<"checking" | "installing" | "warning" | "wineWarning" | "error">(
@@ -56,8 +58,8 @@ async function handleStatus() {
   }
 
   if (status.state === "wrongVersion") {
-    if (ignoreBepInExVersionWarning.value) {
-      await continueAnyway();
+    if (await isBepInExVersionWarningSuppressed()) {
+      await continuePastBepInEx(redirect.value);
       return;
     }
 
@@ -74,7 +76,7 @@ async function continueAnyway() {
 
   try {
     if (dontShowVersionWarningAgain.value) {
-      await setIgnoreBepInExVersionWarning(true);
+      await rememberIgnoreBepInExVersionWarning();
     }
     await continuePastBepInEx(redirect.value);
   } catch (err) {
@@ -100,7 +102,6 @@ async function retry() {
 }
 
 onMounted(async () => {
-  await refreshAppSettings().catch(() => {});
   await refreshBepInExStatus();
   if (error.value) {
     phase.value = "error";
