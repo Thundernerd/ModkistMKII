@@ -22,6 +22,7 @@ const {
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const { authStatus, refreshAuthStatus } = useModioAuth();
+const { rememberSkipSignIn } = useAppSettings();
 const { resetSessionSync } = useModInstall();
 const { refreshProfiles } = useProfiles();
 
@@ -67,8 +68,9 @@ async function resendCode() {
   await sendCode();
 }
 
-function skipLogin() {
-  void navigateToApp();
+async function skipLogin() {
+  await rememberSkipSignIn();
+  await navigateToApp(redirect.value);
 }
 
 async function verifyCode() {
@@ -104,6 +106,13 @@ onMounted(async () => {
     await navigateToApp(redirect.value);
     return;
   }
+
+  const settings = await invoke<{ skipSignIn: boolean }>("get_app_settings");
+  if (settings.skipSignIn) {
+    await navigateToApp(redirect.value);
+    return;
+  }
+
   await refreshModioStatus();
 });
 </script>

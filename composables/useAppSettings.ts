@@ -2,15 +2,18 @@ import { invoke } from "~/utils/tauri";
 
 export interface AppSettings {
   autoUpdateMods: boolean;
+  skipSignIn: boolean;
 }
 
 const autoUpdateMods = ref(true);
+const skipSignIn = ref(false);
 const settingsReady = ref(false);
 
 export function useAppSettings() {
   async function refreshAppSettings() {
     const settings = await invoke<AppSettings>("get_app_settings");
     autoUpdateMods.value = settings.autoUpdateMods;
+    skipSignIn.value = settings.skipSignIn;
     settingsReady.value = true;
     return settings;
   }
@@ -20,13 +23,23 @@ export function useAppSettings() {
       enabled,
     });
     autoUpdateMods.value = settings.autoUpdateMods;
+    skipSignIn.value = settings.skipSignIn;
+    return settings;
+  }
+
+  async function rememberSkipSignIn() {
+    const settings = await invoke<AppSettings>("remember_skip_sign_in");
+    autoUpdateMods.value = settings.autoUpdateMods;
+    skipSignIn.value = settings.skipSignIn;
     return settings;
   }
 
   return {
     autoUpdateMods,
+    skipSignIn,
     settingsReady,
     refreshAppSettings,
     setAutoUpdateMods,
+    rememberSkipSignIn,
   };
 }

@@ -41,7 +41,7 @@ mod modio_client;
 mod profiles;
 mod zip_extract;
 
-use app_settings::{get_app_settings, set_auto_update_mods};
+use app_settings::{get_app_settings, remember_skip_sign_in, set_auto_update_mods};
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
 use game_detect::detect_game_paths_command;
@@ -127,6 +127,7 @@ pub fn run() {
             detect_game_paths_command,
             get_app_settings,
             set_auto_update_mods,
+            remember_skip_sign_in,
             game_running_status,
             launch_game,
             bepinex_status,

@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
+use crate::app_settings::clear_skip_sign_in;
 use crate::modio_client::{format_api_error, ModioState};
 
 #[derive(Serialize)]
@@ -36,6 +37,7 @@ pub async fn verify_email_code(
         .map_err(format_api_error)?;
 
     state.set_session(&app, token.access_token, user.username.clone())?;
+    clear_skip_sign_in(&app)?;
 
     log::info!("Signed in as {}", user.username);
     Ok(AuthUser {
@@ -52,5 +54,6 @@ pub fn auth_status(state: State<'_, ModioState>) -> crate::modio_client::AuthSta
 #[tauri::command]
 pub fn logout(app: AppHandle, state: State<'_, ModioState>) -> Result<(), String> {
     log::info!("Logging out");
+    clear_skip_sign_in(&app)?;
     state.clear_session(&app)
 }
