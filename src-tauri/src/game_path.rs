@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -9,13 +10,26 @@ pub const STEAM_APP_ID: &str = "1440670";
 pub const GAME_EXECUTABLE: &str = "zeepkist.exe";
 const GAME_DIRECTORY_KEY: &str = "gameDirectoryPath";
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GamePathStatus {
-    pub configured: bool,
-    pub valid: bool,
-    pub path: Option<String>,
-    pub message: Option<String>,
+pub(crate) fn is_game_executable_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case(GAME_EXECUTABLE)
+}
+
+pub(crate) fn game_executable_in_dir(dir: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_game_executable_name)
+        {
+            return Some(path);
+        }
+    }
+
+    let direct = dir.join(GAME_EXECUTABLE);
+    direct.is_file().then_some(direct)
 }
 
 pub(crate) fn validate_directory(path: &Path) -> Result<(), String> {
@@ -27,14 +41,22 @@ pub(crate) fn validate_directory(path: &Path) -> Result<(), String> {
         return Err("The path must be a directory.".into());
     }
 
-    let executable = path.join(GAME_EXECUTABLE);
-    if !executable.is_file() {
+    if game_executable_in_dir(path).is_none() {
         return Err(format!(
             "Could not find {GAME_EXECUTABLE} in this directory."
         ));
     }
 
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GamePathStatus {
+    pub configured: bool,
+    pub valid: bool,
+    pub path: Option<String>,
+    pub message: Option<String>,
 }
 
 pub fn game_directory(app: &AppHandle) -> Result<PathBuf, String> {

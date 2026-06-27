@@ -5,7 +5,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use crate::game_path::{validate_directory, GAME_EXECUTABLE, STEAM_APP_ID};
+use crate::game_path::{game_executable_in_dir, validate_directory, is_game_executable_name, STEAM_APP_ID};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,7 +156,7 @@ fn game_path_from_steamapps(steamapps: &Path) -> Option<PathBuf> {
     let content = fs::read_to_string(manifest).ok()?;
     let installdir = installdir_from_manifest(&content)?;
     let game_dir = steamapps.join("common").join(installdir);
-    if game_dir.join(GAME_EXECUTABLE).is_file() {
+    if game_executable_in_dir(&game_dir).is_some() {
         Some(game_dir)
     } else {
         None
@@ -239,7 +239,11 @@ fn walk_for_zeepkist(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() {
-            if path.file_name().and_then(|name| name.to_str()) == Some(GAME_EXECUTABLE) {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_game_executable_name)
+            {
                 if let Some(parent) = path.parent() {
                     found.push(parent.to_path_buf());
                 }
@@ -273,6 +277,7 @@ pub async fn detect_game_paths_command() -> Result<Vec<GamePathCandidate>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_path::{game_executable_in_dir, validate_directory};
 
     #[test]
     fn parses_installdir_from_manifest() {
@@ -289,7 +294,7 @@ mod tests {
         let steamapps = root.join("steamapps");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(steamapps.join("common/Zeepkist")).unwrap();
-        fs::write(steamapps.join("common/Zeepkist/zeepkist.exe"), b"").unwrap();
+        fs::write(steamapps.join("common/Zeepkist/Zeepkist.exe"), b"").unwrap();
         fs::write(
             steamapps.join("appmanifest_1440670.acf"),
             "\"AppState\"\n{\n\t\"installdir\"\t\t\"Zeepkist\"\n}\n",
@@ -300,6 +305,19 @@ mod tests {
         assert!(game.ends_with("common/Zeepkist"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn finds_game_executable_with_any_casing() {
+        let dir = std::env::temp_dir().join("modkist-detect-case");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Zeepkist.exe"), b"").unwrap();
+
+        assert!(game_executable_in_dir(&dir).is_some());
+        assert!(validate_directory(&dir).is_ok());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
