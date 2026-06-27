@@ -108,7 +108,9 @@ onMounted(async () => {
   }
 
   const settings = await invoke<{ skipSignIn: boolean }>("get_app_settings");
-  if (settings.skipSignIn) {
+  // skipSignIn only applies on cold start (/ with no redirect). A redirect means
+  // the user opened sign-in deliberately (e.g. sidebar "Sign in" button).
+  if (settings.skipSignIn && !redirect.value) {
     await navigateToApp(redirect.value);
     return;
   }
