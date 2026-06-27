@@ -10,6 +10,10 @@ use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
 use crate::game_process::ensure_game_not_running;
 use crate::mod_download::download_modfile;
+use crate::mod_folder::{
+    install_folder_name, is_legacy_install_folder_name, parse_install_folder_name,
+    rename_install_folder,
+};
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::modio_client::{
@@ -19,6 +23,7 @@ use crate::modio_client::{
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
 const BEPINEX_PLUGINS: &str = "BepInEx/plugins";
+const MODKIST_PROFILES_ROOT: &str = ".modkist/profiles";
 const MODS_DIR: &str = "Mods";
 const BLUEPRINTS_DIR: &str = "Blueprints";
 const PLUGIN_TAG: &str = "Plugin";
@@ -150,13 +155,31 @@ fn kind_root_dir(game_dir: &Path, kind: InstalledModKind) -> PathBuf {
     bepinex_plugins_dir(game_dir).join(kind.directory_name())
 }
 
-fn folder_name(mod_id: u64, file_id: u64) -> String {
-    format!("{mod_id}_{file_id}")
-}
+fn managed_install_kind_dirs(game_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        kind_root_dir(game_dir, InstalledModKind::Plugin),
+        kind_root_dir(game_dir, InstalledModKind::Blueprint),
+    ];
 
-fn parse_folder_name(name: &str) -> Option<(u64, u64)> {
-    let (mod_part, file_part) = name.split_once('_')?;
-    Some((mod_part.parse().ok()?, file_part.parse().ok()?))
+    let profiles_root = bepinex_plugins_dir(game_dir).join(MODKIST_PROFILES_ROOT);
+    if profiles_root.is_dir() {
+        if let Ok(entries) = fs::read_dir(&profiles_root) {
+            for entry in entries.flatten() {
+                if !entry
+                    .file_type()
+                    .map(|file_type| file_type.is_dir())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+
+                dirs.push(entry.path().join(MODS_DIR));
+                dirs.push(entry.path().join(BLUEPRINTS_DIR));
+            }
+        }
+    }
+
+    dirs
 }
 
 fn mod_kind_from_tags(tags: &[String]) -> Result<InstalledModKind, String> {
@@ -198,7 +221,7 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
 
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let Some((mod_id, file_id)) = parse_folder_name(&name) else {
+        let Some((mod_id, file_id)) = parse_install_folder_name(&name) else {
             continue;
         };
 
@@ -247,7 +270,7 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
             let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let Some((entry_mod_id, _)) = parse_folder_name(&name) else {
+            let Some((entry_mod_id, _)) = parse_install_folder_name(&name) else {
                 continue;
             };
             if entry_mod_id != mod_id {
@@ -325,10 +348,59 @@ async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
     outcome
 }
 
+async fn normalize_legacy_install_folder_names(
+    state: &ModioState,
+    game_dir: &Path,
+) -> Result<(), String> {
+    for kind_dir in managed_install_kind_dirs(game_dir) {
+        if !kind_dir.is_dir() {
+            continue;
+        }
+
+        let entries = fs::read_dir(&kind_dir)
+            .map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Could not read directory entry: {e}"))?;
+
+        for entry in entries {
+            if !entry
+                .file_type()
+                .map_err(|e| format!("Could not read entry type: {e}"))?
+                .is_dir()
+            {
+                continue;
+            }
+
+            let folder_name = entry.file_name().to_string_lossy().into_owned();
+            if !is_legacy_install_folder_name(&folder_name) {
+                continue;
+            }
+
+            let Some((mod_id, file_id)) = parse_install_folder_name(&folder_name) else {
+                continue;
+            };
+
+            let ModFetchOutcome::Found(mod_) = fetch_mod_outcome(state, mod_id).await else {
+                continue;
+            };
+
+            if mod_.modfile.as_ref().is_some_and(|file| file.id != file_id) {
+                continue;
+            }
+
+            let target_name = install_folder_name(mod_id, file_id, &mod_.name);
+            rename_install_folder(&kind_dir, &folder_name, &target_name)?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn prepare_installed_records(
     state: &ModioState,
     game_dir: &Path,
 ) -> Result<(Vec<InstalledModRecord>, HashMap<u64, ModObject>), String> {
+    normalize_legacy_install_folder_names(state, game_dir).await?;
     let records = scan_installed_mods(game_dir)?;
     let mut available = Vec::with_capacity(records.len());
     let mut mods_by_id = HashMap::new();
@@ -620,7 +692,8 @@ async fn install_single_mod(
 
     remove_installed_mod_folders(game_dir, mod_id)?;
 
-    let target_dir = kind_root_dir(game_dir, kind).join(folder_name(mod_id, file_id));
+    let target_dir = kind_root_dir(game_dir, kind)
+        .join(install_folder_name(mod_id, file_id, &mod_.name));
     fs::create_dir_all(&target_dir).map_err(|e| {
         format!(
             "Could not create mod install directory {}: {e}",
@@ -1071,8 +1144,15 @@ mod tests {
 
     #[test]
     fn parses_folder_name() {
-        assert_eq!(parse_folder_name("12345_67890"), Some((12345, 67890)));
-        assert_eq!(parse_folder_name("invalid"), None);
+        assert_eq!(
+            parse_install_folder_name("12345_67890"),
+            Some((12345, 67890))
+        );
+        assert_eq!(
+            parse_install_folder_name("12345_67890_Cool Mod"),
+            Some((12345, 67890))
+        );
+        assert_eq!(parse_install_folder_name("invalid"), None);
     }
 
     #[test]
@@ -1097,12 +1177,31 @@ mod tests {
 
     #[test]
     fn rejects_malformed_folder_names() {
-        assert_eq!(parse_folder_name("invalid"), None);
-        assert_eq!(parse_folder_name("12345"), None);
-        assert_eq!(parse_folder_name("12345_"), None);
-        assert_eq!(parse_folder_name("_67890"), None);
-        assert_eq!(parse_folder_name("12345_abc"), None);
-        assert_eq!(parse_folder_name("12345_67890"), Some((12345, 67890)));
+        assert_eq!(parse_install_folder_name("invalid"), None);
+        assert_eq!(parse_install_folder_name("12345"), None);
+        assert_eq!(parse_install_folder_name("12345_"), None);
+        assert_eq!(parse_install_folder_name("_67890"), None);
+        assert_eq!(parse_install_folder_name("12345_abc"), None);
+        assert_eq!(
+            parse_install_folder_name("12345_67890"),
+            Some((12345, 67890))
+        );
+    }
+
+    #[test]
+    fn scan_installed_mods_finds_named_folders() {
+        let root = std::env::temp_dir().join("modkist-mod-install-named");
+        let _ = fs::remove_dir_all(&root);
+        let game_dir = root.join("game");
+        let mods_dir = kind_root_dir(&game_dir, InstalledModKind::Plugin);
+        fs::create_dir_all(mods_dir.join("12345_67890_Cool Mod")).unwrap();
+
+        let records = scan_installed_mods(&game_dir).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].folder_name, "12345_67890_Cool Mod");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

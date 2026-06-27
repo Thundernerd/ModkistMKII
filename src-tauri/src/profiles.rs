@@ -6,6 +6,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use crate::game_path::game_directory;
+use crate::mod_folder::is_valid_install_folder_name;
 use crate::modio_client::ModioState;
 
 pub const PROFILES_STORE_PATH: &str = "modkist-profiles.json";
@@ -73,13 +74,8 @@ pub struct ActiveProfileInfo {
     pub install_blocked: bool,
 }
 
-fn parse_folder_name(name: &str) -> Option<(u64, u64)> {
-    let (mod_part, file_part) = name.split_once('_')?;
-    Some((mod_part.parse().ok()?, file_part.parse().ok()?))
-}
-
-fn is_valid_install_folder_name(name: &str) -> bool {
-    parse_folder_name(name).is_some()
+fn is_valid_mod_folder_name(name: &str) -> bool {
+    is_valid_install_folder_name(name)
 }
 
 fn bepinex_plugins_dir(game_dir: &Path) -> PathBuf {
@@ -255,7 +251,7 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
         if file_type.is_dir() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if !is_valid_install_folder_name(&name) {
+            if !is_valid_mod_folder_name(&name) {
                 continue;
             }
 
@@ -291,7 +287,7 @@ fn clear_valid_mod_folders(kind_dir: &Path) -> Result<(), String> {
             continue;
         }
 
-        if !is_valid_install_folder_name(&entry.file_name().to_string_lossy()) {
+        if !is_valid_mod_folder_name(&entry.file_name().to_string_lossy()) {
             continue;
         }
 
@@ -321,7 +317,7 @@ fn live_has_valid_mod_folders(game_dir: &Path) -> Result<bool, String> {
                 .file_type()
                 .map_err(|e| format!("Could not read entry type: {e}"))?
                 .is_dir()
-                && is_valid_install_folder_name(&entry.file_name().to_string_lossy())
+                && is_valid_mod_folder_name(&entry.file_name().to_string_lossy())
             {
                 return Ok(true);
             }
