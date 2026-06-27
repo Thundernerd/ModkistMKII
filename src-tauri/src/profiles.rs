@@ -256,9 +256,6 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if !is_valid_install_folder_name(&name) {
-                fs::remove_dir_all(&path).map_err(|e| {
-                    format!("Could not remove invalid mod folder {}: {e}", path.display())
-                })?;
                 continue;
             }
 
@@ -271,17 +268,13 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
             fs::rename(&path, &dest).map_err(|e| {
                 format!("Could not move mod folder {}: {e}", path.display())
             })?;
-        } else {
-            fs::remove_file(&path).map_err(|e| {
-                format!("Could not remove invalid mod file {}: {e}", path.display())
-            })?;
         }
     }
 
     Ok(())
 }
 
-fn clear_kind_directory(kind_dir: &Path) -> Result<(), String> {
+fn clear_valid_mod_folders(kind_dir: &Path) -> Result<(), String> {
     if !kind_dir.is_dir() {
         return Ok(());
     }
@@ -290,20 +283,24 @@ fn clear_kind_directory(kind_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
     {
         let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
-        let path = entry.path();
-        let file_type = entry
+        if !entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?;
-
-        if file_type.is_dir() {
-            fs::remove_dir_all(&path).map_err(|e| {
-                format!("Could not clear mod folder {}: {e}", path.display())
-            })?;
-        } else {
-            fs::remove_file(&path).map_err(|e| {
-                format!("Could not clear mod file {}: {e}", path.display())
-            })?;
+            .map_err(|e| format!("Could not read entry type: {e}"))?
+            .is_dir()
+        {
+            continue;
         }
+
+        if !is_valid_install_folder_name(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+
+        fs::remove_dir_all(entry.path()).map_err(|e| {
+            format!(
+                "Could not clear mod folder {}: {e}",
+                entry.path().display()
+            )
+        })?;
     }
 
     Ok(())
@@ -349,7 +346,7 @@ pub fn restore_profile(game_dir: &Path, profile_id: &str) -> Result<(), String> 
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
         let archive_dir = archive_kind_dir(game_dir, profile_id, kind_dir_name);
-        clear_kind_directory(&live_dir)?;
+        clear_valid_mod_folders(&live_dir)?;
         move_valid_folders(&archive_dir, &live_dir)?;
     }
     Ok(())
@@ -736,6 +733,27 @@ mod tests {
         assert!(live_kind_dir(&game_dir, BLUEPRINTS_DIR)
             .join("30_40")
             .exists());
+    }
+
+    #[test]
+    fn profile_operations_leave_unmanaged_entries_alone() {
+        let (_temp, game_dir) = temp_game_dir();
+        write_mod_folder(&game_dir, MODS_DIR, "10_20");
+        let manual_mod_dir = live_kind_dir(&game_dir, MODS_DIR).join("MyManualMod");
+        fs::create_dir_all(&manual_mod_dir).unwrap();
+        fs::write(manual_mod_dir.join("mod.dll"), b"manual").unwrap();
+        let loose_file = live_kind_dir(&game_dir, MODS_DIR).join("readme.txt");
+        fs::write(&loose_file, b"keep me").unwrap();
+
+        adopt_live_mods_into_profile(&game_dir, "imported-profile").unwrap();
+        assert!(manual_mod_dir.exists());
+        assert!(loose_file.exists());
+
+        save_active_profile(&game_dir, "imported-profile").unwrap();
+        restore_profile(&game_dir, "vanilla").unwrap();
+        assert!(manual_mod_dir.exists());
+        assert!(loose_file.exists());
+        assert!(!live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
     }
 
     #[test]
