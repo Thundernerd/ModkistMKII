@@ -100,7 +100,7 @@ async function verifyBepInExInstall() {
 
 async function reinstallBepInExInstall() {
   const confirmed = await confirm(
-    `This will remove the existing BepInEx installation from your game folder, including any mods in BepInEx/plugins. A fresh BepInEx ${BEPINEX_REQUIRED_VERSION} (x64) will then be installed.`,
+    `This will remove the entire BepInEx installation from your game folder, including all mods in BepInEx/plugins. Any custom plugins and/or blueprints not managed through Modkist will be lost forever and cannot be recovered. A fresh BepInEx ${BEPINEX_REQUIRED_VERSION} (x64) will then be installed.`,
     { title: "Reinstall BepInEx?", kind: "warning" },
   );
 
