@@ -1,6 +1,8 @@
 import { invoke } from "~/utils/tauri";
 import type { WineWinhttpStatus } from "~/utils/wineWinhttp";
 
+export const BEPINEX_REQUIRED_VERSION = "5.4.23.5";
+
 export type BepInExState = "missing" | "installed" | "wrongVersion";
 
 export interface BepInExStatus {

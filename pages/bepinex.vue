@@ -5,6 +5,7 @@ import {
   readRedirectParam,
 } from "~/utils/authNavigation";
 import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
+import { BEPINEX_REQUIRED_VERSION } from "~/composables/useBepInEx";
 
 const route = useRoute();
 const {
@@ -96,7 +97,7 @@ onMounted(async () => {
       </div>
 
       <p class="hint setup-intro">
-        Modkist needs BepInEx 5.4.20 (x64) in your game folder to load mods.
+        Modkist needs BepInEx {{ BEPINEX_REQUIRED_VERSION }} (x64) in your game folder to load mods.
       </p>
 
       <section class="panel">
@@ -107,7 +108,7 @@ onMounted(async () => {
 
         <div v-else-if="phase === 'installing' || installing" class="state">
           <span class="spinner" aria-hidden="true" />
-          Downloading and installing BepInEx 5.4.20…
+          Downloading and installing BepInEx {{ BEPINEX_REQUIRED_VERSION }}…
         </div>
 
         <div v-else-if="phase === 'warning'" class="warning">

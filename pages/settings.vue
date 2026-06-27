@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
+import { BEPINEX_REQUIRED_VERSION, useBepInEx } from "~/composables/useBepInEx";
 
 definePageMeta({ layout: "app" });
-
-const REQUIRED_VERSION = "5.4.20";
 
 const {
   bepinexStatus,
@@ -28,7 +27,7 @@ const statusLabel = computed(() => {
     case "installed":
       return bepinexStatus.value.foundVersion
         ? `Installed (v${bepinexStatus.value.foundVersion})`
-        : `Installed (v${REQUIRED_VERSION})`;
+        : `Installed (v${BEPINEX_REQUIRED_VERSION})`;
     case "wrongVersion":
       return bepinexStatus.value.foundVersion
         ? `Wrong version (v${bepinexStatus.value.foundVersion})`
@@ -76,7 +75,7 @@ async function verifyBepInExInstall() {
         "success",
         status.foundVersion
           ? `BepInEx ${status.foundVersion} is installed correctly.`
-          : `BepInEx ${REQUIRED_VERSION} (x64) is installed correctly.`,
+          : `BepInEx ${BEPINEX_REQUIRED_VERSION} (x64) is installed correctly.`,
       );
       return;
     }
@@ -85,7 +84,7 @@ async function verifyBepInExInstall() {
       setVerifyResult(
         "error",
         status.message ||
-          `Expected BepInEx ${REQUIRED_VERSION} (x64), but a different version was found.`,
+          `Expected BepInEx ${BEPINEX_REQUIRED_VERSION} (x64), but a different version was found.`,
       );
       return;
     }
@@ -101,7 +100,7 @@ async function verifyBepInExInstall() {
 
 async function reinstallBepInExInstall() {
   const confirmed = await confirm(
-    "This will remove the existing BepInEx installation from your game folder, including any mods in BepInEx/plugins. A fresh BepInEx 5.4.20 (x64) will then be installed.",
+    `This will remove the existing BepInEx installation from your game folder, including any mods in BepInEx/plugins. A fresh BepInEx ${BEPINEX_REQUIRED_VERSION} (x64) will then be installed.`,
     { title: "Reinstall BepInEx?", kind: "warning" },
   );
 
@@ -123,7 +122,7 @@ async function reinstallBepInExInstall() {
       "success",
       bepinexStatus.value.foundVersion
         ? `Reinstalled BepInEx ${bepinexStatus.value.foundVersion}.`
-        : `Reinstalled BepInEx ${REQUIRED_VERSION} (x64).`,
+        : `Reinstalled BepInEx ${BEPINEX_REQUIRED_VERSION} (x64).`,
     );
   } catch (err) {
     setVerifyResult("error", String(err));
@@ -320,7 +319,7 @@ function profileKindLabel(kind: string) {
     <section class="panel">
       <h2 class="panel-title">BepInEx</h2>
       <p class="hint panel-desc">
-        Modkist requires BepInEx {{ REQUIRED_VERSION }} (x64) in your game
+        Modkist requires BepInEx {{ BEPINEX_REQUIRED_VERSION }} (x64) in your game
         folder.
       </p>
 
