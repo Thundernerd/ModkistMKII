@@ -35,12 +35,6 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Require at least one platform
-        if: ${{ !inputs.macos && !inputs.windows && !inputs.linux }}
-        run: |
-          echo "::error::Select at least one platform to build."
-          exit 1
-
       - name: Build platform matrix
         id: set-matrix
         env:
@@ -48,7 +42,12 @@ jobs:
           WINDOWS: ${{ inputs.windows }}
           LINUX: ${{ inputs.linux }}
         run: |
-          matrix=$(jq -n \
+          if [[ "$MACOS" != "true" && "$WINDOWS" != "true" && "$LINUX" != "true" ]]; then
+            echo "::error::Select at least one platform to build."
+            exit 1
+          fi
+
+          matrix=$(jq -nc \
             --arg macos "$MACOS" \
             --arg windows "$WINDOWS" \
             --arg linux "$LINUX" \
@@ -61,7 +60,12 @@ jobs:
               ]
             )}
             ')
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+          {
+            echo 'matrix<<EOF'
+            echo "$matrix"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: ${{ matrix.platform }}
