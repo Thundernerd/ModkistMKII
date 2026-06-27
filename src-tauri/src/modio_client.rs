@@ -398,7 +398,7 @@ pub fn format_api_error(error: ApiError) -> String {
     }
     if error.is_auth() {
         return format!(
-            "{}. Email login requires your game's API key and MODIO_GAME_ID — not a personal read-only key from mod.io/me/access.",
+            "{}. Sign in to mod.io to access private mods you are subscribed to.",
             error.message
         );
     }
@@ -909,7 +909,11 @@ pub async fn list_mods(
 pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
     let game_id = state.game_id()?;
     let api = state.api()?;
-    let mod_ = api.get_mod(game_id, mod_id).await.map_err(format_api_error)?;
+    let token = state.session_token();
+    let mod_ = api
+        .get_mod(game_id, mod_id, token.as_deref())
+        .await
+        .map_err(format_api_error)?;
 
     Ok(mod_to_detail(mod_))
 }
@@ -921,15 +925,16 @@ pub async fn list_mod_files(
 ) -> Result<ModFileListResult, String> {
     let game_id = state.game_id()?;
     let api = state.api()?;
+    let token = state.session_token();
     let latest_file_id = api
-        .get_mod(game_id, mod_id)
+        .get_mod(game_id, mod_id, token.as_deref())
         .await
         .map_err(format_api_error)?
         .modfile
         .as_ref()
         .map(|file| file.id);
     let list = api
-        .get_mod_files(game_id, mod_id)
+        .get_mod_files(game_id, mod_id, token.as_deref())
         .await
         .map_err(format_api_error)?;
     let files = list.data.into_iter().map(mod_file_to_entry).collect();
@@ -947,15 +952,16 @@ pub async fn list_mod_dependencies(
 ) -> Result<ModDependencyListResult, String> {
     let game_id = state.game_id()?;
     let api = state.api()?;
+    let token = state.session_token();
     let list = api
-        .get_mod_dependencies(game_id, mod_id)
+        .get_mod_dependencies(game_id, mod_id, token.as_deref())
         .await
         .map_err(format_api_error)?;
 
     let mut mods = Vec::with_capacity(list.data.len());
     for dependency in list.data {
         let mod_ = api
-            .get_mod(game_id, dependency.mod_id)
+            .get_mod(game_id, dependency.mod_id, token.as_deref())
             .await
             .map_err(format_api_error)?;
         mods.push(mod_to_dependency(mod_));

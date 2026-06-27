@@ -341,8 +341,12 @@ async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
         Ok(api) => api,
         Err(message) => return ModFetchOutcome::Failed(message),
     };
+    let token = state.session_token();
 
-    let outcome = match api.get_mod(game_id, mod_id).await {
+    let outcome = match api
+        .get_mod(game_id, mod_id, token.as_deref())
+        .await
+    {
         Ok(mod_) => {
             if let Some(file) = &mod_.modfile {
                 state.store_latest_file_id(mod_id, file.id);
@@ -441,8 +445,9 @@ async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64
     let dependencies: Vec<u64> = with_rate_limit_retry(|| async {
         let game_id = state.game_id()?;
         let api = state.api()?;
+        let token = state.session_token();
         let list = api
-            .get_mod_dependencies(game_id, mod_id)
+            .get_mod_dependencies(game_id, mod_id, token.as_deref())
             .await
             .map_err(format_api_error)?;
         Ok(list.data.into_iter().map(|dep| dep.mod_id).collect())
@@ -647,7 +652,8 @@ async fn install_single_mod(
         Some(file_id) => {
             let game_id = state.game_id()?;
             let api = state.api()?;
-            api.get_mod_file(game_id, mod_id, file_id)
+            let token = state.session_token();
+            api.get_mod_file(game_id, mod_id, file_id, token.as_deref())
                 .await
                 .map_err(crate::modio_client::format_api_error)?
         }

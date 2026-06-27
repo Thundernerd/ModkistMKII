@@ -91,9 +91,12 @@ async fn diagnose_startup_burst_then_subscribe() {
     eprintln!("loaded {} subscription id(s)", mod_ids.len());
 
     for mod_id in &mod_ids {
-        let _ = client.get_mod(game_id, *mod_id).await.expect("get_mod");
         let _ = client
-            .get_mod_dependencies(game_id, *mod_id)
+            .get_mod(game_id, *mod_id, Some(&token))
+            .await
+            .expect("get_mod");
+        let _ = client
+            .get_mod_dependencies(game_id, *mod_id, Some(&token))
             .await
             .expect("deps");
     }

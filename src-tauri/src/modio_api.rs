@@ -3,7 +3,9 @@
 //! Replaces the `modio` crate so we control headers, error handling, logging
 //! and rate-limit behavior directly. All requests target a single host
 //! (`https://g-{game_id}.modapi.io/v1` by default). Reads use the game
-//! `api_key` query param; OAuth reads/writes use a bearer token.
+//! `api_key` query param; OAuth reads/writes use a bearer token. Mod metadata,
+//! dependencies, and file downloads for private mods require the user's OAuth
+//! token when they are logged in.
 
 use std::time::{Duration, Instant};
 
@@ -522,22 +524,29 @@ impl ApiClient {
             .await
     }
 
-    pub async fn get_mod(&self, game_id: u64, mod_id: u64) -> Result<ModObject, ApiError> {
+    pub async fn get_mod(
+        &self,
+        game_id: u64,
+        mod_id: u64,
+        token: Option<&str>,
+    ) -> Result<ModObject, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}");
-        self.send(reqwest::Method::GET, &path, None, &[], None).await
+        self.send(reqwest::Method::GET, &path, token, &[], None)
+            .await
     }
 
     pub async fn get_mod_files(
         &self,
         game_id: u64,
         mod_id: u64,
+        token: Option<&str>,
     ) -> Result<ListResponse<Modfile>, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/files");
         let params = vec![
             ("_sort".to_string(), "-date_added".to_string()),
             ("_limit".to_string(), "100".to_string()),
         ];
-        self.send(reqwest::Method::GET, &path, None, &params, None)
+        self.send(reqwest::Method::GET, &path, token, &params, None)
             .await
     }
 
@@ -546,18 +555,22 @@ impl ApiClient {
         game_id: u64,
         mod_id: u64,
         file_id: u64,
+        token: Option<&str>,
     ) -> Result<Modfile, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/files/{file_id}");
-        self.send(reqwest::Method::GET, &path, None, &[], None).await
+        self.send(reqwest::Method::GET, &path, token, &[], None)
+            .await
     }
 
     pub async fn get_mod_dependencies(
         &self,
         game_id: u64,
         mod_id: u64,
+        token: Option<&str>,
     ) -> Result<ListResponse<DependencyObject>, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/dependencies");
-        self.send(reqwest::Method::GET, &path, None, &[], None).await
+        self.send(reqwest::Method::GET, &path, token, &[], None)
+            .await
     }
 
     pub async fn get_game_tags(
