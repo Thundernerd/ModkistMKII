@@ -68,7 +68,7 @@ async function resendCode() {
 }
 
 function skipLogin() {
-  navigateToApp();
+  void navigateToApp();
 }
 
 async function verifyCode() {
