@@ -20,6 +20,7 @@ const BEPINEX_PLUGINS: &str = "BepInEx/plugins";
 const MODKIST_ROOT: &str = ".modkist/profiles";
 const MODS_DIR: &str = "Mods";
 const BLUEPRINTS_DIR: &str = "Blueprints";
+const IMPORTED_PROFILE_NAME: &str = "Imported mods";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -333,31 +334,6 @@ fn live_has_valid_mod_folders(game_dir: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-fn archive_has_valid_mod_folders(game_dir: &Path, profile_id: &str) -> Result<bool, String> {
-    for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
-        let kind_dir = archive_kind_dir(game_dir, profile_id, kind_dir_name);
-        if !kind_dir.is_dir() {
-            continue;
-        }
-
-        for entry in fs::read_dir(&kind_dir)
-            .map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
-        {
-            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
-            if entry
-                .file_type()
-                .map_err(|e| format!("Could not read entry type: {e}"))?
-                .is_dir()
-                && is_valid_install_folder_name(&entry.file_name().to_string_lossy())
-            {
-                return Ok(true);
-            }
-        }
-    }
-
-    Ok(false)
-}
-
 pub fn save_active_profile(game_dir: &Path, profile_id: &str) -> Result<(), String> {
     log::debug!("Saving live mods to profile archive '{profile_id}'");
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
@@ -379,11 +355,26 @@ pub fn restore_profile(game_dir: &Path, profile_id: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn run_migration_if_needed(
-    app: &AppHandle,
-    data: &mut ProfileStoreData,
-    logged_in: bool,
-) -> Result<(), String> {
+fn new_custom_profile_id() -> Result<String, String> {
+    Ok(format!(
+        "custom-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos()
+    ))
+}
+
+fn adopt_live_mods_into_profile(game_dir: &Path, profile_id: &str) -> Result<(), String> {
+    for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
+        let live_dir = live_kind_dir(game_dir, kind_dir_name);
+        let archive_dir = archive_kind_dir(game_dir, profile_id, kind_dir_name);
+        move_valid_folders(&live_dir, &archive_dir)?;
+    }
+    restore_profile(game_dir, profile_id)
+}
+
+fn run_migration_if_needed(app: &AppHandle, data: &mut ProfileStoreData) -> Result<(), String> {
     if data.migrated {
         return Ok(());
     }
@@ -393,18 +384,18 @@ fn run_migration_if_needed(
         Err(_) => return Ok(()),
     };
 
-    let had_live_mods = live_has_valid_mod_folders(&game_dir)?;
-    if had_live_mods {
-        for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
-            let live_dir = live_kind_dir(&game_dir, kind_dir_name);
-            let archive_dir = archive_kind_dir(&game_dir, USER_PROFILE_ID, kind_dir_name);
-            move_valid_folders(&live_dir, &archive_dir)?;
-        }
-    }
-
-    if logged_in && (had_live_mods || archive_has_valid_mod_folders(&game_dir, USER_PROFILE_ID)?) {
-        data.active_profile_id = USER_PROFILE_ID.to_string();
-        restore_profile(&game_dir, USER_PROFILE_ID)?;
+    if live_has_valid_mod_folders(&game_dir)? {
+        let profile_id = new_custom_profile_id()?;
+        data.profiles.push(StoredProfile {
+            id: profile_id.clone(),
+            name: IMPORTED_PROFILE_NAME.to_string(),
+            kind: ProfileKind::Custom,
+        });
+        adopt_live_mods_into_profile(&game_dir, &profile_id)?;
+        data.active_profile_id = profile_id.clone();
+        log::info!(
+            "Imported existing mods into new profile '{IMPORTED_PROFILE_NAME}' ({profile_id})"
+        );
     } else {
         data.active_profile_id = VANILLA_PROFILE_ID.to_string();
         restore_profile(&game_dir, VANILLA_PROFILE_ID)?;
@@ -416,11 +407,10 @@ fn run_migration_if_needed(
 
 fn prepare_store(app: &AppHandle, modio_state: &ModioState) -> Result<ProfileStoreData, String> {
     let auth = modio_state.auth_status();
-    let logged_in = auth.logged_in;
     let username = auth.username.as_deref();
     let mut data = load_store_data(app)?;
     ensure_builtin_profiles(&mut data, username);
-    run_migration_if_needed(app, &mut data, logged_in)?;
+    run_migration_if_needed(app, &mut data)?;
     let mut data = load_store_data(app)?;
     ensure_builtin_profiles(&mut data, username);
     save_store_data(app, &data)?;
@@ -562,13 +552,7 @@ pub fn create_profile(
         return Err("A profile with this name already exists.".into());
     }
 
-    let id = format!(
-        "custom-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| e.to_string())?
-            .as_nanos()
-    );
+    let id = new_custom_profile_id()?;
     let profile = StoredProfile {
         id: id.clone(),
         name: trimmed.to_string(),
@@ -738,6 +722,20 @@ mod tests {
         restore_profile(&game_dir, "profile-a").unwrap();
         assert!(live_kind_dir(&game_dir, MODS_DIR).join("1_1").exists());
         assert!(!live_kind_dir(&game_dir, MODS_DIR).join("2_2").exists());
+    }
+
+    #[test]
+    fn adopt_live_mods_into_profile_keeps_mods_active() {
+        let (_temp, game_dir) = temp_game_dir();
+        write_mod_folder(&game_dir, MODS_DIR, "10_20");
+        write_mod_folder(&game_dir, BLUEPRINTS_DIR, "30_40");
+
+        adopt_live_mods_into_profile(&game_dir, "imported-profile").unwrap();
+
+        assert!(live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
+        assert!(live_kind_dir(&game_dir, BLUEPRINTS_DIR)
+            .join("30_40")
+            .exists());
     }
 
     #[test]
