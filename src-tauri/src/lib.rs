@@ -40,6 +40,7 @@ mod mod_install;
 pub mod modio_api;
 mod modio_client;
 mod profiles;
+mod sentry_init;
 mod subscription_sync_settings;
 mod zip_extract;
 
@@ -91,6 +92,8 @@ pub fn run() {
     dotenvy::dotenv().ok();
     dotenvy::from_filename("../.env").ok();
 
+    let _sentry_guard = sentry_init::init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -106,6 +109,9 @@ pub fn run() {
                 Ok(log_dir) => {
                     log::info!("Modkist starting");
                     log::info!("Writing logs to {}", log_dir.display());
+                    if sentry_init::is_enabled() {
+                        log::info!("Sentry error reporting enabled");
+                    }
                 }
                 Err(error) => {
                     eprintln!("Failed to initialize file logging: {error}");
