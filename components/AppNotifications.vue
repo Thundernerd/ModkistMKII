@@ -38,11 +38,11 @@ const { notifications, dismissNotification } = useNotifications();
 <style scoped>
 .app-notifications {
   position: fixed;
+  top: 1rem;
   right: 1rem;
-  bottom: 1rem;
   z-index: 120;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 0.65rem;
   width: min(22rem, calc(100vw - 2rem));
   pointer-events: none;
