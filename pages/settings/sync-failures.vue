@@ -109,13 +109,6 @@ onMounted(refreshFailedSyncMods);
         </div>
 
         <div class="failed-actions">
-          <NuxtLink
-            :to="`/mods/${entry.modId}`"
-            class="btn-secondary view-mod-btn"
-          >
-            View mod
-          </NuxtLink>
-
           <label class="ignore-toggle">
             <span class="ignore-label">Ignore</span>
             <button
@@ -241,23 +234,6 @@ onMounted(refreshFailedSyncMods);
   align-items: center;
   gap: 0.85rem;
   flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-.view-mod-btn {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-  text-decoration: none;
-  border-radius: var(--modio-radius-sm);
-  border: 1px solid var(--modio-border);
-  padding: 0.65em 1em;
-  font-size: 0.95rem;
-  font-weight: 500;
-}
-
-.view-mod-btn:hover {
-  color: var(--modio-text);
 }
 
 .ignore-toggle {
