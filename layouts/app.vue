@@ -25,6 +25,7 @@ onUnmounted(() => {
     <AppSidebar />
     <div class="app-main">
       <ProfileSwitchOverlay />
+      <AppNotifications />
       <slot />
     </div>
   </div>
