@@ -743,6 +743,26 @@ fn track_sync_dependency_failure(
     failed_dependencies.push(target_mod_id);
 }
 
+fn augment_dependency_subscribers_from_cache(
+    state: &ModioState,
+    subscribed_mod_ids: &[u64],
+    dependency_to_subscribers: &mut HashMap<u64, HashSet<u64>>,
+) {
+    for &mod_id in subscribed_mod_ids {
+        let Some(deps) = state.cached_dependencies(mod_id) else {
+            continue;
+        };
+        for dep_id in deps {
+            if dep_id != mod_id {
+                dependency_to_subscribers
+                    .entry(dep_id)
+                    .or_default()
+                    .insert(mod_id);
+            }
+        }
+    }
+}
+
 fn record_sync_failure_for_target(
     app: &AppHandle,
     target_mod_id: u64,
@@ -751,15 +771,26 @@ fn record_sync_failure_for_target(
     sync_failure_roots: &HashSet<u64>,
     dependency_to_subscribers: &HashMap<u64, HashSet<u64>>,
 ) {
+    let detail = format!("Required dependency (mod {target_mod_id}): {message}");
+
     if sync_failure_roots.contains(&target_mod_id) {
         let _ = record_failed_sync_mod(app, target_mod_id, category, message);
     }
 
     let Some(subscribers) = dependency_to_subscribers.get(&target_mod_id) else {
+        if !sync_failure_roots.contains(&target_mod_id) {
+            let _ = record_failed_sync_mod(app, target_mod_id, "dependency", &detail);
+        }
         return;
     };
 
-    let detail = format!("Required dependency (mod {target_mod_id}): {message}");
+    if subscribers.is_empty() {
+        if !sync_failure_roots.contains(&target_mod_id) {
+            let _ = record_failed_sync_mod(app, target_mod_id, "dependency", &detail);
+        }
+        return;
+    }
+
     for &subscribed_mod_id in subscribers {
         if subscribed_mod_id == target_mod_id && sync_failure_roots.contains(&target_mod_id) {
             continue;
@@ -1097,6 +1128,7 @@ async fn sync_subscribed_mods_inner(
             }
         }
     }
+    augment_dependency_subscribers_from_cache(state, &mod_ids, &mut dependency_to_subscribers);
 
     log::info!(
         "Syncing {subscribed_count} subscribed mod(s), {} unique install target(s)",

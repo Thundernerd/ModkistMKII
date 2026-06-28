@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -97,6 +97,57 @@ fn dependency_failure_detail(message: &str) -> Option<String> {
     truncate_error_detail(message)
 }
 
+fn extract_dependency_mod_id(message: &str) -> Option<u64> {
+    let rest = message.strip_prefix("Required dependency (mod ")?;
+    rest.split(')').next()?.parse().ok()
+}
+
+fn merge_dependency_failure_details(
+    existing: Option<&str>,
+    category: &str,
+    message: &str,
+) -> (String, Option<String>) {
+    let (error_type, new_detail) = refine_sync_failure(category, message);
+    if error_type != "dependency" {
+        return (error_type, new_detail);
+    }
+
+    let mut mod_ids: BTreeSet<u64> = BTreeSet::new();
+    if let Some(id) = extract_dependency_mod_id(message) {
+        mod_ids.insert(id);
+    }
+    if let Some(existing) = existing {
+        if let Some(id) = extract_dependency_mod_id(existing) {
+            mod_ids.insert(id);
+        } else if existing.starts_with("Required dependencies could not be installed (mods ") {
+            let ids = existing
+                .trim_start_matches("Required dependencies could not be installed (mods ")
+                .trim_end_matches(").");
+            for id in ids.split(", ") {
+                if let Ok(parsed) = id.parse::<u64>() {
+                    mod_ids.insert(parsed);
+                }
+            }
+        }
+    }
+
+    if mod_ids.is_empty() {
+        return (error_type, new_detail.or_else(|| existing.map(str::to_string)));
+    }
+
+    let ids = mod_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        error_type,
+        Some(format!(
+            "Required dependencies could not be installed (mods {ids})."
+        )),
+    )
+}
+
 fn refine_sync_failure(category: &str, message: &str) -> (String, Option<String>) {
     if category == "install_order" || category == "dependency" {
         return ("dependency".to_string(), dependency_failure_detail(message));
@@ -189,8 +240,15 @@ pub fn record_failed_sync_mod(
     let mut records = read_failed_sync_records(app);
 
     if let Some(existing) = records.iter_mut().find(|record| record.mod_id == mod_id) {
-        existing.error_type = error_type;
-        existing.error_detail = error_detail;
+        let (merged_type, merged_detail) = if existing.error_type == "dependency"
+            && error_type == "dependency"
+        {
+            merge_dependency_failure_details(existing.error_detail.as_deref(), category, message)
+        } else {
+            (error_type, error_detail)
+        };
+        existing.error_type = merged_type;
+        existing.error_detail = merged_detail;
     } else {
         records.push(FailedSyncModRecord {
             mod_id,
@@ -429,6 +487,20 @@ mod tests {
         assert_eq!(
             detail.as_deref(),
             Some("A required dependency is private or could not be loaded on mod.io.")
+        );
+    }
+
+    #[test]
+    fn merge_dependency_failure_details_accumulates_mod_ids() {
+        let (error_type, detail) = merge_dependency_failure_details(
+            Some("Required dependencies could not be installed (mods 3108325)."),
+            "dependency",
+            "Required dependency (mod 2518400): download failed",
+        );
+        assert_eq!(error_type, "dependency");
+        assert_eq!(
+            detail.as_deref(),
+            Some("Required dependencies could not be installed (mods 2518400, 3108325).")
         );
     }
 }
