@@ -26,18 +26,7 @@ async function resolveDestination(redirect?: string): Promise<string> {
 }
 
 async function needsBepInExOnboarding(status: BepInExStatus) {
-  if (status.state === "missing") {
-    return true;
-  }
-
-  if (status.state === "wrongVersion") {
-    const suppressed = await invoke<boolean>(
-      "get_ignore_bepinex_version_warning_enabled",
-    );
-    return !suppressed;
-  }
-
-  return false;
+  return status.state === "missing";
 }
 
 export function readRedirectParam(value: unknown): string | undefined {

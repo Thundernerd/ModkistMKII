@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {
-  continuePastBepInEx,
   navigateToApp,
   readRedirectParam,
 } from "~/utils/authNavigation";
@@ -16,21 +15,15 @@ const {
   refreshBepInExStatus,
   installBepInEx,
 } = useBepInEx();
-const {
-  rememberIgnoreBepInExVersionWarning,
-  isBepInExVersionWarningSuppressed,
-} = useAppSettings();
 
 const redirect = computed(() => readRedirectParam(route.query.redirect));
-const phase = ref<"checking" | "installing" | "warning" | "wineWarning" | "error">(
+const phase = ref<"checking" | "installing" | "wineWarning" | "error">(
   "checking",
 );
 
 const wineFeedback = computed(() =>
   wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
 );
-const dontShowVersionWarningAgain = ref(false);
-const savingPreference = ref(false);
 
 async function runInstall() {
   phase.value = "installing";
@@ -52,39 +45,12 @@ async function runInstall() {
 async function handleStatus() {
   const status = bepinexStatus.value;
 
-  if (status.state === "installed") {
+  if (status.state === "installed" || status.state === "wrongVersion") {
     await navigateToApp(redirect.value);
     return;
   }
 
-  if (status.state === "wrongVersion") {
-    if (await isBepInExVersionWarningSuppressed()) {
-      await continuePastBepInEx(redirect.value);
-      return;
-    }
-
-    phase.value = "warning";
-    return;
-  }
-
   await runInstall();
-}
-
-async function continueAnyway() {
-  savingPreference.value = true;
-  error.value = "";
-
-  try {
-    if (dontShowVersionWarningAgain.value) {
-      await rememberIgnoreBepInExVersionWarning();
-    }
-    await continuePastBepInEx(redirect.value);
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
-    phase.value = "error";
-  } finally {
-    savingPreference.value = false;
-  }
 }
 
 async function continueAfterWineWarning() {
@@ -133,34 +99,6 @@ onMounted(async () => {
         <div v-else-if="phase === 'installing' || installing" class="state">
           <span class="spinner" aria-hidden="true" />
           Downloading and installing BepInEx {{ BEPINEX_REQUIRED_VERSION }}…
-        </div>
-
-        <div v-else-if="phase === 'warning'" class="warning">
-          <p class="warning-text">
-            {{
-              bepinexStatus.message ||
-              "A different BepInEx version was found in your game directory."
-            }}
-          </p>
-          <p v-if="bepinexStatus.foundVersion" class="meta">
-            Detected version: {{ bepinexStatus.foundVersion }}
-          </p>
-          <label class="warning-option">
-            <input
-              v-model="dontShowVersionWarningAgain"
-              type="checkbox"
-              :disabled="savingPreference"
-            />
-            <span>Don't show this warning again</span>
-          </label>
-          <button
-            type="button"
-            class="continue-button"
-            :disabled="savingPreference"
-            @click="continueAnyway"
-          >
-            {{ savingPreference ? "Continuing…" : "Continue anyway" }}
-          </button>
         </div>
 
         <div v-else-if="phase === 'wineWarning'" class="warning">
