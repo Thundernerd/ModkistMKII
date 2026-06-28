@@ -477,11 +477,21 @@ fn switch_profile_inner(
         target.name
     );
 
-    let game_dir = game_directory(app)?;
-    save_active_profile(&game_dir, &data.active_profile_id)?;
+    let game_dir = game_directory(app).ok();
+
+    if let Some(game_dir) = &game_dir {
+        save_active_profile(game_dir, &from_profile_id)?;
+    }
+
     data.active_profile_id = target_profile_id.to_string();
     save_store_data(app, &data)?;
-    restore_profile(&game_dir, target_profile_id)?;
+
+    match game_dir {
+        Some(game_dir) => restore_profile(&game_dir, target_profile_id)?,
+        None => log::debug!(
+            "Profile switch stored without mod folder changes: game directory is not configured"
+        ),
+    }
     // mod.io metadata is global per mod id; keep the API cache across profile
     // switches so browse/install flows can reuse it when returning to a profile.
 
