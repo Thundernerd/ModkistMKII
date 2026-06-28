@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
-use tauri::AppHandle;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 use crate::app_settings::SETTINGS_STORE_PATH;
@@ -17,6 +18,51 @@ struct FailedSyncModRecord {
     error_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error_detail: Option<String>,
+}
+
+pub struct FailedSyncState {
+    records: Mutex<Vec<FailedSyncModRecord>>,
+}
+
+impl FailedSyncState {
+    pub fn initialize(app: &AppHandle) {
+        clear_persisted_failed_sync_records(app);
+        app.manage(Self {
+            records: Mutex::new(Vec::new()),
+        });
+    }
+}
+
+fn clear_persisted_failed_sync_records(app: &AppHandle) {
+    let Ok(store) = app.store(SETTINGS_STORE_PATH) else {
+        return;
+    };
+    let had_failed = store.get(FAILED_SYNC_MODS_KEY).is_some()
+        || store.get(LEGACY_FAILED_SYNC_MODS_KEY).is_some();
+    if !had_failed {
+        return;
+    }
+    let _ = store.delete(FAILED_SYNC_MODS_KEY);
+    let _ = store.delete(LEGACY_FAILED_SYNC_MODS_KEY);
+    if let Err(error) = store.save() {
+        log::warn!("Could not remove persisted sync failures from settings: {error}");
+    } else {
+        log::info!("Removed persisted sync failures from settings store");
+    }
+}
+
+fn read_failed_sync_records(app: &AppHandle) -> Vec<FailedSyncModRecord> {
+    app.try_state::<FailedSyncState>()
+        .map(|state| state.records.lock().unwrap().clone())
+        .unwrap_or_default()
+}
+
+fn replace_failed_sync_records(app: &AppHandle, records: Vec<FailedSyncModRecord>) -> Result<(), String> {
+    let Some(state) = app.try_state::<FailedSyncState>() else {
+        return Err("Sync failure state is not initialized.".into());
+    };
+    *state.records.lock().map_err(|e| e.to_string())? = records;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -201,35 +247,6 @@ pub fn is_dependency_sync_failure(app: &AppHandle, mod_id: u64) -> bool {
         .any(|record| record.mod_id == mod_id && record.error_type == "dependency")
 }
 
-fn read_failed_sync_records(app: &AppHandle) -> Vec<FailedSyncModRecord> {
-    let store = app.store(SETTINGS_STORE_PATH).ok();
-    let Some(store) = store else {
-        return Vec::new();
-    };
-
-    if let Some(value) = store.get(FAILED_SYNC_MODS_KEY) {
-        if let Ok(records) = serde_json::from_value::<Vec<FailedSyncModRecord>>(value) {
-            return records;
-        }
-    }
-
-    read_u64_list(app, LEGACY_FAILED_SYNC_MODS_KEY)
-        .into_iter()
-        .map(|mod_id| FailedSyncModRecord {
-            mod_id,
-            error_type: "unknown".to_string(),
-            error_detail: None,
-        })
-        .collect()
-}
-
-fn write_failed_sync_records(app: &AppHandle, records: &[FailedSyncModRecord]) -> Result<(), String> {
-    let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
-    store.set(FAILED_SYNC_MODS_KEY, serde_json::json!(records));
-    let _ = store.delete(LEGACY_FAILED_SYNC_MODS_KEY);
-    store.save().map_err(|e| e.to_string())
-}
-
 pub fn record_failed_sync_mod(
     app: &AppHandle,
     mod_id: u64,
@@ -258,8 +275,8 @@ pub fn record_failed_sync_mod(
         records.sort_unstable_by_key(|record| record.mod_id);
     }
 
-    write_failed_sync_records(app, &records)?;
-    log::info!("Recorded failed subscription sync for mod {mod_id} ({category})");
+    replace_failed_sync_records(app, records)?;
+    log::info!("Recorded sync failure for mod {mod_id} ({category})");
     Ok(())
 }
 
@@ -270,8 +287,8 @@ pub fn clear_failed_sync_mod(app: &AppHandle, mod_id: u64) -> Result<(), String>
     if records.len() == original_len {
         return Ok(());
     }
-    write_failed_sync_records(app, &records)?;
-    log::info!("Cleared failed subscription sync entry for mod {mod_id}");
+    replace_failed_sync_records(app, records)?;
+    log::info!("Cleared sync failure entry for mod {mod_id}");
     Ok(())
 }
 

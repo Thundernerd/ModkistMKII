@@ -66,7 +66,7 @@ use profiles::{
     logout_requires_profile_selection_command, rename_profile, switch_profile,
 };
 use subscription_sync_settings::{
-    list_failed_sync_mods_command, set_failed_sync_mod_ignored,
+    list_failed_sync_mods_command, set_failed_sync_mod_ignored, FailedSyncState,
 };
 use modio_client::{
     get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mod_files,
@@ -125,6 +125,8 @@ pub fn run() {
                     eprintln!("Failed to initialize file logging: {error}");
                 }
             }
+
+            FailedSyncState::initialize(app.handle());
 
             let state = ModioState::from_env();
             if let Err(error) = state.restore_from_store(app.handle()) {
