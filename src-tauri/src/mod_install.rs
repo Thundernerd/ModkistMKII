@@ -17,7 +17,8 @@ use crate::mod_folder::{
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::subscription_sync_settings::{
-    clear_failed_sync_mod, read_ignored_sync_mod_ids, record_failed_sync_mod,
+    clear_failed_sync_mod, read_failed_sync_mod_ids, read_ignored_sync_mod_ids,
+    record_failed_sync_mod,
 };
 use crate::modio_client::{
     fetch_mod_object, fetch_mod_outcome, fetch_subscribed_mod_ids, format_api_error,
@@ -594,6 +595,32 @@ async fn install_state_for_mod(
     ))
 }
 
+async fn reconcile_failed_sync_mods(
+    app: &AppHandle,
+    state: &ModioState,
+    records: &[InstalledModRecord],
+    dependency_map: &HashMap<u64, Vec<u64>>,
+    mods_by_id: Option<&HashMap<u64, ModObject>>,
+) {
+    for mod_id in read_failed_sync_mod_ids(app) {
+        let Ok(install_state) = install_state_for_mod(
+            state,
+            mod_id,
+            records,
+            dependency_map,
+            mods_by_id,
+        )
+        .await
+        else {
+            continue;
+        };
+
+        if install_state.status == "upToDate" {
+            let _ = clear_failed_sync_mod(app, mod_id);
+        }
+    }
+}
+
 async fn install_single_mod(
     state: &ModioState,
     game_dir: &Path,
@@ -726,11 +753,17 @@ async fn install_targets_internal(
                     // Install a specific older or alternate file version.
                 } else {
                     log::debug!("Mod {target_mod_id} already up to date, skipping");
+                    if let Some(app) = app {
+                        let _ = clear_failed_sync_mod(app, target_mod_id);
+                    }
                     skipped.push(target_mod_id);
                     continue;
                 }
             } else {
                 log::debug!("Mod {target_mod_id} already up to date, skipping");
+                if let Some(app) = app {
+                    let _ = clear_failed_sync_mod(app, target_mod_id);
+                }
                 skipped.push(target_mod_id);
                 continue;
             }
@@ -740,6 +773,9 @@ async fn install_targets_internal(
             log::debug!(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
+            if let Some(app) = app {
+                let _ = clear_failed_sync_mod(app, target_mod_id);
+            }
             skipped.push(target_mod_id);
             continue;
         }
@@ -918,6 +954,14 @@ async fn sync_subscribed_mods_inner(
         false,
         auto_update,
         None,
+        Some(&mods_by_id),
+    )
+    .await;
+    reconcile_failed_sync_mods(
+        app,
+        state,
+        &records,
+        &dependency_map,
         Some(&mods_by_id),
     )
     .await;
