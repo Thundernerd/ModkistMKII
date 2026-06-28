@@ -132,13 +132,6 @@ onMounted(refreshFailedSyncMods);
         </div>
 
         <div class="failed-actions">
-          <NuxtLink
-            :to="`/mods/${entry.modId}`"
-            class="btn-secondary view-mod-btn"
-          >
-            View mod
-          </NuxtLink>
-
           <label class="ignore-toggle">
             <span class="ignore-label">Ignore</span>
             <button
@@ -156,15 +149,27 @@ onMounted(refreshFailedSyncMods);
             </button>
           </label>
 
-          <button
-            type="button"
-            class="btn-secondary unsubscribe-btn"
-            :disabled="unsubscribingIds.has(entry.modId)"
-            @click="handleUnsubscribe(entry.modId)"
-          >
-            <span v-if="unsubscribingIds.has(entry.modId)" class="spinner" aria-hidden="true" />
-            {{ unsubscribingIds.has(entry.modId) ? "Unsubscribing…" : "Unsubscribe" }}
-          </button>
+          <div class="action-group">
+            <NuxtLink
+              :to="`/mods/${entry.modId}`"
+              class="action-group-item"
+            >
+              View
+            </NuxtLink>
+            <button
+              type="button"
+              class="action-group-item action-group-item-danger"
+              :disabled="unsubscribingIds.has(entry.modId)"
+              @click="handleUnsubscribe(entry.modId)"
+            >
+              <span
+                v-if="unsubscribingIds.has(entry.modId)"
+                class="spinner"
+                aria-hidden="true"
+              />
+              {{ unsubscribingIds.has(entry.modId) ? "Unsubscribing…" : "Unsubscribe" }}
+            </button>
+          </div>
         </div>
       </li>
     </ul>
@@ -276,25 +281,58 @@ onMounted(refreshFailedSyncMods);
 .failed-actions {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.75rem;
   flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
-.view-mod-btn {
+.action-group {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--modio-border);
+  border-radius: var(--modio-radius-sm);
+  overflow: hidden;
+  background: var(--modio-surface-raised);
+}
+
+.action-group-item {
   display: inline-flex;
   align-items: center;
-  white-space: nowrap;
-  text-decoration: none;
-  border-radius: var(--modio-radius-sm);
-  border: 1px solid var(--modio-border);
-  padding: 0.65em 1em;
-  font-size: 0.95rem;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55em 0.85em;
+  border: none;
+  border-right: 1px solid var(--modio-border);
+  background: transparent;
+  color: var(--modio-text);
+  font-size: 0.88rem;
   font-weight: 500;
+  font-family: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-.view-mod-btn:hover {
+.action-group-item:last-child {
+  border-right: none;
+}
+
+.action-group-item:hover:not(:disabled) {
+  background: var(--modio-surface-hover);
   color: var(--modio-text);
+}
+
+.action-group-item:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.action-group-item-danger {
+  color: var(--modio-danger);
+}
+
+.action-group-item-danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--modio-danger);
 }
 
 .ignore-toggle {
@@ -353,13 +391,6 @@ onMounted(refreshFailedSyncMods);
   background: var(--modio-accent);
 }
 
-.unsubscribe-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  white-space: nowrap;
-}
-
 .spinner {
   width: 0.9rem;
   height: 0.9rem;
@@ -383,6 +414,7 @@ onMounted(refreshFailedSyncMods);
 
   .failed-actions {
     justify-content: space-between;
+    flex-wrap: wrap;
   }
 }
 </style>
