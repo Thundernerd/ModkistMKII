@@ -51,6 +51,92 @@ export interface InstallModResult {
   skipped: number[];
 }
 
+interface InstallModOptions {
+  suppressSuccessToast?: boolean;
+  versionLabel?: string;
+}
+
+const SUCCESS_TOAST_DURATION_MS = 6_000;
+
+function installedModName(modId: number) {
+  return installedMods.value.find((mod) => mod.modId === modId)?.name ?? `Mod ${modId}`;
+}
+
+function formatCountLabel(count: number, singular: string, plural?: string) {
+  const label = count === 1 ? singular : (plural ?? `${singular}s`);
+  return `${count} ${label}`;
+}
+
+function dependencyCount(result: InstallModResult, modId: number) {
+  return result.installed.filter((id) => id !== modId).length;
+}
+
+function notifyInstallSuccess(
+  pushNotification: ReturnType<typeof useNotifications>["pushNotification"],
+  modId: number,
+  result: InstallModResult,
+  wasUpdate: boolean,
+  customFileId?: number,
+  versionLabel?: string,
+) {
+  const depCount = dependencyCount(result, modId);
+  const customVersion = customFileId !== undefined;
+
+  if (!wasUpdate && depCount === 0 && !customVersion) {
+    return;
+  }
+
+  const name = installedModName(modId);
+  const versionSuffix = versionLabel ? ` (${versionLabel})` : "";
+  const depSuffix =
+    depCount > 0
+      ? ` and ${formatCountLabel(depCount, "dependency", "dependencies")}`
+      : "";
+  const verb = wasUpdate ? "Updated" : "Installed";
+
+  pushNotification({
+    title: wasUpdate ? "Mod updated" : "Mod installed",
+    message: `${verb} ${name}${versionSuffix}${depSuffix}.`,
+    tone: "success",
+    durationMs: SUCCESS_TOAST_DURATION_MS,
+  });
+}
+
+function notifyBulkUpdateResult(
+  pushNotification: ReturnType<typeof useNotifications>["pushNotification"],
+  updated: number[],
+  failed: number[],
+) {
+  if (updated.length > 0 && failed.length === 0) {
+    pushNotification({
+      title: "Mods updated",
+      message: `Updated ${formatCountLabel(updated.length, "mod", "mods")}.`,
+      tone: "success",
+      durationMs: SUCCESS_TOAST_DURATION_MS,
+    });
+    return;
+  }
+
+  if (updated.length > 0 && failed.length > 0) {
+    pushNotification({
+      title: "Mods partially updated",
+      message: `Updated ${updated.length}, ${failed.length} failed.`,
+      tone: "success",
+      durationMs: SUCCESS_TOAST_DURATION_MS,
+    });
+    return;
+  }
+
+  if (failed.length > 0) {
+    pushNotification({
+      title: "Could not update mods",
+      message: "Check the errors below and try again.",
+      tone: "error",
+      durationMs: 10_000,
+    });
+  }
+}
+
 interface ActiveProfileInfo {
   id: string;
   name: string;
@@ -265,6 +351,14 @@ export function useModInstall() {
         sessionSyncDone.value = true;
         logger.info("Subscription sync complete", result);
         await refreshInstalled();
+        if (result.installed.length > 0) {
+          pushNotification({
+            title: "Subscriptions synced",
+            message: `Installed ${formatCountLabel(result.installed.length, "subscribed mod", "subscribed mods")}.`,
+            tone: "success",
+            durationMs: SUCCESS_TOAST_DURATION_MS,
+          });
+        }
       } catch (error) {
         if (generation !== subscriptionSyncGeneration) {
           return;
@@ -314,8 +408,13 @@ export function useModInstall() {
     }
   }
 
-  async function installMod(modId: number, fileId?: number) {
+  async function installMod(
+    modId: number,
+    fileId?: number,
+    options?: InstallModOptions,
+  ) {
     clearInstallError(modId);
+    const wasUpdate = installStates.value[modId]?.status === "updateAvailable";
     setInstalling(modId, true);
     logger.info(`Installing mod ${modId}`, fileId ? { fileId } : undefined);
     try {
@@ -355,6 +454,16 @@ export function useModInstall() {
         await refreshInstallState(id);
       }
       logger.info(`Install finished for mod ${modId}`, result);
+      if (!options?.suppressSuccessToast) {
+        notifyInstallSuccess(
+          pushNotification,
+          modId,
+          result,
+          wasUpdate,
+          fileId,
+          options?.versionLabel,
+        );
+      }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -469,12 +578,13 @@ export function useModInstall() {
     try {
       for (const mod of targets) {
         try {
-          await installMod(mod.modId);
+          await installMod(mod.modId, undefined, { suppressSuccessToast: true });
           updated.push(mod.modId);
         } catch {
           failed.push(mod.modId);
         }
       }
+      notifyBulkUpdateResult(pushNotification, updated, failed);
     } finally {
       bulkUpdating.value = false;
     }

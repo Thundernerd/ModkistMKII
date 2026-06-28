@@ -21,12 +21,10 @@ const {
 
 const loading = ref(true);
 const pageError = ref("");
-const bulkResult = ref<{ updated: number[]; failed: number[] } | null>(null);
 
 async function loadUpdates() {
   loading.value = true;
   pageError.value = "";
-  bulkResult.value = null;
   try {
     await refreshInstalled();
   } catch (error) {
@@ -37,7 +35,6 @@ async function loadUpdates() {
 }
 
 async function handleInstall(modId: number) {
-  bulkResult.value = null;
   await installMod(modId);
 }
 
@@ -50,14 +47,7 @@ async function handleUpdateAll() {
   );
   if (!confirmed) return;
 
-  bulkResult.value = null;
-  pageError.value = "";
-  const result = await updateAllMods();
-  bulkResult.value = result;
-
-  if (result.failed.length > 0 && result.updated.length === 0) {
-    pageError.value = "Could not update any mods. Check the errors below and try again.";
-  }
+  await updateAllMods();
 }
 
 onMounted(loadUpdates);
@@ -102,17 +92,6 @@ onMounted(loadUpdates);
     </p>
 
     <p v-if="pageError" class="error">{{ pageError }}</p>
-
-    <p
-      v-if="bulkResult && bulkResult.updated.length > 0"
-      class="hint bulk-result"
-    >
-      Updated {{ bulkResult.updated.length }} mod{{
-        bulkResult.updated.length === 1 ? "" : "s"
-      }}<span v-if="bulkResult.failed.length > 0">
-        · {{ bulkResult.failed.length }} failed</span
-      >.
-    </p>
 
     <div v-if="loading || checkingUpdates" class="state">
       <span class="spinner" aria-hidden="true" />
@@ -203,19 +182,12 @@ onMounted(loadUpdates);
 }
 
 .install-hint,
-.empty-state,
-.bulk-result {
+.empty-state {
   margin-bottom: 1rem;
   padding: 1rem 1.1rem;
   border-radius: var(--modio-radius);
   border: 1px dashed var(--modio-border);
   background: var(--modio-surface);
-}
-
-.bulk-result {
-  border-style: solid;
-  border-color: rgba(var(--modio-accent-rgb), 0.35);
-  background: rgba(var(--modio-accent-rgb), 0.08);
 }
 
 .state {
