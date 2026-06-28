@@ -108,19 +108,36 @@ const mediaImages = computed(() => {
 const sortedDependencies = computed(() => {
   const items = [...dependencies.value];
 
+  const compareUnavailable = (a: ModDependency, b: ModDependency) => {
+    if (a.unavailable !== b.unavailable) {
+      return a.unavailable ? 1 : -1;
+    }
+    return 0;
+  };
+
   switch (dependencySort.value) {
     case "lastUpdated":
       return items.sort(
         (a, b) =>
+          compareUnavailable(a, b) ||
           new Date(b.dateUpdated).getTime() - new Date(a.dateUpdated).getTime(),
       );
     case "alphabetical":
-      return items.sort((a, b) => a.name.localeCompare(b.name));
+      return items.sort(
+        (a, b) => compareUnavailable(a, b) || a.name.localeCompare(b.name),
+      );
     case "mostPopular":
     default:
-      return items.sort((a, b) => b.downloadsTotal - a.downloadsTotal);
+      return items.sort(
+        (a, b) =>
+          compareUnavailable(a, b) || b.downloadsTotal - a.downloadsTotal,
+      );
   }
 });
+
+const unavailableDependencyCount = computed(
+  () => dependencies.value.filter((dep) => dep.unavailable).length,
+);
 
 watch(
   modId,
@@ -149,6 +166,7 @@ watch(
   () => {
     if (!dependencies.value.length) return;
     for (const dep of dependencies.value) {
+      if (dep.unavailable) continue;
       refreshInstallState(dep.id);
     }
   },
@@ -227,6 +245,9 @@ async function handleUninstall(targetModId = modId.value, modName?: string) {
 }
 
 function dependencyMeta(dep: ModDependency) {
+  if (dep.unavailable) {
+    return dep.unavailableReason ?? "Private or unavailable on mod.io.";
+  }
   const updated = formatRelativeAgo(dep.dateUpdated);
   return updated
     ? `${dep.submittedByUsername} • Updated ${updated}`
@@ -365,18 +386,37 @@ function dependencyMeta(dep: ModDependency) {
                 Loading dependencies…
               </div>
 
-              <p v-else-if="dependenciesError" class="error tab-error">
-                {{ dependenciesError }}
-              </p>
+              <template v-else>
+                <p v-if="dependenciesError" class="error tab-error">
+                  {{ dependenciesError }}
+                </p>
 
-              <p v-else-if="!sortedDependencies.length" class="tab-empty">
-                No dependencies listed.
-              </p>
+                <p
+                  v-if="unavailableDependencyCount > 0"
+                  class="hint dependencies-warning"
+                >
+                  {{ unavailableDependencyCount }} dependenc{{
+                    unavailableDependencyCount === 1 ? "y" : "ies"
+                  }}
+                  could not be loaded. They may be private or you may need a
+                  separate mod.io subscription.
+                </p>
 
-              <ul v-else class="dependency-list">
+                <p
+                  v-if="!dependenciesError && !sortedDependencies.length"
+                  class="tab-empty"
+                >
+                  No dependencies listed.
+                </p>
+
+                <ul v-if="sortedDependencies.length" class="dependency-list">
                 <li v-for="dep in sortedDependencies" :key="dep.id">
-                  <div class="dependency-card">
-                    <NuxtLink :to="`/mods/${dep.id}`" class="dependency-card-link">
+                  <div class="dependency-card" :class="{ unavailable: dep.unavailable }">
+                    <component
+                      :is="dep.unavailable ? 'div' : 'NuxtLink'"
+                      :to="dep.unavailable ? undefined : `/mods/${dep.id}`"
+                      class="dependency-card-link"
+                    >
                       <div class="dependency-thumb">
                         <img
                           v-if="dep.logoUrl"
@@ -388,12 +428,17 @@ function dependencyMeta(dep: ModDependency) {
                       </div>
 
                       <div class="dependency-info">
-                        <h3>{{ dep.name }}</h3>
+                        <div class="dependency-title-row">
+                          <h3>{{ dep.name }}</h3>
+                          <span v-if="dep.unavailable" class="unavailable-badge">
+                            Unavailable
+                          </span>
+                        </div>
                         <p class="dependency-meta">{{ dependencyMeta(dep) }}</p>
                       </div>
-                    </NuxtLink>
+                    </component>
 
-                    <div class="dependency-actions">
+                    <div v-if="!dep.unavailable" class="dependency-actions">
                       <span
                         v-if="dep.fileSizeBytes"
                         class="dependency-size"
@@ -414,6 +459,7 @@ function dependencyMeta(dep: ModDependency) {
                   </div>
                 </li>
               </ul>
+              </template>
             </div>
           </section>
         </div>
@@ -796,6 +842,16 @@ function dependencyMeta(dep: ModDependency) {
   font-size: 0.85rem;
 }
 
+.dependencies-warning {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--modio-radius-sm);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--modio-text-muted);
+  font-size: 0.85rem;
+}
+
 .sort-control {
   display: inline-flex;
   align-items: center;
@@ -877,6 +933,31 @@ function dependencyMeta(dep: ModDependency) {
     var(--modio-surface-raised),
     var(--modio-surface-hover)
   );
+}
+
+.dependency-card.unavailable {
+  opacity: 0.92;
+  border-style: dashed;
+}
+
+.dependency-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.unavailable-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: var(--modio-danger);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .dependency-info h3 {

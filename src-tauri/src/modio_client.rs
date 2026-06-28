@@ -437,6 +437,10 @@ impl ModioState {
 /// Converts an `ApiError` into a user-facing message, preserving the rate-limit
 /// and auth hints we surfaced previously.
 pub fn format_api_error(error: ApiError) -> String {
+    format_api_error_logged_in(error, false)
+}
+
+pub fn format_api_error_logged_in(error: ApiError, logged_in: bool) -> String {
     if error.is_rate_limited() {
         let error_ref = error
             .error_ref
@@ -448,6 +452,12 @@ pub fn format_api_error(error: ApiError) -> String {
         );
     }
     if error.is_auth() {
+        if logged_in {
+            return format!(
+                "{}. This mod may be private or you may not be subscribed to it on mod.io.",
+                error.message
+            );
+        }
         return format!(
             "{}. Sign in to mod.io to access private mods you are subscribed to.",
             error.message
@@ -513,7 +523,10 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
                 tokio::time::sleep(Duration::from_secs(61)).await;
                 return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
-                ModFetchOutcome::Failed(format_api_error(error))
+                ModFetchOutcome::Failed(format_api_error_logged_in(
+                    error,
+                    state.auth_status().logged_in,
+                ))
             }
         }
     };
@@ -743,6 +756,8 @@ pub struct ModDependency {
     pub date_updated: String,
     pub downloads_total: u32,
     pub file_size_bytes: Option<u64>,
+    pub unavailable: bool,
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -965,6 +980,23 @@ fn mod_to_dependency(mod_: ModObject) -> ModDependency {
         date_updated: timestamp_to_iso(mod_.date_updated),
         downloads_total: mod_.stats.downloads_total,
         file_size_bytes,
+        unavailable: false,
+        unavailable_reason: None,
+    }
+}
+
+fn unavailable_dependency(id: u64, reason: String) -> ModDependency {
+    ModDependency {
+        id,
+        name: format!("Mod {id}"),
+        profile_url: String::new(),
+        logo_url: String::new(),
+        submitted_by_username: String::new(),
+        date_updated: String::new(),
+        downloads_total: 0,
+        file_size_bytes: None,
+        unavailable: true,
+        unavailable_reason: Some(reason),
     }
 }
 
@@ -1195,10 +1227,11 @@ pub async fn list_mod_dependencies(
         let game_id = state.game_id()?;
         let api = state.api()?;
         let token = state.session_token();
+        let logged_in = state.auth_status().logged_in;
         let list = api
             .get_mod_dependencies(game_id, mod_id, token.as_deref())
             .await
-            .map_err(format_api_error)?;
+            .map_err(|error| format_api_error_logged_in(error, logged_in))?;
         let dependency_ids: Vec<u64> = list.data.into_iter().map(|dep| dep.mod_id).collect();
         state.store_dependencies(mod_id, dependency_ids.clone());
         dependency_ids
@@ -1206,8 +1239,19 @@ pub async fn list_mod_dependencies(
 
     let mut mods = Vec::with_capacity(dependency_ids.len());
     for dependency_id in dependency_ids {
-        let mod_ = fetch_mod_object(&state, dependency_id).await?;
-        mods.push(mod_to_dependency(mod_));
+        match fetch_mod_outcome(&state, dependency_id).await {
+            ModFetchOutcome::Found(mod_) => mods.push(mod_to_dependency(mod_)),
+            ModFetchOutcome::Unavailable => mods.push(unavailable_dependency(
+                dependency_id,
+                format!("Mod {dependency_id} is no longer available on mod.io."),
+            )),
+            ModFetchOutcome::Failed(message) => {
+                log::warn!(
+                    "Could not load dependency {dependency_id} for mod {mod_id}: {message}"
+                );
+                mods.push(unavailable_dependency(dependency_id, message));
+            }
+        }
     }
 
     Ok(ModDependencyListResult {
@@ -1258,4 +1302,32 @@ pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResul
     let total = list.result_total;
 
     Ok(ModListResult { mods, total })
+}
+
+#[cfg(test)]
+mod format_api_error_tests {
+    use super::*;
+    use crate::modio_api::ApiError;
+
+    fn auth_error() -> ApiError {
+        ApiError {
+            status: Some(403),
+            error_ref: None,
+            message: "The mod ID you have included in your request could not be found.".to_string(),
+            retry_after_secs: None,
+        }
+    }
+
+    #[test]
+    fn logged_out_auth_error_suggests_sign_in() {
+        let message = format_api_error_logged_in(auth_error(), false);
+        assert!(message.contains("Sign in to mod.io"));
+    }
+
+    #[test]
+    fn logged_in_auth_error_explains_private_or_unsubscribed() {
+        let message = format_api_error_logged_in(auth_error(), true);
+        assert!(message.contains("private or you may not be subscribed"));
+        assert!(!message.contains("Sign in to mod.io"));
+    }
 }

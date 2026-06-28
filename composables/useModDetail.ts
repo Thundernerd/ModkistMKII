@@ -38,6 +38,8 @@ export interface ModDependency {
   dateUpdated: string;
   downloadsTotal: number;
   fileSizeBytes?: number;
+  unavailable: boolean;
+  unavailableReason?: string;
 }
 
 export interface ModFileEntry {
