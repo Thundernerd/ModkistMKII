@@ -38,7 +38,6 @@ const {
   updateCount,
   checkingUpdates,
   syncingSubscriptions,
-  syncSubscriptionError,
   profileInstallBlocked,
   gameRunning,
   gameRunningMessage,
@@ -126,13 +125,6 @@ onMounted(async () => {
       <p v-else-if="syncingSubscriptions" class="hint updates-check-hint">
         <span class="spinner" aria-hidden="true" />
         Syncing subscribed mods…
-      </p>
-
-      <p v-else-if="syncSubscriptionError" class="hint sync-error-hint">
-        Subscription sync failed: {{ syncSubscriptionError }}
-        <span class="sync-error-detail">
-          Subscription sync uses your mod.io login (OAuth). If rate limited, wait about a minute and try again.
-        </span>
       </p>
 
       <p
@@ -237,22 +229,6 @@ onMounted(async () => {
 .updates-banner {
   border-color: rgba(var(--modio-accent-rgb), 0.35);
   background: rgba(var(--modio-accent-rgb), 0.08);
-}
-
-.sync-error-hint {
-  margin: 0 0 1rem;
-  padding: 0.85rem 1rem;
-  border-radius: var(--modio-radius-sm);
-  background: rgba(248, 113, 113, 0.08);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  color: var(--modio-danger);
-}
-
-.sync-error-detail {
-  display: block;
-  margin-top: 0.35rem;
-  font-size: 0.82rem;
-  color: var(--modio-text-muted);
 }
 
 .mods-error {

@@ -1,5 +1,6 @@
 import { invoke } from "~/utils/tauri";
 import { logger } from "~/utils/logger";
+import { useNotifications } from "~/composables/useNotifications";
 
 export type InstallUiStatus =
   | "notInstalled"
@@ -66,7 +67,6 @@ const installReady = ref(false);
 const installEnvironmentError = ref("");
 const checkingUpdates = ref(false);
 const syncingSubscriptions = ref(false);
-const syncSubscriptionError = ref("");
 const bulkUpdating = ref(false);
 const startupUpdateCheckDone = ref(false);
 
@@ -143,13 +143,11 @@ export async function cancelSubscriptionSync() {
   logger.debug("Cancelling subscription sync");
   subscriptionSyncGeneration += 1;
   syncingSubscriptions.value = false;
-  syncSubscriptionError.value = "";
   await invoke("cancel_subscription_sync").catch(() => {});
 }
 
 function resetSessionSync() {
   sessionSyncDone.value = false;
-  syncSubscriptionError.value = "";
 }
 
 function resetStartupUpdateCheck() {
@@ -186,6 +184,7 @@ async function seedInstalledFromDisk() {
 }
 
 export function useModInstall() {
+  const { pushNotification } = useNotifications();
   const {
     installBlocked: profileInstallBlocked,
     refreshProfiles,
@@ -255,7 +254,6 @@ export function useModInstall() {
 
       const generation = subscriptionSyncGeneration;
       syncingSubscriptions.value = true;
-      syncSubscriptionError.value = "";
       logger.info("Starting subscription sync");
 
       try {
@@ -277,7 +275,12 @@ export function useModInstall() {
           return;
         }
         logger.error("Subscription sync failed", message);
-        syncSubscriptionError.value = message;
+        pushNotification({
+          title: "Subscription sync failed",
+          message: `${message} If you were rate limited, wait about a minute and try again.`,
+          tone: "error",
+          durationMs: 10_000,
+        });
         await refreshInstalled().catch(() => {});
       } finally {
         if (generation === subscriptionSyncGeneration) {
@@ -491,7 +494,6 @@ export function useModInstall() {
     installEnvironmentError,
     checkingUpdates,
     syncingSubscriptions,
-    syncSubscriptionError,
     bulkUpdating,
     startupUpdateCheckDone,
     profileInstallBlocked,
