@@ -55,19 +55,24 @@ const { notifications, dismissNotification } = useNotifications();
   padding: 0.9rem 0.95rem;
   border-radius: var(--modio-radius);
   border: 1px solid var(--modio-border);
-  background: var(--modio-surface);
+  background: var(--modio-surface-raised);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
   pointer-events: auto;
 }
 
 .app-notification--error {
-  border-color: rgba(248, 113, 113, 0.45);
-  background: rgba(248, 113, 113, 0.1);
+  border-color: #c45c5c;
+  background: #2b1f1f;
 }
 
 .app-notification--success {
-  border-color: rgba(var(--modio-accent-rgb), 0.45);
-  background: rgba(var(--modio-accent-rgb), 0.1);
+  border-color: #3f9f66;
+  background: #1a2820;
+}
+
+.app-notification--info {
+  border-color: var(--modio-border);
+  background: var(--modio-surface-raised);
 }
 
 .app-notification-body {
@@ -84,6 +89,10 @@ const { notifications, dismissNotification } = useNotifications();
 
 .app-notification--error .app-notification-title {
   color: var(--modio-danger);
+}
+
+.app-notification--success .app-notification-title {
+  color: var(--modio-success);
 }
 
 .app-notification-message {
