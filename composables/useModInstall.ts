@@ -50,6 +50,7 @@ export interface InstallModResult {
   installed: number[];
   skipped: number[];
   dependencyFailureCount?: number;
+  failedDependencies?: number[];
 }
 
 interface InstallModOptions {
@@ -217,19 +218,30 @@ function notifyInstallSuccess(
   versionLabel?: string,
 ) {
   const depCount = dependencyCount(result, modId);
+  const failedDeps = result.failedDependencies ?? [];
   const customVersion = customFileId !== undefined;
+  const name = installedModName(modId);
+  const versionSuffix = versionLabel ? ` (${versionLabel})` : "";
+  const verb = wasUpdate ? "Updated" : "Installed";
+
+  if (failedDeps.length > 0) {
+    pushNotification({
+      title: wasUpdate ? "Mod updated with warnings" : "Mod installed with warnings",
+      message: `${verb} ${name}${versionSuffix}, but ${formatCountLabel(failedDeps.length, "dependency", "dependencies")} could not be installed.`,
+      tone: "warning",
+      durationMs: WARNING_TOAST_DURATION_MS,
+    });
+    return;
+  }
 
   if (!wasUpdate && depCount === 0 && !customVersion) {
     return;
   }
 
-  const name = installedModName(modId);
-  const versionSuffix = versionLabel ? ` (${versionLabel})` : "";
   const depSuffix =
     depCount > 0
       ? ` and ${formatCountLabel(depCount, "dependency", "dependencies")}`
       : "";
-  const verb = wasUpdate ? "Updated" : "Installed";
 
   pushNotification({
     title: wasUpdate ? "Mod updated" : "Mod installed",
