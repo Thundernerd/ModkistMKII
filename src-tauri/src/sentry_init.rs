@@ -12,8 +12,18 @@ fn runtime_var(name: &str) -> Option<String> {
     non_empty(std::env::var(name).ok())
 }
 
+#[cfg(not(debug_assertions))]
+fn baked_dsn() -> Option<String> {
+    non_empty(option_env!("SENTRY_DSN").map(str::to_string))
+}
+
+#[cfg(debug_assertions)]
+fn baked_dsn() -> Option<String> {
+    None
+}
+
 fn sentry_dsn() -> Option<String> {
-    runtime_var("SENTRY_DSN")
+    baked_dsn().or_else(|| runtime_var("SENTRY_DSN"))
 }
 
 /// Initialize Sentry when `SENTRY_DSN` is set. Returns a guard that must stay alive for the
