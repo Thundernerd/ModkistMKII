@@ -17,8 +17,8 @@ use crate::mod_folder::{
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::modio_client::{
-    fetch_subscribed_mod_ids, format_api_error, is_mod_unavailable, subscribe_to_mod,
-    unsubscribe_from_mod, with_rate_limit_retry, ModioState,
+    fetch_mod_object, fetch_mod_outcome, fetch_subscribed_mod_ids, format_api_error,
+    subscribe_to_mod, unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -289,65 +289,6 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
     Ok(())
 }
 
-enum ModFetchOutcome {
-    Found(ModObject),
-    Unavailable,
-    Failed(String),
-}
-
-async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
-    if state.cached_mod_unavailable(mod_id) {
-        return ModFetchOutcome::Unavailable;
-    }
-
-    if let Some(mod_) = state.cached_mod(mod_id) {
-        if let Some(file) = &mod_.modfile {
-            state.store_latest_file_id(mod_id, file.id);
-        }
-        return ModFetchOutcome::Found(mod_);
-    }
-
-    let game_id = match state.game_id() {
-        Ok(game_id) => game_id,
-        Err(message) => return ModFetchOutcome::Failed(message),
-    };
-    let api = match state.api() {
-        Ok(api) => api,
-        Err(message) => return ModFetchOutcome::Failed(message),
-    };
-    let token = state.session_token();
-
-    let outcome = match api
-        .get_mod(game_id, mod_id, token.as_deref())
-        .await
-    {
-        Ok(mod_) => {
-            if let Some(file) = &mod_.modfile {
-                state.store_latest_file_id(mod_id, file.id);
-            }
-            state.store_mod(mod_.clone());
-            ModFetchOutcome::Found(mod_)
-        }
-        Err(error) => {
-            if is_mod_unavailable(&error) {
-                ModFetchOutcome::Unavailable
-            } else if error.is_rate_limited() {
-                tokio::time::sleep(std::time::Duration::from_secs(61)).await;
-                return Box::pin(fetch_mod_outcome(state, mod_id)).await;
-            } else {
-                ModFetchOutcome::Failed(format_api_error(error))
-            }
-        }
-    };
-
-    match &outcome {
-        ModFetchOutcome::Unavailable => state.mark_mod_unavailable(mod_id),
-        _ => {}
-    }
-
-    outcome
-}
-
 async fn normalize_legacy_install_folder_names(
     state: &ModioState,
     game_dir: &Path,
@@ -444,19 +385,6 @@ async fn refresh_dependency_map(
         );
     }
     Ok(())
-}
-
-async fn fetch_mod(
-    state: &ModioState,
-    mod_id: u64,
-) -> Result<ModObject, String> {
-    match fetch_mod_outcome(state, mod_id).await {
-        ModFetchOutcome::Found(mod_) => Ok(mod_),
-        ModFetchOutcome::Unavailable => {
-            Err(format!("Mod {mod_id} is no longer available on mod.io."))
-        }
-        ModFetchOutcome::Failed(message) => Err(message),
-    }
 }
 
 async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, String> {
@@ -571,7 +499,7 @@ async fn uninstall_blockers_for(
     let mut blockers = Vec::new();
 
     for dependent_id in installed_dependents(mod_id, dependency_map, installed_ids) {
-        let mod_ = fetch_mod(state, dependent_id).await?;
+        let mod_ = fetch_mod_object(state, dependent_id).await?;
         blockers.push(UninstallBlocker {
             mod_id: dependent_id,
             name: mod_.name,
@@ -595,7 +523,7 @@ async fn latest_file_id(state: &ModioState, mod_id: u64) -> Result<u64, String> 
         return Ok(file_id);
     }
 
-    let mod_ = fetch_mod(state, mod_id).await?;
+    let mod_ = fetch_mod_object(state, mod_id).await?;
     let file = mod_
         .modfile
         .as_ref()
@@ -669,7 +597,7 @@ async fn install_single_mod(
     mod_id: u64,
     file_id: Option<u64>,
 ) -> Result<(), String> {
-    let mod_ = fetch_mod(state, mod_id).await?;
+    let mod_ = fetch_mod_object(state, mod_id).await?;
     let file = match file_id {
         Some(file_id) => {
             let game_id = state.game_id()?;

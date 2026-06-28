@@ -202,6 +202,19 @@ impl ModioState {
         }
     }
 
+    pub(crate) fn cached_mod_files(&self, mod_id: u64) -> Option<Vec<Modfile>> {
+        self.api_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get_mod_files(mod_id))
+    }
+
+    pub(crate) fn store_mod_files(&self, mod_id: u64, files: Vec<Modfile>) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.store_mod_files(mod_id, files);
+        }
+    }
+
     /// Loads the persisted dependency cache from disk (if recent enough). Called
     /// once at startup so a cold launch does not re-fetch dependencies.
     pub fn load_persisted_cache(&self, app: &AppHandle) {
@@ -412,6 +425,80 @@ pub fn is_mod_unavailable(error: &ApiError) -> bool {
     error.is_not_found()
 }
 
+/// Writes mod metadata and related cache entries from a list or detail response.
+pub(crate) fn seed_mod_cache(state: &ModioState, mod_: &ModObject) {
+    if let Some(file) = &mod_.modfile {
+        state.store_latest_file_id(mod_.id, file.id);
+    }
+    if !mod_.dependencies {
+        state.store_dependencies(mod_.id, Vec::new());
+    }
+    state.store_mod(mod_.clone());
+}
+
+pub(crate) enum ModFetchOutcome {
+    Found(ModObject),
+    Unavailable,
+    Failed(String),
+}
+
+pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
+    if state.cached_mod_unavailable(mod_id) {
+        return ModFetchOutcome::Unavailable;
+    }
+
+    if let Some(mod_) = state.cached_mod(mod_id) {
+        seed_mod_cache(state, &mod_);
+        return ModFetchOutcome::Found(mod_);
+    }
+
+    let game_id = match state.game_id() {
+        Ok(game_id) => game_id,
+        Err(message) => return ModFetchOutcome::Failed(message),
+    };
+    let api = match state.api() {
+        Ok(api) => api,
+        Err(message) => return ModFetchOutcome::Failed(message),
+    };
+    let token = state.session_token();
+
+    let outcome = match api
+        .get_mod(game_id, mod_id, token.as_deref())
+        .await
+    {
+        Ok(mod_) => {
+            seed_mod_cache(state, &mod_);
+            ModFetchOutcome::Found(mod_)
+        }
+        Err(error) => {
+            if is_mod_unavailable(&error) {
+                ModFetchOutcome::Unavailable
+            } else if error.is_rate_limited() {
+                tokio::time::sleep(Duration::from_secs(61)).await;
+                return Box::pin(fetch_mod_outcome(state, mod_id)).await;
+            } else {
+                ModFetchOutcome::Failed(format_api_error(error))
+            }
+        }
+    };
+
+    if matches!(outcome, ModFetchOutcome::Unavailable) {
+        state.mark_mod_unavailable(mod_id);
+    }
+
+    outcome
+}
+
+pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, String> {
+    match fetch_mod_outcome(state, mod_id).await {
+        ModFetchOutcome::Found(mod_) => Ok(mod_),
+        ModFetchOutcome::Unavailable => {
+            Err(format!("Mod {mod_id} is no longer available on mod.io."))
+        }
+        ModFetchOutcome::Failed(message) => Err(message),
+    }
+}
+
 pub(crate) fn is_rate_limited_message(message: &str) -> bool {
     message.to_ascii_lowercase().contains("rate limit")
 }
@@ -507,19 +594,12 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
                     .map_err(format_api_error)?;
                 let count = list.data.len() as u32;
                 let total = list.result_total;
-                // The subscriptions response already contains full mod objects.
-                // Seed the caches so the install/sync flow doesn't re-fetch each
-                // mod, its latest file, or (for dependency-free mods) its deps.
+                // Seed the caches so browse, detail, and install flows can reuse
+                // the mod objects without extra per-mod requests.
                 for mod_ in list.data {
                     let mod_id = mod_.id;
                     mod_ids.push(mod_id);
-                    if let Some(file) = &mod_.modfile {
-                        state.store_latest_file_id(mod_id, file.id);
-                    }
-                    if !mod_.dependencies {
-                        state.store_dependencies(mod_id, Vec::new());
-                    }
-                    state.store_mod(mod_);
+                    seed_mod_cache(state, &mod_);
                 }
                 offset = offset.saturating_add(count);
                 if count < PAGE_LIMIT || count == 0 || offset >= total {
