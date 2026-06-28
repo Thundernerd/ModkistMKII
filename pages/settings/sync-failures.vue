@@ -184,7 +184,7 @@ onMounted(refreshFailedSyncMods);
 
 <style scoped>
 .page {
-  max-width: 40rem;
+  width: 100%;
 }
 
 .page-header {

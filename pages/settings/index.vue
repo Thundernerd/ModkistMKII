@@ -432,7 +432,7 @@ function profileKindLabel(kind: string) {
 
 <style scoped>
 .page {
-  max-width: 40rem;
+  width: 100%;
 }
 
 .page-header {
@@ -597,6 +597,8 @@ function profileKindLabel(kind: string) {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
 }
 
 .setting-label {
@@ -606,7 +608,6 @@ function profileKindLabel(kind: string) {
 .setting-hint {
   font-size: 0.85rem;
   color: var(--modio-text-muted);
-  max-width: 28rem;
 }
 
 .setting-subsection {
@@ -668,5 +669,16 @@ function profileKindLabel(kind: string) {
 .setting-toggle-track.on .setting-toggle-thumb {
   transform: translateX(1.25rem);
   background: var(--modio-accent);
+}
+
+@media (max-width: 640px) {
+  .setting-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setting-action-btn {
+    align-self: flex-start;
+  }
 }
 </style>
