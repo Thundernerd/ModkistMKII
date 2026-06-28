@@ -17,8 +17,8 @@ use crate::mod_folder::{
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::subscription_sync_settings::{
-    clear_failed_sync_mod, count_dependency_sync_failures, read_failed_sync_mod_ids,
-    read_ignored_sync_mod_ids, record_failed_sync_mod,
+    clear_failed_sync_mod, count_dependency_sync_failures, is_dependency_sync_failure,
+    read_failed_sync_mod_ids, read_ignored_sync_mod_ids, record_failed_sync_mod,
 };
 use crate::modio_client::{
     fetch_mod_object, fetch_mod_outcome, fetch_subscribed_mod_ids, format_api_error,
@@ -637,6 +637,13 @@ async fn install_state_for_mod(
     ))
 }
 
+fn maybe_clear_failed_sync_mod(app: &AppHandle, mod_id: u64) {
+    if is_dependency_sync_failure(app, mod_id) {
+        return;
+    }
+    let _ = clear_failed_sync_mod(app, mod_id);
+}
+
 async fn reconcile_failed_sync_mods(
     app: &AppHandle,
     state: &ModioState,
@@ -658,7 +665,7 @@ async fn reconcile_failed_sync_mods(
         };
 
         if install_state.status == "upToDate" {
-            let _ = clear_failed_sync_mod(app, mod_id);
+            maybe_clear_failed_sync_mod(app, mod_id);
         }
     }
 }
@@ -734,6 +741,20 @@ async fn ensure_subscription_sync_may_continue(
         return Err(SUBSCRIPTION_SYNC_CANCELLED.into());
     }
     Ok(())
+}
+
+fn track_sync_dependency_failure(
+    target_mod_id: u64,
+    sync_failure_roots: &HashSet<u64>,
+    failed_dependencies: &mut Vec<u64>,
+) {
+    if sync_failure_roots.contains(&target_mod_id) {
+        return;
+    }
+    if failed_dependencies.contains(&target_mod_id) {
+        return;
+    }
+    failed_dependencies.push(target_mod_id);
 }
 
 fn record_sync_failure_for_target(
@@ -820,6 +841,11 @@ async fn install_targets_internal(
                                 roots,
                                 subscribers,
                             );
+                            track_sync_dependency_failure(
+                                target_mod_id,
+                                roots,
+                                &mut failed_dependencies,
+                            );
                         } else if roots.contains(&target_mod_id) {
                             let _ = record_failed_sync_mod(
                                 app,
@@ -850,7 +876,7 @@ async fn install_targets_internal(
                 } else {
                     log::debug!("Mod {target_mod_id} already up to date, skipping");
                     if let Some(app) = app {
-                        let _ = clear_failed_sync_mod(app, target_mod_id);
+                        maybe_clear_failed_sync_mod(app, target_mod_id);
                     }
                     skipped.push(target_mod_id);
                     continue;
@@ -858,7 +884,7 @@ async fn install_targets_internal(
             } else {
                 log::debug!("Mod {target_mod_id} already up to date, skipping");
                 if let Some(app) = app {
-                    let _ = clear_failed_sync_mod(app, target_mod_id);
+                    maybe_clear_failed_sync_mod(app, target_mod_id);
                 }
                 skipped.push(target_mod_id);
                 continue;
@@ -870,7 +896,7 @@ async fn install_targets_internal(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
             if let Some(app) = app {
-                let _ = clear_failed_sync_mod(app, target_mod_id);
+                maybe_clear_failed_sync_mod(app, target_mod_id);
             }
             skipped.push(target_mod_id);
             continue;
@@ -889,7 +915,7 @@ async fn install_targets_internal(
                 log::info!("Installed mod {target_mod_id}");
                 installed.push(target_mod_id);
                 if let Some(app) = app {
-                    let _ = clear_failed_sync_mod(app, target_mod_id);
+                    maybe_clear_failed_sync_mod(app, target_mod_id);
                 }
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
@@ -908,6 +934,11 @@ async fn install_targets_internal(
                                 &message,
                                 roots,
                                 subscribers,
+                            );
+                            track_sync_dependency_failure(
+                                target_mod_id,
+                                roots,
+                                &mut failed_dependencies,
                             );
                         } else if roots.contains(&target_mod_id) {
                             let _ = record_failed_sync_mod(app, target_mod_id, "install", &message);
@@ -1126,7 +1157,8 @@ async fn sync_subscribed_mods_inner(
     state.persist_cache(app);
     match result {
         Ok(mut summary) => {
-            summary.dependency_failure_count = count_dependency_sync_failures(app);
+            summary.dependency_failure_count = count_dependency_sync_failures(app)
+                .max(summary.failed_dependencies.len() as u32);
             Ok(summary)
         }
         Err(message) => Err(message),

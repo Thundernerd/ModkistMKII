@@ -145,15 +145,22 @@ function formatCountLabel(count: number, singular: string, plural?: string) {
   return `${count} ${label}`;
 }
 
+function syncHasDependencyIssues(result: InstallModResult) {
+  return (
+    (result.dependencyFailureCount ?? 0) > 0
+    || (result.failedDependencies?.length ?? 0) > 0
+  );
+}
+
 function notifySubscriptionSyncComplete(
   pushNotification: ReturnType<typeof useNotifications>["pushNotification"],
   result: InstallModResult,
   updateCount: number,
 ) {
-  const dependencyFailures = result.dependencyFailureCount ?? 0;
+  const dependencyFailures = syncHasDependencyIssues(result);
   const installedCount = result.installed.length;
 
-  if (dependencyFailures > 0) {
+  if (dependencyFailures) {
     if (installedCount > 0) {
       pushNotification({
         title: "Subscriptions synced with warnings",

@@ -144,6 +144,12 @@ pub fn count_dependency_sync_failures(app: &AppHandle) -> u32 {
         .count() as u32
 }
 
+pub fn is_dependency_sync_failure(app: &AppHandle, mod_id: u64) -> bool {
+    read_failed_sync_records(app)
+        .iter()
+        .any(|record| record.mod_id == mod_id && record.error_type == "dependency")
+}
+
 fn read_failed_sync_records(app: &AppHandle) -> Vec<FailedSyncModRecord> {
     let store = app.store(SETTINGS_STORE_PATH).ok();
     let Some(store) = store else {
