@@ -1,4 +1,5 @@
 import { invoke } from "~/utils/tauri";
+import { useNotifications } from "~/composables/useNotifications";
 
 export interface ModSummary {
   id: number;
@@ -44,10 +45,10 @@ export interface ListModsParams {
 const DEFAULT_LIMIT = 20;
 
 export function useMods() {
+  const { pushNotification } = useNotifications();
   const mods = ref<ModSummary[]>([]);
   const total = ref(0);
   const loading = ref(false);
-  const error = ref("");
 
   const search = ref("");
   const modType = ref<ModTypeFilter>("all");
@@ -60,9 +61,6 @@ export function useMods() {
 
   async function fetchMods(append = false) {
     loading.value = true;
-    if (!append) {
-      error.value = "";
-    }
 
     try {
       const result = await invoke<ModListResult>("list_mods", {
@@ -85,7 +83,13 @@ export function useMods() {
       }
       total.value = result.total;
     } catch (err) {
-      error.value = String(err);
+      const message = String(err);
+      pushNotification({
+        title: append ? "Could not load more mods" : "Could not load mods",
+        message,
+        tone: "error",
+        durationMs: 10_000,
+      });
       if (!append) {
         mods.value = [];
         total.value = 0;
@@ -140,7 +144,6 @@ export function useMods() {
     mods,
     total,
     loading,
-    error,
     search,
     modType,
     categoryTags,

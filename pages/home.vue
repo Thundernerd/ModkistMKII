@@ -9,7 +9,6 @@ const {
   mods,
   total,
   loading,
-  error,
   search,
   modType,
   categoryTags,
@@ -141,8 +140,6 @@ onMounted(async () => {
       </p>
     </template>
 
-    <p v-if="error" class="error mods-error">{{ error }}</p>
-
     <div v-if="modioConfigured && loading && mods.length === 0" class="state">
       <span class="spinner" aria-hidden="true" />
       Loading mods…
@@ -229,10 +226,6 @@ onMounted(async () => {
 .updates-banner {
   border-color: rgba(var(--modio-accent-rgb), 0.35);
   background: rgba(var(--modio-accent-rgb), 0.08);
-}
-
-.mods-error {
-  margin-bottom: 1rem;
 }
 
 .state {
