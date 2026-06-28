@@ -705,6 +705,7 @@ async fn install_targets_internal(
     auto_update: bool,
     file_override: Option<(u64, u64)>,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
+    sync_failure_roots: Option<&HashSet<u64>>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
@@ -739,7 +740,9 @@ async fn install_targets_internal(
                     "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
                 );
                 if let Some(app) = app {
-                    let _ = record_failed_sync_mod(app, target_mod_id);
+                    if sync_failure_roots.is_some_and(|roots| roots.contains(&target_mod_id)) {
+                        let _ = record_failed_sync_mod(app, target_mod_id);
+                    }
                 }
                 continue;
             }
@@ -803,7 +806,9 @@ async fn install_targets_internal(
                     "Failed to install mod {target_mod_id} during subscription sync: {message}"
                 );
                 if let Some(app) = app {
-                    let _ = record_failed_sync_mod(app, target_mod_id);
+                    if sync_failure_roots.is_some_and(|roots| roots.contains(&target_mod_id)) {
+                        let _ = record_failed_sync_mod(app, target_mod_id);
+                    }
                 }
             }
             Err(message) => return Err(message),
@@ -854,6 +859,7 @@ async fn install_mod_internal(
         false,
         true,
         file_id.map(|file_id| (mod_id, file_id)),
+        None,
         None,
     )
     .await
@@ -906,6 +912,7 @@ async fn sync_subscribed_mods_inner(
         .collect();
     ensure_subscription_sync_may_continue(app, state).await?;
     let subscribed_count = mod_ids.len();
+    let subscribed_roots: HashSet<u64> = mod_ids.iter().copied().collect();
 
     let (mut records, mods_by_id) = prepare_installed_records(state, &game_dir).await?;
     let mut dependency_map = HashMap::new();
@@ -955,6 +962,7 @@ async fn sync_subscribed_mods_inner(
         auto_update,
         None,
         Some(&mods_by_id),
+        Some(&subscribed_roots),
     )
     .await;
     reconcile_failed_sync_mods(
