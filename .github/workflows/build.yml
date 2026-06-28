@@ -3,6 +3,7 @@
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   MODIO_API_KEY  — game API key from mod.io
 #   MODIO_GAME_ID  — numeric game ID from mod.io
+#   VITE_SENTRY_DSN — optional frontend Sentry DSN (embedded at build time)
 #
 # Run from Actions → Build → Run workflow. Choose which platforms to build.
 # Bundles appear as workflow artifacts (dmg/msi/deb/AppImage per platform).
@@ -114,6 +115,7 @@ jobs:
         env:
           MODIO_API_KEY: ${{ secrets.MODIO_API_KEY }}
           MODIO_GAME_ID: ${{ secrets.MODIO_GAME_ID }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
         run: npm run tauri build -- ${{ matrix.tauri_args }}
 
       - name: Upload bundles
