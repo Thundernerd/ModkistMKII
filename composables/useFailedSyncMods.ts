@@ -3,6 +3,8 @@ import { invoke } from "~/utils/tauri";
 export interface FailedSyncModEntry {
   modId: number;
   ignored: boolean;
+  errorType: string;
+  errorDetail?: string;
 }
 
 export interface FailedSyncModList {

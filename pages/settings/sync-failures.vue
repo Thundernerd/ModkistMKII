@@ -74,6 +74,23 @@ async function handleUnsubscribe(modId: number) {
   }
 }
 
+const FAILED_SYNC_ERROR_LABELS: Record<string, string> = {
+  install_order: "Could not resolve dependencies",
+  install_state: "Could not check mod status",
+  install: "Install failed",
+  rate_limit: "Rate limited",
+  auth: "Private or not accessible",
+  unavailable: "Mod unavailable",
+  game_running: "Game was running",
+  profile_blocked: "Wrong profile",
+  unknown: "Sync failed",
+  other: "Sync failed",
+};
+
+function failedSyncErrorLabel(errorType: string) {
+  return FAILED_SYNC_ERROR_LABELS[errorType] ?? "Sync failed";
+}
+
 onMounted(refreshFailedSyncMods);
 </script>
 
@@ -103,6 +120,12 @@ onMounted(refreshFailedSyncMods);
       <li v-for="entry in mods" :key="entry.modId" class="failed-item panel">
         <div class="failed-main">
           <span class="failed-id">Mod ID {{ entry.modId }}</span>
+          <p class="failed-error-type">
+            {{ failedSyncErrorLabel(entry.errorType) }}
+          </p>
+          <p v-if="entry.errorDetail" class="failed-error-detail">
+            {{ entry.errorDetail }}
+          </p>
           <p v-if="actionErrors[entry.modId]" class="item-error">
             {{ actionErrors[entry.modId] }}
           </p>
@@ -221,6 +244,20 @@ onMounted(refreshFailedSyncMods);
 .failed-id {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.failed-error-type {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--modio-text);
+}
+
+.failed-error-detail {
+  margin: 0.25rem 0 0;
+  font-size: 0.82rem;
+  color: var(--modio-text-muted);
+  line-height: 1.45;
 }
 
 .item-error {

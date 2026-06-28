@@ -741,7 +741,7 @@ async fn install_targets_internal(
                 );
                 if let Some(app) = app {
                     if sync_failure_roots.is_some_and(|roots| roots.contains(&target_mod_id)) {
-                        let _ = record_failed_sync_mod(app, target_mod_id);
+                        let _ = record_failed_sync_mod(app, target_mod_id, "install_state", &message);
                     }
                 }
                 continue;
@@ -807,7 +807,7 @@ async fn install_targets_internal(
                 );
                 if let Some(app) = app {
                     if sync_failure_roots.is_some_and(|roots| roots.contains(&target_mod_id)) {
-                        let _ = record_failed_sync_mod(app, target_mod_id);
+                        let _ = record_failed_sync_mod(app, target_mod_id, "install", &message);
                     }
                 }
             }
@@ -939,7 +939,7 @@ async fn sync_subscribed_mods_inner(
                 log::error!(
                     "Failed to build install order for subscribed mod {mod_id}: {message}"
                 );
-                let _ = record_failed_sync_mod(app, mod_id);
+                let _ = record_failed_sync_mod(app, mod_id, "install_order", &message);
             }
         }
     }

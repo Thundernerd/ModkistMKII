@@ -1,18 +1,31 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use crate::app_settings::SETTINGS_STORE_PATH;
 
-const FAILED_SYNC_MODS_KEY: &str = "failedSyncModIds";
+const LEGACY_FAILED_SYNC_MODS_KEY: &str = "failedSyncModIds";
+const FAILED_SYNC_MODS_KEY: &str = "failedSyncMods";
 const IGNORED_SYNC_MODS_KEY: &str = "ignoredSyncModIds";
+const MAX_ERROR_DETAIL_LEN: usize = 240;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FailedSyncModRecord {
+    mod_id: u64,
+    error_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_detail: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FailedSyncModEntry {
     pub mod_id: u64,
     pub ignored: bool,
+    pub error_type: String,
+    pub error_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,6 +42,10 @@ fn read_u64_list(app: &AppHandle, key: &str) -> Vec<u64> {
         .unwrap_or_default()
 }
 
+pub fn read_ignored_sync_mod_ids(app: &AppHandle) -> Vec<u64> {
+    read_u64_list(app, IGNORED_SYNC_MODS_KEY)
+}
+
 fn write_u64_list(app: &AppHandle, key: &str, mod_ids: &[u64]) -> Result<(), String> {
     let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
     store.set(key, serde_json::json!(mod_ids));
@@ -40,34 +57,119 @@ fn sort_dedup(mod_ids: &mut Vec<u64>) {
     mod_ids.dedup();
 }
 
-pub fn read_failed_sync_mod_ids(app: &AppHandle) -> Vec<u64> {
-    read_u64_list(app, FAILED_SYNC_MODS_KEY)
-}
-
-pub fn read_ignored_sync_mod_ids(app: &AppHandle) -> Vec<u64> {
-    read_u64_list(app, IGNORED_SYNC_MODS_KEY)
-}
-
-pub fn record_failed_sync_mod(app: &AppHandle, mod_id: u64) -> Result<(), String> {
-    let mut failed = read_failed_sync_mod_ids(app);
-    if failed.binary_search(&mod_id).is_ok() {
-        return Ok(());
+fn truncate_error_detail(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    failed.push(mod_id);
-    sort_dedup(&mut failed);
-    write_u64_list(app, FAILED_SYNC_MODS_KEY, &failed)?;
-    log::info!("Recorded failed subscription sync for mod {mod_id}");
+    if trimmed.chars().count() <= MAX_ERROR_DETAIL_LEN {
+        return Some(trimmed.to_string());
+    }
+    Some(format!(
+        "{}…",
+        trimmed.chars().take(MAX_ERROR_DETAIL_LEN).collect::<String>()
+    ))
+}
+
+fn refine_sync_failure(category: &str, message: &str) -> (String, Option<String>) {
+    let lower = message.to_ascii_lowercase();
+    let detail = truncate_error_detail(message);
+
+    if lower.contains("rate limit") {
+        return ("rate_limit".to_string(), detail);
+    }
+    if lower.contains("no longer available") {
+        return ("unavailable".to_string(), detail);
+    }
+    if lower.contains("sign in")
+        || lower.contains("not logged in")
+        || lower.contains("authentication")
+        || lower.contains("private")
+        || lower.contains("could not be found")
+        || lower.contains("not subscribed")
+    {
+        return ("auth".to_string(), detail);
+    }
+    if lower.contains("zeepkist is running") {
+        return ("game_running".to_string(), detail);
+    }
+    if lower.contains("vanilla profile") || lower.contains("installing mods is disabled") {
+        return ("profile_blocked".to_string(), detail);
+    }
+
+    (category.to_string(), detail)
+}
+
+pub fn read_failed_sync_mod_ids(app: &AppHandle) -> Vec<u64> {
+    read_failed_sync_records(app)
+        .into_iter()
+        .map(|record| record.mod_id)
+        .collect()
+}
+
+fn read_failed_sync_records(app: &AppHandle) -> Vec<FailedSyncModRecord> {
+    let store = app.store(SETTINGS_STORE_PATH).ok();
+    let Some(store) = store else {
+        return Vec::new();
+    };
+
+    if let Some(value) = store.get(FAILED_SYNC_MODS_KEY) {
+        if let Ok(records) = serde_json::from_value::<Vec<FailedSyncModRecord>>(value) {
+            return records;
+        }
+    }
+
+    read_u64_list(app, LEGACY_FAILED_SYNC_MODS_KEY)
+        .into_iter()
+        .map(|mod_id| FailedSyncModRecord {
+            mod_id,
+            error_type: "unknown".to_string(),
+            error_detail: None,
+        })
+        .collect()
+}
+
+fn write_failed_sync_records(app: &AppHandle, records: &[FailedSyncModRecord]) -> Result<(), String> {
+    let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
+    store.set(FAILED_SYNC_MODS_KEY, serde_json::json!(records));
+    let _ = store.delete(LEGACY_FAILED_SYNC_MODS_KEY);
+    store.save().map_err(|e| e.to_string())
+}
+
+pub fn record_failed_sync_mod(
+    app: &AppHandle,
+    mod_id: u64,
+    category: &str,
+    message: &str,
+) -> Result<(), String> {
+    let (error_type, error_detail) = refine_sync_failure(category, message);
+    let mut records = read_failed_sync_records(app);
+
+    if let Some(existing) = records.iter_mut().find(|record| record.mod_id == mod_id) {
+        existing.error_type = error_type;
+        existing.error_detail = error_detail;
+    } else {
+        records.push(FailedSyncModRecord {
+            mod_id,
+            error_type,
+            error_detail,
+        });
+        records.sort_unstable_by_key(|record| record.mod_id);
+    }
+
+    write_failed_sync_records(app, &records)?;
+    log::info!("Recorded failed subscription sync for mod {mod_id} ({category})");
     Ok(())
 }
 
 pub fn clear_failed_sync_mod(app: &AppHandle, mod_id: u64) -> Result<(), String> {
-    let mut failed = read_failed_sync_mod_ids(app);
-    let original_len = failed.len();
-    failed.retain(|id| *id != mod_id);
-    if failed.len() == original_len {
+    let mut records = read_failed_sync_records(app);
+    let original_len = records.len();
+    records.retain(|record| record.mod_id != mod_id);
+    if records.len() == original_len {
         return Ok(());
     }
-    write_u64_list(app, FAILED_SYNC_MODS_KEY, &failed)?;
+    write_failed_sync_records(app, &records)?;
     log::info!("Cleared failed subscription sync entry for mod {mod_id}");
     Ok(())
 }
@@ -108,16 +210,20 @@ pub fn remove_sync_mod_tracking(app: &AppHandle, mod_id: u64) -> Result<(), Stri
     Ok(())
 }
 
-fn build_failed_sync_mod_list(failed: &[u64], ignored: &[u64]) -> FailedSyncModList {
+fn build_failed_sync_mod_list(
+    records: &[FailedSyncModRecord],
+    ignored: &[u64],
+) -> FailedSyncModList {
     let ignored_set: HashSet<u64> = ignored.iter().copied().collect();
 
     FailedSyncModList {
-        mods: failed
+        mods: records
             .iter()
-            .copied()
-            .map(|mod_id| FailedSyncModEntry {
-                mod_id,
-                ignored: ignored_set.contains(&mod_id),
+            .map(|record| FailedSyncModEntry {
+                mod_id: record.mod_id,
+                ignored: ignored_set.contains(&record.mod_id),
+                error_type: record.error_type.clone(),
+                error_detail: record.error_detail.clone(),
             })
             .collect(),
     }
@@ -125,7 +231,7 @@ fn build_failed_sync_mod_list(failed: &[u64], ignored: &[u64]) -> FailedSyncModL
 
 pub fn list_failed_sync_mods(app: &AppHandle) -> FailedSyncModList {
     build_failed_sync_mod_list(
-        &read_failed_sync_mod_ids(app),
+        &read_failed_sync_records(app),
         &read_ignored_sync_mod_ids(app),
     )
 }
@@ -173,11 +279,25 @@ mod tests {
 
     #[test]
     fn list_only_includes_recorded_failures() {
-        let list = build_failed_sync_mod_list(&[101, 202], &[202, 303]);
+        let records = vec![
+            FailedSyncModRecord {
+                mod_id: 101,
+                error_type: "install".to_string(),
+                error_detail: Some("download failed".to_string()),
+            },
+            FailedSyncModRecord {
+                mod_id: 202,
+                error_type: "auth".to_string(),
+                error_detail: None,
+            },
+        ];
+        let list = build_failed_sync_mod_list(&records, &[202, 303]);
         assert_eq!(list.mods.len(), 2);
         assert_eq!(list.mods[0].mod_id, 101);
+        assert_eq!(list.mods[0].error_type, "install");
         assert!(!list.mods[0].ignored);
         assert_eq!(list.mods[1].mod_id, 202);
+        assert_eq!(list.mods[1].error_type, "auth");
         assert!(list.mods[1].ignored);
     }
 
@@ -185,5 +305,25 @@ mod tests {
     fn list_ignores_orphaned_ignore_entries() {
         let list = build_failed_sync_mod_list(&[], &[404]);
         assert!(list.mods.is_empty());
+    }
+
+    #[test]
+    fn refine_sync_failure_detects_rate_limit() {
+        let (error_type, _) = refine_sync_failure("install", "OAuth rate limit reached");
+        assert_eq!(error_type, "rate_limit");
+    }
+
+    #[test]
+    fn refine_sync_failure_detects_auth_errors() {
+        let (error_type, _) =
+            refine_sync_failure("install_state", "The mod ID could not be found.");
+        assert_eq!(error_type, "auth");
+    }
+
+    #[test]
+    fn refine_sync_failure_keeps_category_for_generic_errors() {
+        let (error_type, detail) = refine_sync_failure("install_order", "Dependency graph error");
+        assert_eq!(error_type, "install_order");
+        assert_eq!(detail.as_deref(), Some("Dependency graph error"));
     }
 }
