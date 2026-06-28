@@ -57,6 +57,81 @@ interface InstallModOptions {
 }
 
 const SUCCESS_TOAST_DURATION_MS = 6_000;
+const ERROR_TOAST_DURATION_MS = 8_000;
+
+function isRateLimitedMessage(message: string) {
+  return message.toLowerCase().includes("rate limit");
+}
+
+function isReadableToastDetail(message: string) {
+  const trimmed = message.trim();
+  if (!trimmed || trimmed.length > 80) {
+    return false;
+  }
+  if (/error_ref\s*\d+/i.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.toLowerCase().includes("oauth")) {
+    return false;
+  }
+  return true;
+}
+
+function subscriptionSyncFailureToast(message: string): {
+  title: string;
+  message: string;
+} {
+  const lower = message.toLowerCase();
+
+  if (isRateLimitedMessage(message)) {
+    return {
+      title: "mod.io rate limit",
+      message:
+        "Couldn't sync your subscribed mods. Try again in about a minute.",
+    };
+  }
+
+  if (
+    lower.includes("sign in") ||
+    lower.includes("not logged in") ||
+    lower.includes("authentication")
+  ) {
+    return {
+      title: "Sign in required",
+      message: "Sign in to mod.io to sync your subscribed mods.",
+    };
+  }
+
+  if (lower.includes("zeepkist is running")) {
+    return {
+      title: "Game is running",
+      message: "Close Zeepkist, then return to Mods to sync subscribed mods.",
+    };
+  }
+
+  if (
+    lower.includes("vanilla profile") ||
+    lower.includes("installing mods is disabled")
+  ) {
+    return {
+      title: "Wrong profile",
+      message: "Switch off the Vanilla profile to install subscribed mods.",
+    };
+  }
+
+  const trimmed = message.trim();
+  if (isReadableToastDetail(trimmed)) {
+    return {
+      title: "Couldn't sync subscribed mods",
+      message: `Couldn't sync your subscribed mods. ${trimmed}`,
+    };
+  }
+
+  return {
+    title: "Couldn't sync subscribed mods",
+    message: "Your mod list may be incomplete. Try again in a moment.",
+  };
+}
 
 function installedModName(modId: number) {
   return installedMods.value.find((mod) => mod.modId === modId)?.name ?? `Mod ${modId}`;
@@ -370,10 +445,9 @@ export function useModInstall() {
         }
         logger.error("Subscription sync failed", message);
         pushNotification({
-          title: "Subscription sync failed",
-          message: `${message} If you were rate limited, wait about a minute and try again.`,
+          ...subscriptionSyncFailureToast(message),
           tone: "error",
-          durationMs: 10_000,
+          durationMs: ERROR_TOAST_DURATION_MS,
         });
         await refreshInstalled().catch(() => {});
       } finally {
