@@ -16,6 +16,9 @@ use crate::mod_folder::{
 };
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
+use crate::subscription_sync_settings::{
+    clear_failed_sync_mod, read_ignored_sync_mod_ids, record_failed_sync_mod,
+};
 use crate::modio_client::{
     fetch_mod_object, fetch_mod_outcome, fetch_subscribed_mod_ids, format_api_error,
     subscribe_to_mod, unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioState,
@@ -694,14 +697,27 @@ async fn install_targets_internal(
             subscribe_to_mod(state, target_mod_id).await?;
         }
 
-        let state_for_mod = install_state_for_mod(
+        let state_for_mod = match install_state_for_mod(
             state,
             target_mod_id,
             records,
             dependency_map,
             mods_by_id,
         )
-        .await?;
+        .await
+        {
+            Ok(state_for_mod) => state_for_mod,
+            Err(message) if app.is_some() => {
+                log::error!(
+                    "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
+                );
+                if let Some(app) = app {
+                    let _ = record_failed_sync_mod(app, target_mod_id);
+                }
+                continue;
+            }
+            Err(message) => return Err(message),
+        };
         if matches!(state_for_mod.status.as_str(), "upToDate") {
             if let Some((override_mod, override_file)) = file_override {
                 if override_mod == target_mod_id
@@ -736,11 +752,26 @@ async fn install_targets_internal(
         let target_file_id = file_override
             .filter(|(override_mod, _)| *override_mod == target_mod_id)
             .map(|(_, file_id)| file_id);
-        install_single_mod(state, game_dir, target_mod_id, target_file_id).await?;
-        log::info!("Installed mod {target_mod_id}");
-        installed.push(target_mod_id);
-        *records = scan_installed_mods(game_dir)?;
-        refresh_dependency_map(state, dependency_map, records).await?;
+        match install_single_mod(state, game_dir, target_mod_id, target_file_id).await {
+            Ok(()) => {
+                log::info!("Installed mod {target_mod_id}");
+                installed.push(target_mod_id);
+                if let Some(app) = app {
+                    let _ = clear_failed_sync_mod(app, target_mod_id);
+                }
+                *records = scan_installed_mods(game_dir)?;
+                refresh_dependency_map(state, dependency_map, records).await?;
+            }
+            Err(message) if app.is_some() => {
+                log::error!(
+                    "Failed to install mod {target_mod_id} during subscription sync: {message}"
+                );
+                if let Some(app) = app {
+                    let _ = record_failed_sync_mod(app, target_mod_id);
+                }
+            }
+            Err(message) => return Err(message),
+        }
     }
 
     log::debug!(
@@ -831,7 +862,12 @@ async fn sync_subscribed_mods_inner(
 
     let game_dir = game_directory(app)?;
     ensure_install_prerequisites(&game_dir)?;
-    let mod_ids = fetch_subscribed_mod_ids(state).await?;
+    let ignored: HashSet<u64> = read_ignored_sync_mod_ids(app).into_iter().collect();
+    let mod_ids: Vec<u64> = fetch_subscribed_mod_ids(state)
+        .await?
+        .into_iter()
+        .filter(|mod_id| !ignored.contains(mod_id))
+        .collect();
     ensure_subscription_sync_may_continue(app, state).await?;
     let subscribed_count = mod_ids.len();
 
@@ -845,10 +881,22 @@ async fn sync_subscribed_mods_inner(
     let mut seen_targets = HashSet::new();
     for mod_id in mod_ids {
         ensure_subscription_sync_may_continue(app, state).await?;
-        let order = collect_install_order(state, mod_id).await?;
-        for target_mod_id in order {
-            if seen_targets.insert(target_mod_id) {
-                install_order.push(target_mod_id);
+        match collect_install_order(state, mod_id).await {
+            Ok(order) => {
+                for target_mod_id in order {
+                    if ignored.contains(&target_mod_id) {
+                        continue;
+                    }
+                    if seen_targets.insert(target_mod_id) {
+                        install_order.push(target_mod_id);
+                    }
+                }
+            }
+            Err(message) => {
+                log::error!(
+                    "Failed to build install order for subscribed mod {mod_id}: {message}"
+                );
+                let _ = record_failed_sync_mod(app, mod_id);
             }
         }
     }

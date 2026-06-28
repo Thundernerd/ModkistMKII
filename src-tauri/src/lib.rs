@@ -40,6 +40,7 @@ mod mod_install;
 pub mod modio_api;
 mod modio_client;
 mod profiles;
+mod subscription_sync_settings;
 mod zip_extract;
 
 use app_settings::{
@@ -61,6 +62,9 @@ use mod_install::{
 use profiles::{
     create_profile, delete_profile, get_active_profile, list_profiles,
     logout_requires_profile_selection_command, rename_profile, switch_profile,
+};
+use subscription_sync_settings::{
+    list_failed_sync_mods_command, set_failed_sync_mod_ignored, unsubscribe_failed_sync_mod,
 };
 use modio_client::{
     get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mod_files,
@@ -167,6 +171,9 @@ pub fn run() {
             delete_profile,
             rename_profile,
             logout_requires_profile_selection_command,
+            list_failed_sync_mods_command,
+            set_failed_sync_mod_ignored,
+            unsubscribe_failed_sync_mod,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
