@@ -77,6 +77,12 @@ pub fn set_sync_mod_ignored(app: &AppHandle, mod_id: u64, ignored: bool) -> Resu
     let position = ignored_mods.binary_search(&mod_id);
 
     if ignored {
+        let failed = read_failed_sync_mod_ids(app);
+        if failed.binary_search(&mod_id).is_err() {
+            return Err(format!(
+                "Mod {mod_id} is not in the failed subscription sync list."
+            ));
+        }
         if position.is_ok() {
             return Ok(());
         }
@@ -102,28 +108,26 @@ pub fn remove_sync_mod_tracking(app: &AppHandle, mod_id: u64) -> Result<(), Stri
     Ok(())
 }
 
-pub fn list_failed_sync_mods(app: &AppHandle) -> FailedSyncModList {
-    let failed = read_failed_sync_mod_ids(app);
-    let ignored = read_ignored_sync_mod_ids(app);
-    let mut mod_ids = failed;
-    for mod_id in ignored {
-        if mod_ids.binary_search(&mod_id).is_err() {
-            mod_ids.push(mod_id);
-        }
-    }
-    sort_dedup(&mut mod_ids);
-
-    let ignored_set: HashSet<u64> = read_ignored_sync_mod_ids(app).into_iter().collect();
+fn build_failed_sync_mod_list(failed: &[u64], ignored: &[u64]) -> FailedSyncModList {
+    let ignored_set: HashSet<u64> = ignored.iter().copied().collect();
 
     FailedSyncModList {
-        mods: mod_ids
-            .into_iter()
+        mods: failed
+            .iter()
+            .copied()
             .map(|mod_id| FailedSyncModEntry {
                 mod_id,
                 ignored: ignored_set.contains(&mod_id),
             })
             .collect(),
     }
+}
+
+pub fn list_failed_sync_mods(app: &AppHandle) -> FailedSyncModList {
+    build_failed_sync_mod_list(
+        &read_failed_sync_mod_ids(app),
+        &read_ignored_sync_mod_ids(app),
+    )
 }
 
 #[tauri::command]
@@ -161,4 +165,25 @@ async fn unsubscribe_failed_sync_mod_inner(
     }
     remove_sync_mod_tracking(app, mod_id)?;
     Ok(list_failed_sync_mods(app))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_only_includes_recorded_failures() {
+        let list = build_failed_sync_mod_list(&[101, 202], &[202, 303]);
+        assert_eq!(list.mods.len(), 2);
+        assert_eq!(list.mods[0].mod_id, 101);
+        assert!(!list.mods[0].ignored);
+        assert_eq!(list.mods[1].mod_id, 202);
+        assert!(list.mods[1].ignored);
+    }
+
+    #[test]
+    fn list_ignores_orphaned_ignore_entries() {
+        let list = build_failed_sync_mod_list(&[], &[404]);
+        assert!(list.mods.is_empty());
+    }
 }
