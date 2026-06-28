@@ -433,6 +433,13 @@ export function useModInstall() {
             tone: "success",
             durationMs: SUCCESS_TOAST_DURATION_MS,
           });
+        } else if (updateCount.value === 0) {
+          pushNotification({
+            title: "Subscriptions synced",
+            message: "All subscribed mods are already up to date.",
+            tone: "success",
+            durationMs: SUCCESS_TOAST_DURATION_MS,
+          });
         }
       } catch (error) {
         if (generation !== subscriptionSyncGeneration) {
