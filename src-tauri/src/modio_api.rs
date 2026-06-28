@@ -236,6 +236,10 @@ pub struct ModObject {
     #[serde(default)]
     pub id: u64,
     #[serde(default)]
+    pub game_id: u64,
+    #[serde(default)]
+    pub visible: u8,
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub summary: String,
@@ -294,7 +298,7 @@ pub struct Message {
 }
 
 /// Builder for the `GET /games/{id}/mods` query string.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ModQuery {
     pub search: Option<String>,
     /// AND-combined tag filters (`tags=<value>` repeated).
@@ -613,14 +617,10 @@ impl ApiClient {
         &self,
         token: &str,
         game_id: u64,
-        limit: u32,
-        offset: u32,
+        query: &ModQuery,
     ) -> Result<ListResponse<ModObject>, ApiError> {
-        let params = vec![
-            ("game_id".to_string(), game_id.to_string()),
-            ("_limit".to_string(), limit.to_string()),
-            ("_offset".to_string(), offset.to_string()),
-        ];
+        let mut params = query.to_params();
+        params.push(("game_id".to_string(), game_id.to_string()));
         self.send(reqwest::Method::GET, "/me/subscribed", Some(token), &params, None)
             .await
     }
@@ -629,11 +629,10 @@ impl ApiClient {
         &self,
         token: &str,
         game_id: u64,
+        query: &ModQuery,
     ) -> Result<ListResponse<ModObject>, ApiError> {
-        let params = vec![
-            ("game_id".to_string(), game_id.to_string()),
-            ("_limit".to_string(), "100".to_string()),
-        ];
+        let mut params = query.to_params();
+        params.push(("game_id".to_string(), game_id.to_string()));
         self.send(reqwest::Method::GET, "/me/mods", Some(token), &params, None)
             .await
     }

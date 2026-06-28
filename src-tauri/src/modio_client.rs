@@ -494,8 +494,13 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
             let mut mod_ids: Vec<u64> = Vec::new();
             let mut offset: u32 = 0;
             loop {
+                let query = ModQuery {
+                    limit: PAGE_LIMIT,
+                    offset,
+                    ..ModQuery::default()
+                };
                 let list = api
-                    .get_user_subscriptions(&token, game_id, PAGE_LIMIT, offset)
+                    .get_user_subscriptions(&token, game_id, &query)
                     .await
                     .map_err(format_api_error)?;
                 let count = list.data.len() as u32;
@@ -994,8 +999,12 @@ pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResul
     let game_id = state.game_id()?;
     let api = state.api()?;
     let token = state.require_token()?;
+    let query = ModQuery {
+        limit: 100,
+        ..ModQuery::default()
+    };
     let list = api
-        .get_user_mods(&token, game_id)
+        .get_user_mods(&token, game_id, &query)
         .await
         .map_err(format_api_error)?;
 

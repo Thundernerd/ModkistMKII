@@ -26,13 +26,20 @@ async fn build_session() -> (ApiClient, u64, String) {
 }
 
 async fn fetch_subscribed_paged(client: &ApiClient, token: &str, game_id: u64) -> usize {
+    use modkistmkii_lib::modio_api::ModQuery;
+
     const LIMIT: u32 = 100;
     let mut count = 0usize;
     let mut pages = 0usize;
     let mut offset = 0u32;
     loop {
+        let query = ModQuery {
+            limit: LIMIT,
+            offset,
+            ..ModQuery::default()
+        };
         let list = client
-            .get_user_subscriptions(token, game_id, LIMIT, offset)
+            .get_user_subscriptions(token, game_id, &query)
             .await
             .expect("subscriptions page");
         pages += 1;
@@ -68,9 +75,16 @@ async fn try_subscribe(client: &ApiClient, token: &str, game_id: u64, mod_id: u6
 #[tokio::test]
 #[ignore = "live mod.io API — requires .env and modio-auth.json"]
 async fn diagnose_oauth_subscribe_flow() {
+    use modkistmkii_lib::modio_api::ModQuery;
+
     let (client, game_id, token) = build_session().await;
+    let query = ModQuery {
+        limit: 100,
+        offset: 0,
+        ..ModQuery::default()
+    };
     let list = client
-        .get_user_subscriptions(&token, game_id, 100, 0)
+        .get_user_subscriptions(&token, game_id, &query)
         .await
         .expect("get_user_subscriptions");
     eprintln!("subscriptions (single request): {} mod(s)", list.data.len());
@@ -80,11 +94,18 @@ async fn diagnose_oauth_subscribe_flow() {
 #[tokio::test]
 #[ignore = "live mod.io API — requires .env and modio-auth.json"]
 async fn diagnose_startup_burst_then_subscribe() {
+    use modkistmkii_lib::modio_api::ModQuery;
+
     let (client, game_id, token) = build_session().await;
 
     // Game-key burst similar to startup: list subs + metadata for each.
+    let query = ModQuery {
+        limit: 100,
+        offset: 0,
+        ..ModQuery::default()
+    };
     let subs = client
-        .get_user_subscriptions(&token, game_id, 100, 0)
+        .get_user_subscriptions(&token, game_id, &query)
         .await
         .expect("subs");
     let mod_ids: Vec<u64> = subs.data.iter().map(|m| m.id).collect();
