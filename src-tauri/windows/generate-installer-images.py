@@ -29,7 +29,9 @@ def main() -> None:
     icon = Image.open(ICON).convert("RGBA")
 
     banner = Image.new("RGB", BANNER_SIZE, WIX_UI_BACKGROUND)
-    paste_icon(banner, icon, 32, 16, 13)
+    banner_icon_size = 32
+    banner_icon_x = BANNER_SIZE[0] - banner_icon_size - 16
+    paste_icon(banner, icon, banner_icon_size, banner_icon_x, 13)
     banner.save(ROOT / "installer-banner.bmp", format="BMP")
 
     dialog = Image.new("RGB", DIALOG_SIZE, WIX_UI_BACKGROUND)
