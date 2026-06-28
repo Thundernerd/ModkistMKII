@@ -482,7 +482,8 @@ fn switch_profile_inner(
     data.active_profile_id = target_profile_id.to_string();
     save_store_data(app, &data)?;
     restore_profile(&game_dir, target_profile_id)?;
-    modio_state.clear_api_cache();
+    // mod.io metadata is global per mod id; keep the API cache across profile
+    // switches so browse/install flows can reuse it when returning to a profile.
 
     log::info!("Active profile is now '{}'", target.name);
     Ok(ActiveProfileInfo {

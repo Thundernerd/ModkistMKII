@@ -103,10 +103,15 @@ impl ModioState {
     }
 
     pub(crate) fn cached_subscribed_mod_ids(&self) -> Option<Vec<u64>> {
-        self.api_cache
+        let ids = self
+            .api_cache
             .lock()
             .ok()
-            .and_then(|cache| cache.get_subscribed_mod_ids())
+            .and_then(|cache| cache.get_subscribed_mod_ids());
+        if let Some(ref ids) = ids {
+            log::info!("Cache hit: subscriptions ({} mod(s))", ids.len());
+        }
+        ids
     }
 
     pub(crate) fn store_subscribed_mod_ids(&self, mod_ids: Vec<u64>) {
@@ -146,6 +151,7 @@ impl ModioState {
     pub(crate) fn clear_api_cache(&self) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.clear();
+            log::info!("Cleared mod.io API cache");
         }
     }
 
@@ -156,10 +162,15 @@ impl ModioState {
     }
 
     pub(crate) fn cached_mod_unavailable(&self, mod_id: u64) -> bool {
-        self.api_cache
+        let hit = self
+            .api_cache
             .lock()
             .ok()
-            .is_some_and(|cache| cache.is_mod_unavailable(mod_id))
+            .is_some_and(|cache| cache.is_mod_unavailable(mod_id));
+        if hit {
+            log::info!("Cache hit: mod {mod_id} unavailable");
+        }
+        hit
     }
 
     pub(crate) fn mark_mod_unavailable(&self, mod_id: u64) {
@@ -170,7 +181,14 @@ impl ModioState {
 
     pub(crate) fn cached_dependencies(&self, mod_id: u64) -> Option<Vec<u64>> {
         let cache = self.api_cache.lock().ok()?;
-        cache.get_dependencies(mod_id)
+        let dependencies = cache.get_dependencies(mod_id);
+        if let Some(ref dependencies) = dependencies {
+            log::info!(
+                "Cache hit: mod {mod_id} dependencies ({} id(s))",
+                dependencies.len()
+            );
+        }
+        dependencies
     }
 
     pub(crate) fn store_dependencies(&self, mod_id: u64, dependencies: Vec<u64>) {
@@ -180,10 +198,15 @@ impl ModioState {
     }
 
     pub(crate) fn cached_latest_file_id(&self, mod_id: u64) -> Option<u64> {
-        self.api_cache
+        let file_id = self
+            .api_cache
             .lock()
             .ok()
-            .and_then(|cache| cache.get_latest_file_id(mod_id))
+            .and_then(|cache| cache.get_latest_file_id(mod_id));
+        if let Some(file_id) = file_id {
+            log::info!("Cache hit: mod {mod_id} latest file id {file_id}");
+        }
+        file_id
     }
 
     pub(crate) fn store_latest_file_id(&self, mod_id: u64, file_id: u64) {
@@ -193,7 +216,15 @@ impl ModioState {
     }
 
     pub(crate) fn cached_mod(&self, mod_id: u64) -> Option<ModObject> {
-        self.api_cache.lock().ok().and_then(|cache| cache.get_mod(mod_id))
+        let mod_ = self
+            .api_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get_mod(mod_id));
+        if mod_.is_some() {
+            log::info!("Cache hit: mod {mod_id}");
+        }
+        mod_
     }
 
     pub(crate) fn store_mod(&self, mod_: ModObject) {
@@ -203,10 +234,15 @@ impl ModioState {
     }
 
     pub(crate) fn cached_mod_files(&self, mod_id: u64) -> Option<Vec<Modfile>> {
-        self.api_cache
+        let files = self
+            .api_cache
             .lock()
             .ok()
-            .and_then(|cache| cache.get_mod_files(mod_id))
+            .and_then(|cache| cache.get_mod_files(mod_id));
+        if let Some(ref files) = files {
+            log::info!("Cache hit: mod {mod_id} files ({} file(s))", files.len());
+        }
+        files
     }
 
     pub(crate) fn store_mod_files(&self, mod_id: u64, files: Vec<Modfile>) {
@@ -569,7 +605,6 @@ pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Res
 
 pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {
     if let Some(cached) = state.cached_subscribed_mod_ids() {
-        log::debug!("Using cached subscription list ({} mod(s))", cached.len());
         return Ok(cached);
     }
 
