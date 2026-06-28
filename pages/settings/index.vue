@@ -243,8 +243,21 @@ function profileKindLabel(kind: string) {
 <template>
   <div class="page">
     <header class="page-header">
-      <h1>Settings</h1>
-      <p class="hint">Manage your Modkist preferences.</p>
+      <div class="page-header-row">
+        <div>
+          <h1>Settings</h1>
+          <p class="hint">Manage your Modkist preferences.</p>
+        </div>
+        <button
+          type="button"
+          class="btn-secondary page-header-action"
+          :disabled="openingLogsFolder"
+          @click="openLogsFolder"
+        >
+          {{ openingLogsFolder ? "Opening…" : "Open logs folder" }}
+        </button>
+      </div>
+      <p v-if="logsFolderError" class="error feedback">{{ logsFolderError }}</p>
     </header>
 
     <section class="panel">
@@ -303,22 +316,6 @@ function profileKindLabel(kind: string) {
         Folder that contains <code>zeepkist.exe</code>.
       </p>
       <GamePathForm input-id="settings-game-path" />
-    </section>
-
-    <section class="panel">
-      <h2 class="panel-title">Logs</h2>
-      <p class="hint panel-desc">
-        Modkist writes rotating log files here for troubleshooting.
-      </p>
-      <button
-        type="button"
-        class="btn-secondary"
-        :disabled="openingLogsFolder"
-        @click="openLogsFolder"
-      >
-        {{ openingLogsFolder ? "Opening…" : "Open logs folder" }}
-      </button>
-      <p v-if="logsFolderError" class="error feedback">{{ logsFolderError }}</p>
     </section>
 
     <section class="panel">
@@ -437,6 +434,17 @@ function profileKindLabel(kind: string) {
 
 .page-header {
   margin-bottom: 1.5rem;
+}
+
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-header-action {
+  flex-shrink: 0;
 }
 
 .page-header h1 {
@@ -672,6 +680,11 @@ function profileKindLabel(kind: string) {
 }
 
 @media (max-width: 640px) {
+  .page-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .setting-row {
     flex-direction: column;
     align-items: stretch;
