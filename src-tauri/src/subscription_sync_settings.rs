@@ -137,6 +137,13 @@ pub fn read_failed_sync_mod_ids(app: &AppHandle) -> Vec<u64> {
         .collect()
 }
 
+pub fn count_dependency_sync_failures(app: &AppHandle) -> u32 {
+    read_failed_sync_records(app)
+        .iter()
+        .filter(|record| record.error_type == "dependency")
+        .count() as u32
+}
+
 fn read_failed_sync_records(app: &AppHandle) -> Vec<FailedSyncModRecord> {
     let store = app.store(SETTINGS_STORE_PATH).ok();
     let Some(store) = store else {
@@ -358,6 +365,32 @@ mod tests {
     fn list_ignores_orphaned_ignore_entries() {
         let list = build_failed_sync_mod_list(&[], &[404]);
         assert!(list.mods.is_empty());
+    }
+
+    #[test]
+    fn count_dependency_sync_failures_only_counts_dependency_type() {
+        let records = vec![
+            FailedSyncModRecord {
+                mod_id: 101,
+                error_type: "dependency".to_string(),
+                error_detail: None,
+            },
+            FailedSyncModRecord {
+                mod_id: 202,
+                error_type: "install".to_string(),
+                error_detail: None,
+            },
+            FailedSyncModRecord {
+                mod_id: 303,
+                error_type: "dependency".to_string(),
+                error_detail: None,
+            },
+        ];
+        let count = records
+            .iter()
+            .filter(|record| record.error_type == "dependency")
+            .count() as u32;
+        assert_eq!(count, 2);
     }
 
     #[test]

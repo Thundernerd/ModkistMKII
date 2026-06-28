@@ -49,6 +49,7 @@ export interface InstalledModEntry {
 export interface InstallModResult {
   installed: number[];
   skipped: number[];
+  dependencyFailureCount?: number;
 }
 
 interface InstallModOptions {
@@ -57,6 +58,7 @@ interface InstallModOptions {
 }
 
 const SUCCESS_TOAST_DURATION_MS = 6_000;
+const WARNING_TOAST_DURATION_MS = 8_000;
 const ERROR_TOAST_DURATION_MS = 8_000;
 
 function isRateLimitedMessage(message: string) {
@@ -140,6 +142,66 @@ function installedModName(modId: number) {
 function formatCountLabel(count: number, singular: string, plural?: string) {
   const label = count === 1 ? singular : (plural ?? `${singular}s`);
   return `${count} ${label}`;
+}
+
+function notifySubscriptionSyncComplete(
+  pushNotification: ReturnType<typeof useNotifications>["pushNotification"],
+  result: InstallModResult,
+  updateCount: number,
+) {
+  const dependencyFailures = result.dependencyFailureCount ?? 0;
+  const installedCount = result.installed.length;
+
+  if (dependencyFailures > 0) {
+    if (installedCount > 0) {
+      pushNotification({
+        title: "Subscriptions synced with warnings",
+        message: `Installed ${formatCountLabel(installedCount, "subscribed mod", "subscribed mods")}, but some dependencies could not be installed.`,
+        tone: "warning",
+        durationMs: WARNING_TOAST_DURATION_MS,
+      });
+      return;
+    }
+
+    if (updateCount === 0) {
+      pushNotification({
+        title: "Subscriptions synced with warnings",
+        message:
+          "All subscribed mods are already up to date, but some dependencies could not be installed.",
+        tone: "warning",
+        durationMs: WARNING_TOAST_DURATION_MS,
+      });
+      return;
+    }
+
+    pushNotification({
+      title: "Subscriptions synced with warnings",
+      message:
+        "Some dependencies could not be installed. See Settings → Failed sync mods.",
+      tone: "warning",
+      durationMs: WARNING_TOAST_DURATION_MS,
+    });
+    return;
+  }
+
+  if (installedCount > 0) {
+    pushNotification({
+      title: "Subscriptions synced",
+      message: `Installed ${formatCountLabel(installedCount, "subscribed mod", "subscribed mods")}.`,
+      tone: "success",
+      durationMs: SUCCESS_TOAST_DURATION_MS,
+    });
+    return;
+  }
+
+  if (updateCount === 0) {
+    pushNotification({
+      title: "Subscriptions synced",
+      message: "All subscribed mods are already up to date.",
+      tone: "success",
+      durationMs: SUCCESS_TOAST_DURATION_MS,
+    });
+  }
 }
 
 function dependencyCount(result: InstallModResult, modId: number) {
@@ -426,21 +488,7 @@ export function useModInstall() {
         sessionSyncDone.value = true;
         logger.info("Subscription sync complete", result);
         await refreshInstalled();
-        if (result.installed.length > 0) {
-          pushNotification({
-            title: "Subscriptions synced",
-            message: `Installed ${formatCountLabel(result.installed.length, "subscribed mod", "subscribed mods")}.`,
-            tone: "success",
-            durationMs: SUCCESS_TOAST_DURATION_MS,
-          });
-        } else if (updateCount.value === 0) {
-          pushNotification({
-            title: "Subscriptions synced",
-            message: "All subscribed mods are already up to date.",
-            tone: "success",
-            durationMs: SUCCESS_TOAST_DURATION_MS,
-          });
-        }
+        notifySubscriptionSyncComplete(pushNotification, result, updateCount.value);
       } catch (error) {
         if (generation !== subscriptionSyncGeneration) {
           return;

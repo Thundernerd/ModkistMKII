@@ -70,6 +70,11 @@ const { notifications, dismissNotification } = useNotifications();
   background: #1a2820;
 }
 
+.app-notification--warning {
+  border-color: #c9a227;
+  background: #2b2618;
+}
+
 .app-notification--info {
   border-color: var(--modio-border);
   background: var(--modio-surface-raised);
@@ -93,6 +98,10 @@ const { notifications, dismissNotification } = useNotifications();
 
 .app-notification--success .app-notification-title {
   color: var(--modio-success);
+}
+
+.app-notification--warning .app-notification-title {
+  color: #e6c547;
 }
 
 .app-notification-message {

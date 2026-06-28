@@ -17,8 +17,8 @@ use crate::mod_folder::{
 use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::subscription_sync_settings::{
-    clear_failed_sync_mod, read_failed_sync_mod_ids, read_ignored_sync_mod_ids,
-    record_failed_sync_mod,
+    clear_failed_sync_mod, count_dependency_sync_failures, read_failed_sync_mod_ids,
+    read_ignored_sync_mod_ids, record_failed_sync_mod,
 };
 use crate::modio_client::{
     fetch_mod_object, fetch_mod_outcome, fetch_subscribed_mod_ids, format_api_error,
@@ -149,6 +149,8 @@ pub struct InstalledModEntry {
 pub struct InstallModResult {
     pub installed: Vec<u64>,
     pub skipped: Vec<u64>,
+    #[serde(default)]
+    pub dependency_failure_count: u32,
 }
 
 fn bepinex_plugins_dir(game_dir: &Path) -> PathBuf {
@@ -873,7 +875,11 @@ async fn install_targets_internal(
         installed.len(),
         skipped.len()
     );
-    Ok(InstallModResult { installed, skipped })
+    Ok(InstallModResult {
+        installed,
+        skipped,
+        dependency_failure_count: 0,
+    })
 }
 
 async fn install_mod_internal(
@@ -937,6 +943,7 @@ async fn sync_subscribed_mods_inner(
         return Ok(InstallModResult {
             installed: Vec::new(),
             skipped: Vec::new(),
+            dependency_failure_count: 0,
         });
     }
 
@@ -945,6 +952,7 @@ async fn sync_subscribed_mods_inner(
         return Ok(InstallModResult {
             installed: Vec::new(),
             skipped: Vec::new(),
+            dependency_failure_count: 0,
         });
     }
 
@@ -1047,7 +1055,13 @@ async fn sync_subscribed_mods_inner(
         Err(message) => log::error!("Subscription sync failed: {message}"),
     }
     state.persist_cache(app);
-    result
+    match result {
+        Ok(mut summary) => {
+            summary.dependency_failure_count = count_dependency_sync_failures(app);
+            Ok(summary)
+        }
+        Err(message) => Err(message),
+    }
 }
 
 async fn refresh_installed_mods_inner(
