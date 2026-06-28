@@ -982,6 +982,7 @@ fn mod_matches_game(mod_: &ModObject, game_id: u64) -> bool {
 
 /// Appends mods from a browse page, skipping duplicates and wrong-game entries.
 fn append_mod_list_page(
+    state: &ModioState,
     game_id: u64,
     public_page_ids: &HashSet<u64>,
     seen: &mut HashSet<u64>,
@@ -993,6 +994,7 @@ fn append_mod_list_page(
         if !mod_matches_game(&mod_, game_id) || !seen.insert(mod_.id) {
             continue;
         }
+        seed_mod_cache(state, &mod_);
         if !public_page_ids.contains(&mod_.id) {
             *page_extras = page_extras.saturating_add(1);
         }
@@ -1002,6 +1004,7 @@ fn append_mod_list_page(
 
 /// Merges a public browse page with authenticated `/me/mods` and `/me/subscribed` pages.
 fn merge_mod_list_results(
+    state: &ModioState,
     game_id: u64,
     public: ListResponse<ModObject>,
     user_mods: Option<ListResponse<ModObject>>,
@@ -1014,6 +1017,7 @@ fn merge_mod_list_results(
     let mut page_extras = 0u32;
 
     append_mod_list_page(
+        state,
         game_id,
         &public_page_ids,
         &mut seen,
@@ -1024,6 +1028,7 @@ fn merge_mod_list_results(
 
     if let Some(list) = user_mods {
         append_mod_list_page(
+            state,
             game_id,
             &public_page_ids,
             &mut seen,
@@ -1035,6 +1040,7 @@ fn merge_mod_list_results(
 
     if let Some(list) = subscriptions {
         append_mod_list_page(
+            state,
             game_id,
             &public_page_ids,
             &mut seen,
@@ -1085,6 +1091,7 @@ pub async fn list_mods(
     };
 
     Ok(merge_mod_list_results(
+        &state,
         game_id,
         public_list,
         user_list,
@@ -1094,14 +1101,7 @@ pub async fn list_mods(
 
 #[tauri::command]
 pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
-    let game_id = state.game_id()?;
-    let api = state.api()?;
-    let token = state.session_token();
-    let mod_ = api
-        .get_mod(game_id, mod_id, token.as_deref())
-        .await
-        .map_err(format_api_error)?;
-
+    let mod_ = fetch_mod_object(&state, mod_id).await?;
     Ok(mod_to_detail(mod_))
 }
 
@@ -1113,18 +1113,35 @@ pub async fn list_mod_files(
     let game_id = state.game_id()?;
     let api = state.api()?;
     let token = state.session_token();
-    let latest_file_id = api
-        .get_mod(game_id, mod_id, token.as_deref())
-        .await
-        .map_err(format_api_error)?
-        .modfile
-        .as_ref()
-        .map(|file| file.id);
-    let list = api
-        .get_mod_files(game_id, mod_id, token.as_deref())
-        .await
-        .map_err(format_api_error)?;
-    let files = list.data.into_iter().map(mod_file_to_entry).collect();
+
+    let mut latest_file_id = state.cached_latest_file_id(mod_id).or_else(|| {
+        state.cached_mod(mod_id).and_then(|mod_| {
+            mod_.modfile.as_ref().map(|file| {
+                state.store_latest_file_id(mod_id, file.id);
+                file.id
+            })
+        })
+    });
+
+    if latest_file_id.is_none() {
+        latest_file_id = fetch_mod_object(&state, mod_id)
+            .await
+            .ok()
+            .and_then(|mod_| mod_.modfile.map(|file| file.id));
+    }
+
+    let files = if let Some(cached) = state.cached_mod_files(mod_id) {
+        cached
+    } else {
+        let list = api
+            .get_mod_files(game_id, mod_id, token.as_deref())
+            .await
+            .map_err(format_api_error)?;
+        state.store_mod_files(mod_id, list.data.clone());
+        list.data
+    };
+
+    let files = files.into_iter().map(mod_file_to_entry).collect();
 
     Ok(ModFileListResult {
         files,
@@ -1137,20 +1154,24 @@ pub async fn list_mod_dependencies(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<ModDependencyListResult, String> {
-    let game_id = state.game_id()?;
-    let api = state.api()?;
-    let token = state.session_token();
-    let list = api
-        .get_mod_dependencies(game_id, mod_id, token.as_deref())
-        .await
-        .map_err(format_api_error)?;
-
-    let mut mods = Vec::with_capacity(list.data.len());
-    for dependency in list.data {
-        let mod_ = api
-            .get_mod(game_id, dependency.mod_id, token.as_deref())
+    let dependency_ids = if let Some(cached) = state.cached_dependencies(mod_id) {
+        cached
+    } else {
+        let game_id = state.game_id()?;
+        let api = state.api()?;
+        let token = state.session_token();
+        let list = api
+            .get_mod_dependencies(game_id, mod_id, token.as_deref())
             .await
             .map_err(format_api_error)?;
+        let dependency_ids: Vec<u64> = list.data.into_iter().map(|dep| dep.mod_id).collect();
+        state.store_dependencies(mod_id, dependency_ids.clone());
+        dependency_ids
+    };
+
+    let mut mods = Vec::with_capacity(dependency_ids.len());
+    for dependency_id in dependency_ids {
+        let mod_ = fetch_mod_object(&state, dependency_id).await?;
         mods.push(mod_to_dependency(mod_));
     }
 
@@ -1194,7 +1215,10 @@ pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResul
         .data
         .into_iter()
         .filter(|mod_| mod_matches_game(mod_, game_id))
-        .map(mod_to_summary)
+        .map(|mod_| {
+            seed_mod_cache(&state, &mod_);
+            mod_to_summary(mod_)
+        })
         .collect();
     let total = list.result_total;
 
