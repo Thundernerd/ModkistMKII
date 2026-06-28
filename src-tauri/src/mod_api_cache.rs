@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::modio_api::ModObject;
+use crate::modio_api::{ModObject, Modfile};
 
 const CACHE_TTL: Duration = Duration::from_secs(300);
 
@@ -39,6 +39,7 @@ pub(crate) struct ApiCache {
     unavailable_mods: HashMap<u64, Timed<()>>,
     dependencies: HashMap<u64, Timed<Vec<u64>>>,
     latest_file_ids: HashMap<u64, Timed<u64>>,
+    mod_files: HashMap<u64, Timed<Vec<Modfile>>>,
     mods: HashMap<u64, Timed<ModObject>>,
     subscribed_mod_ids: Option<Timed<Vec<u64>>>,
 }
@@ -48,6 +49,7 @@ impl ApiCache {
         self.unavailable_mods.clear();
         self.dependencies.clear();
         self.latest_file_ids.clear();
+        self.mod_files.clear();
         self.mods.clear();
         self.subscribed_mod_ids = None;
     }
@@ -65,6 +67,7 @@ impl ApiCache {
     pub(crate) fn invalidate_mod(&mut self, mod_id: u64) {
         self.unavailable_mods.remove(&mod_id);
         self.latest_file_ids.remove(&mod_id);
+        self.mod_files.remove(&mod_id);
         self.mods.remove(&mod_id);
     }
 
@@ -76,7 +79,28 @@ impl ApiCache {
     }
 
     pub(crate) fn store_mod(&mut self, mod_: ModObject) {
-        self.mods.insert(mod_.id, Timed::new(mod_));
+        let mod_id = mod_.id;
+        let merged = if let Some(entry) = self.mods.get(&mod_id).filter(|entry| entry.is_valid()) {
+            let mut merged = mod_;
+            if merged.description.as_ref().is_none_or(|value| value.is_empty()) {
+                merged.description = entry.value.description.clone();
+            }
+            merged
+        } else {
+            mod_
+        };
+        self.mods.insert(mod_id, Timed::new(merged));
+    }
+
+    pub(crate) fn get_mod_files(&self, mod_id: u64) -> Option<Vec<Modfile>> {
+        self.mod_files
+            .get(&mod_id)
+            .filter(|entry| entry.is_valid())
+            .map(|entry| entry.value.clone())
+    }
+
+    pub(crate) fn store_mod_files(&mut self, mod_id: u64, files: Vec<Modfile>) {
+        self.mod_files.insert(mod_id, Timed::new(files));
     }
 
     pub(crate) fn get_latest_file_id(&self, mod_id: u64) -> Option<u64> {
