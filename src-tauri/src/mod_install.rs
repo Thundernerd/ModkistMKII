@@ -21,7 +21,7 @@ use crate::subscription_sync_settings::{
     read_failed_sync_mod_ids, read_ignored_sync_mod_ids, record_failed_sync_mod,
 };
 use crate::modio_client::{
-    fetch_mod_object, fetch_mod_outcome, fetch_subscribed_mod_ids, format_api_error,
+    fetch_mod_object, fetch_mod_outcome, fetch_mod_dependency_ids, fetch_subscribed_mod_ids,
     subscribe_to_mod, unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
@@ -404,24 +404,7 @@ async fn refresh_dependency_map(
 }
 
 async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, String> {
-    if let Some(cached) = state.cached_dependencies(mod_id) {
-        return Ok(cached);
-    }
-
-    let dependencies: Vec<u64> = with_rate_limit_retry(|| async {
-        let game_id = state.game_id()?;
-        let api = state.api()?;
-        let token = state.session_token();
-        let list = api
-            .get_mod_dependencies(game_id, mod_id, token.as_deref())
-            .await
-            .map_err(format_api_error)?;
-        Ok(list.data.into_iter().map(|dep| dep.mod_id).collect())
-    })
-    .await?;
-
-    state.store_dependencies(mod_id, dependencies.clone());
-    Ok(dependencies)
+    with_rate_limit_retry(|| async { fetch_mod_dependency_ids(state, mod_id).await }).await
 }
 
 async fn fetch_dependency_ids_or_empty(
@@ -429,6 +412,9 @@ async fn fetch_dependency_ids_or_empty(
     mod_id: u64,
     context: &str,
 ) -> Vec<u64> {
+    if state.cached_dependency_fetch_failed(mod_id) {
+        return Vec::new();
+    }
     match fetch_dependency_ids(state, mod_id).await {
         Ok(deps) => deps,
         Err(message) => {

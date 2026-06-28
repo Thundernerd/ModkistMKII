@@ -179,6 +179,24 @@ impl ModioState {
         }
     }
 
+    pub(crate) fn cached_dependency_fetch_failed(&self, mod_id: u64) -> bool {
+        let hit = self
+            .api_cache
+            .lock()
+            .ok()
+            .is_some_and(|cache| cache.is_dependency_fetch_failed(mod_id));
+        if hit {
+            log::info!("Cache hit: mod {mod_id} dependency fetch failed");
+        }
+        hit
+    }
+
+    pub(crate) fn mark_dependency_fetch_failed(&self, mod_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.mark_dependency_fetch_failed(mod_id);
+        }
+    }
+
     pub(crate) fn cached_dependencies(&self, mod_id: u64) -> Option<Vec<u64>> {
         let cache = self.api_cache.lock().ok()?;
         let dependencies = cache.get_dependencies(mod_id);
@@ -469,6 +487,48 @@ pub fn format_api_error_logged_in(error: ApiError, logged_in: bool) -> String {
 /// True when mod.io reports the mod no longer exists (deleted or removed).
 pub fn is_mod_unavailable(error: &ApiError) -> bool {
     error.is_not_found()
+}
+
+pub fn should_cache_dependency_fetch_failure(error: &ApiError) -> bool {
+    if error.is_rate_limited() || error.status.is_none() {
+        return false;
+    }
+    error.is_not_found() || error.is_auth()
+}
+
+pub(crate) async fn fetch_mod_dependency_ids(
+    state: &ModioState,
+    mod_id: u64,
+) -> Result<Vec<u64>, String> {
+    if let Some(cached) = state.cached_dependencies(mod_id) {
+        return Ok(cached);
+    }
+    if state.cached_dependency_fetch_failed(mod_id) {
+        return Err(format!(
+            "Dependencies for mod {mod_id} could not be loaded (cached failure)"
+        ));
+    }
+
+    let game_id = state.game_id()?;
+    let api = state.api()?;
+    let token = state.session_token();
+    let logged_in = state.auth_status().logged_in;
+    match api
+        .get_mod_dependencies(game_id, mod_id, token.as_deref())
+        .await
+    {
+        Ok(list) => {
+            let dependency_ids: Vec<u64> = list.data.into_iter().map(|dep| dep.mod_id).collect();
+            state.store_dependencies(mod_id, dependency_ids.clone());
+            Ok(dependency_ids)
+        }
+        Err(error) => {
+            if should_cache_dependency_fetch_failure(&error) {
+                state.mark_dependency_fetch_failed(mod_id);
+            }
+            Err(format_api_error_logged_in(error, logged_in))
+        }
+    }
 }
 
 /// Writes mod metadata and related cache entries from a list or detail response.
@@ -1232,21 +1292,7 @@ pub async fn list_mod_dependencies(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<ModDependencyListResult, String> {
-    let dependency_ids = if let Some(cached) = state.cached_dependencies(mod_id) {
-        cached
-    } else {
-        let game_id = state.game_id()?;
-        let api = state.api()?;
-        let token = state.session_token();
-        let logged_in = state.auth_status().logged_in;
-        let list = api
-            .get_mod_dependencies(game_id, mod_id, token.as_deref())
-            .await
-            .map_err(|error| format_api_error_logged_in(error, logged_in))?;
-        let dependency_ids: Vec<u64> = list.data.into_iter().map(|dep| dep.mod_id).collect();
-        state.store_dependencies(mod_id, dependency_ids.clone());
-        dependency_ids
-    };
+    let dependency_ids = fetch_mod_dependency_ids(&state, mod_id).await?;
 
     let mut mods = Vec::with_capacity(dependency_ids.len());
     for dependency_id in dependency_ids {

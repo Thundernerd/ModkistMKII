@@ -32,11 +32,14 @@ impl<T: Clone> Timed<T> {
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct PersistedCache {
     pub dependencies: HashMap<u64, Vec<u64>>,
+    #[serde(default)]
+    pub dependency_fetch_failures: Vec<u64>,
 }
 
 #[derive(Default)]
 pub(crate) struct ApiCache {
     unavailable_mods: HashMap<u64, Timed<()>>,
+    failed_dependency_fetches: HashMap<u64, Timed<()>>,
     dependencies: HashMap<u64, Timed<Vec<u64>>>,
     latest_file_ids: HashMap<u64, Timed<u64>>,
     mod_files: HashMap<u64, Timed<Vec<Modfile>>>,
@@ -47,6 +50,7 @@ pub(crate) struct ApiCache {
 impl ApiCache {
     pub(crate) fn clear(&mut self) {
         self.unavailable_mods.clear();
+        self.failed_dependency_fetches.clear();
         self.dependencies.clear();
         self.latest_file_ids.clear();
         self.mod_files.clear();
@@ -64,8 +68,19 @@ impl ApiCache {
         self.unavailable_mods.insert(mod_id, Timed::new(()));
     }
 
+    pub(crate) fn is_dependency_fetch_failed(&self, mod_id: u64) -> bool {
+        self.failed_dependency_fetches
+            .get(&mod_id)
+            .is_some_and(|entry| entry.is_valid())
+    }
+
+    pub(crate) fn mark_dependency_fetch_failed(&mut self, mod_id: u64) {
+        self.failed_dependency_fetches.insert(mod_id, Timed::new(()));
+    }
+
     pub(crate) fn invalidate_mod(&mut self, mod_id: u64) {
         self.unavailable_mods.remove(&mod_id);
+        self.failed_dependency_fetches.remove(&mod_id);
         self.latest_file_ids.remove(&mod_id);
         self.mod_files.remove(&mod_id);
         self.mods.remove(&mod_id);
@@ -164,13 +179,29 @@ impl ApiCache {
             .filter(|(_, entry)| entry.is_valid())
             .map(|(mod_id, entry)| (*mod_id, entry.value.clone()))
             .collect();
-        PersistedCache { dependencies }
+        let dependency_fetch_failures = self
+            .failed_dependency_fetches
+            .iter()
+            .filter(|(_, entry)| entry.is_valid())
+            .map(|(mod_id, _)| *mod_id)
+            .collect();
+        PersistedCache {
+            dependencies,
+            dependency_fetch_failures,
+        }
     }
 
     /// Loads a persisted snapshot, treating restored entries as freshly fetched.
     pub(crate) fn restore_persisted(&mut self, snapshot: PersistedCache) {
         for (mod_id, dependencies) in snapshot.dependencies {
-            self.dependencies.entry(mod_id).or_insert_with(|| Timed::new(dependencies));
+            self.dependencies
+                .entry(mod_id)
+                .or_insert_with(|| Timed::new(dependencies));
+        }
+        for mod_id in snapshot.dependency_fetch_failures {
+            self.failed_dependency_fetches
+                .entry(mod_id)
+                .or_insert_with(|| Timed::new(()));
         }
     }
 }
