@@ -6,7 +6,9 @@ use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::mod_api_cache::{ApiCache, PersistedCache};
-use crate::modio_api::{ApiClient, ApiError, ModObject, ModQuery, Modfile};
+use std::collections::HashSet;
+
+use crate::modio_api::{ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile};
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
@@ -894,6 +896,78 @@ pub async fn get_mod_tag_options(state: State<'_, ModioState>) -> Result<ModTagO
     })
 }
 
+fn mod_matches_game(mod_: &ModObject, game_id: u64) -> bool {
+    mod_.game_id == 0 || mod_.game_id == game_id
+}
+
+/// Appends mods from a browse page, skipping duplicates and wrong-game entries.
+fn append_mod_list_page(
+    game_id: u64,
+    public_page_ids: &HashSet<u64>,
+    seen: &mut HashSet<u64>,
+    mods: &mut Vec<ModSummary>,
+    page_extras: &mut u32,
+    list: ListResponse<ModObject>,
+) {
+    for mod_ in list.data {
+        if !mod_matches_game(&mod_, game_id) || !seen.insert(mod_.id) {
+            continue;
+        }
+        if !public_page_ids.contains(&mod_.id) {
+            *page_extras = page_extras.saturating_add(1);
+        }
+        mods.push(mod_to_summary(mod_));
+    }
+}
+
+/// Merges a public browse page with authenticated `/me/mods` and `/me/subscribed` pages.
+fn merge_mod_list_results(
+    game_id: u64,
+    public: ListResponse<ModObject>,
+    user_mods: Option<ListResponse<ModObject>>,
+    subscriptions: Option<ListResponse<ModObject>>,
+) -> ModListResult {
+    let public_total = public.result_total;
+    let public_page_ids: HashSet<u64> = public.data.iter().map(|mod_| mod_.id).collect();
+    let mut seen = HashSet::new();
+    let mut mods = Vec::new();
+    let mut page_extras = 0u32;
+
+    append_mod_list_page(
+        game_id,
+        &public_page_ids,
+        &mut seen,
+        &mut mods,
+        &mut page_extras,
+        public,
+    );
+
+    if let Some(list) = user_mods {
+        append_mod_list_page(
+            game_id,
+            &public_page_ids,
+            &mut seen,
+            &mut mods,
+            &mut page_extras,
+            list,
+        );
+    }
+
+    if let Some(list) = subscriptions {
+        append_mod_list_page(
+            game_id,
+            &public_page_ids,
+            &mut seen,
+            &mut mods,
+            &mut page_extras,
+            list,
+        );
+    }
+
+    let total = public_total.saturating_add(page_extras);
+    ModListResult { mods, total }
+}
+
 #[tauri::command]
 pub async fn list_mods(
     state: State<'_, ModioState>,
@@ -902,12 +976,40 @@ pub async fn list_mods(
     let game_id = state.game_id()?;
     let api = state.api()?;
     let query = build_mod_query(&params);
-    let list = api.get_mods(game_id, &query).await.map_err(format_api_error)?;
 
-    let total = list.result_total;
-    let mods = list.data.into_iter().map(mod_to_summary).collect();
+    let public_list = api
+        .get_mods(game_id, &query)
+        .await
+        .map_err(format_api_error)?;
 
-    Ok(ModListResult { mods, total })
+    let (user_list, subscriptions) = if state.session_token().is_some() {
+        let token = state.require_token()?;
+        log::debug!("Listing mods: merging public browse with /me/mods and /me/subscribed");
+        let user_list = state
+            .with_oauth_request("get_user_mods", || async {
+                api.get_user_mods(&token, game_id, &query)
+                    .await
+                    .map_err(format_api_error)
+            })
+            .await?;
+        let subscriptions = state
+            .with_oauth_request("get_user_subscriptions", || async {
+                api.get_user_subscriptions(&token, game_id, &query)
+                    .await
+                    .map_err(format_api_error)
+            })
+            .await?;
+        (Some(user_list), Some(subscriptions))
+    } else {
+        (None, None)
+    };
+
+    Ok(merge_mod_list_results(
+        game_id,
+        public_list,
+        user_list,
+        subscriptions,
+    ))
 }
 
 #[tauri::command]
@@ -1008,8 +1110,13 @@ pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResul
         .await
         .map_err(format_api_error)?;
 
+    let mods = list
+        .data
+        .into_iter()
+        .filter(|mod_| mod_matches_game(mod_, game_id))
+        .map(mod_to_summary)
+        .collect();
     let total = list.result_total;
-    let mods = list.data.into_iter().map(mod_to_summary).collect();
 
     Ok(ModListResult { mods, total })
 }
