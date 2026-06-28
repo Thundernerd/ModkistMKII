@@ -277,17 +277,23 @@ function profileKindLabel(kind: string) {
 
       <p v-if="autoUpdateError" class="error feedback">{{ autoUpdateError }}</p>
 
-      <div class="setting-row">
-        <div class="setting-copy">
-          <span class="setting-label">Failed sync mods</span>
-          <span class="setting-hint">
-            Subscribed mods that could not be installed during sync. You can
-            ignore them or unsubscribe on mod.io.
-          </span>
+      <div class="setting-subsection">
+        <div class="setting-row">
+          <div class="setting-copy">
+            <span class="setting-label">Failed sync mods</span>
+            <span class="setting-hint">
+              Subscribed mods that could not be installed during sync. You can
+              ignore them or unsubscribe on mod.io.
+            </span>
+          </div>
+          <button
+            type="button"
+            class="btn-secondary setting-action-btn"
+            @click="navigateTo('/settings/sync-failures')"
+          >
+            View list
+          </button>
         </div>
-        <NuxtLink to="/settings/sync-failures" class="btn-secondary setting-link">
-          View list
-        </NuxtLink>
       </div>
     </section>
 
@@ -603,10 +609,15 @@ function profileKindLabel(kind: string) {
   max-width: 28rem;
 }
 
-.setting-link {
+.setting-subsection {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--modio-border);
+}
+
+.setting-action-btn {
   flex-shrink: 0;
   align-self: center;
-  text-decoration: none;
 }
 
 .setting-toggle {
