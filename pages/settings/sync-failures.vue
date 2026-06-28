@@ -76,6 +76,7 @@ async function handleUnsubscribe(modId: number) {
 
 const FAILED_SYNC_ERROR_LABELS: Record<string, string> = {
   install_order: "Could not resolve dependencies",
+  dependency: "Dependency could not be installed",
   install_state: "Could not check mod status",
   install: "Install failed",
   rate_limit: "Rate limited",

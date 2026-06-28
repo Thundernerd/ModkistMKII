@@ -71,7 +71,35 @@ fn truncate_error_detail(message: &str) -> Option<String> {
     ))
 }
 
+fn dependency_failure_detail(message: &str) -> Option<String> {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("rate limit") {
+        return Some(
+            "Could not fetch required dependencies due to mod.io rate limiting.".to_string(),
+        );
+    }
+    if lower.contains("no longer available") {
+        return truncate_error_detail(message);
+    }
+    if lower.contains("could not be found")
+        || lower.contains("private")
+        || lower.contains("not subscribed")
+        || lower.contains("sign in")
+        || lower.contains("not logged in")
+        || lower.contains("authentication")
+    {
+        return Some(
+            "A required dependency is private or could not be loaded on mod.io.".to_string(),
+        );
+    }
+    truncate_error_detail(message)
+}
+
 fn refine_sync_failure(category: &str, message: &str) -> (String, Option<String>) {
+    if category == "install_order" || category == "dependency" {
+        return ("dependency".to_string(), dependency_failure_detail(message));
+    }
+
     let lower = message.to_ascii_lowercase();
     let detail = truncate_error_detail(message);
 
@@ -321,9 +349,22 @@ mod tests {
     }
 
     #[test]
-    fn refine_sync_failure_keeps_category_for_generic_errors() {
+    fn refine_sync_failure_maps_install_order_to_dependency() {
         let (error_type, detail) = refine_sync_failure("install_order", "Dependency graph error");
-        assert_eq!(error_type, "install_order");
+        assert_eq!(error_type, "dependency");
         assert_eq!(detail.as_deref(), Some("Dependency graph error"));
+    }
+
+    #[test]
+    fn refine_sync_failure_maps_dependency_auth_to_dependency_detail() {
+        let (error_type, detail) = refine_sync_failure(
+            "install_order",
+            "The mod ID could not be found. Sign in to mod.io to access private mods.",
+        );
+        assert_eq!(error_type, "dependency");
+        assert_eq!(
+            detail.as_deref(),
+            Some("A required dependency is private or could not be loaded on mod.io.")
+        );
     }
 }

@@ -694,6 +694,31 @@ async fn ensure_subscription_sync_may_continue(
     Ok(())
 }
 
+fn record_sync_failure_for_target(
+    app: &AppHandle,
+    target_mod_id: u64,
+    category: &str,
+    message: &str,
+    sync_failure_roots: &HashSet<u64>,
+    dependency_to_subscribers: &HashMap<u64, HashSet<u64>>,
+) {
+    if sync_failure_roots.contains(&target_mod_id) {
+        let _ = record_failed_sync_mod(app, target_mod_id, category, message);
+    }
+
+    let Some(subscribers) = dependency_to_subscribers.get(&target_mod_id) else {
+        return;
+    };
+
+    let detail = format!("Required dependency (mod {target_mod_id}): {message}");
+    for &subscribed_mod_id in subscribers {
+        if subscribed_mod_id == target_mod_id && sync_failure_roots.contains(&target_mod_id) {
+            continue;
+        }
+        let _ = record_failed_sync_mod(app, subscribed_mod_id, "dependency", &detail);
+    }
+}
+
 async fn install_targets_internal(
     app: Option<&AppHandle>,
     state: &ModioState,
@@ -706,6 +731,7 @@ async fn install_targets_internal(
     file_override: Option<(u64, u64)>,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
     sync_failure_roots: Option<&HashSet<u64>>,
+    dependency_to_subscribers: Option<&HashMap<u64, HashSet<u64>>>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
@@ -740,8 +766,24 @@ async fn install_targets_internal(
                     "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
                 );
                 if let Some(app) = app {
-                    if sync_failure_roots.is_some_and(|roots| roots.contains(&target_mod_id)) {
-                        let _ = record_failed_sync_mod(app, target_mod_id, "install_state", &message);
+                    if let Some(roots) = sync_failure_roots {
+                        if let Some(subscribers) = dependency_to_subscribers {
+                            record_sync_failure_for_target(
+                                app,
+                                target_mod_id,
+                                "install_state",
+                                &message,
+                                roots,
+                                subscribers,
+                            );
+                        } else if roots.contains(&target_mod_id) {
+                            let _ = record_failed_sync_mod(
+                                app,
+                                target_mod_id,
+                                "install_state",
+                                &message,
+                            );
+                        }
                     }
                 }
                 continue;
@@ -806,8 +848,19 @@ async fn install_targets_internal(
                     "Failed to install mod {target_mod_id} during subscription sync: {message}"
                 );
                 if let Some(app) = app {
-                    if sync_failure_roots.is_some_and(|roots| roots.contains(&target_mod_id)) {
-                        let _ = record_failed_sync_mod(app, target_mod_id, "install", &message);
+                    if let Some(roots) = sync_failure_roots {
+                        if let Some(subscribers) = dependency_to_subscribers {
+                            record_sync_failure_for_target(
+                                app,
+                                target_mod_id,
+                                "install",
+                                &message,
+                                roots,
+                                subscribers,
+                            );
+                        } else if roots.contains(&target_mod_id) {
+                            let _ = record_failed_sync_mod(app, target_mod_id, "install", &message);
+                        }
                     }
                 }
             }
@@ -859,6 +912,7 @@ async fn install_mod_internal(
         false,
         true,
         file_id.map(|file_id| (mod_id, file_id)),
+        None,
         None,
         None,
     )
@@ -922,11 +976,18 @@ async fn sync_subscribed_mods_inner(
     // do not call subscribe_to_mod here (OAuth writes are limited to 60/min).
     let mut install_order = Vec::new();
     let mut seen_targets = HashSet::new();
-    for mod_id in mod_ids {
+    let mut dependency_to_subscribers: HashMap<u64, HashSet<u64>> = HashMap::new();
+    for mod_id in &mod_ids {
         ensure_subscription_sync_may_continue(app, state).await?;
-        match collect_install_order(state, mod_id).await {
+        match collect_install_order(state, *mod_id).await {
             Ok(order) => {
                 for target_mod_id in order {
+                    if *mod_id != target_mod_id {
+                        dependency_to_subscribers
+                            .entry(target_mod_id)
+                            .or_default()
+                            .insert(*mod_id);
+                    }
                     if ignored.contains(&target_mod_id) {
                         continue;
                     }
@@ -939,7 +1000,7 @@ async fn sync_subscribed_mods_inner(
                 log::error!(
                     "Failed to build install order for subscribed mod {mod_id}: {message}"
                 );
-                let _ = record_failed_sync_mod(app, mod_id, "install_order", &message);
+                let _ = record_failed_sync_mod(app, *mod_id, "install_order", &message);
             }
         }
     }
@@ -963,6 +1024,7 @@ async fn sync_subscribed_mods_inner(
         None,
         Some(&mods_by_id),
         Some(&subscribed_roots),
+        Some(&dependency_to_subscribers),
     )
     .await;
     reconcile_failed_sync_mods(
