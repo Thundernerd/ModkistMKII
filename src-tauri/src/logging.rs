@@ -1,21 +1,23 @@
 use std::path::PathBuf;
 
 use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 
 const DEFAULT_LOG_FILTER: &str = "info,modkistmkii_lib=info";
 const LOG_BASENAME: &str = "modkist";
+const LOG_SUBDIR: &str = "logs";
 const MAX_LOG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_LOG_FILES: usize = 5;
 
 fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
-        .app_log_dir()
+        .resolve(LOG_SUBDIR, BaseDirectory::AppData)
         .map_err(|error| format!("Could not resolve app log directory: {error}"))
 }
 
-/// Initialize Rust logging to a rotating file under the app log directory, and
-/// mirror info-level (and above) messages to stderr.
+/// Initialize Rust logging to a rotating file under `{app_data_dir}/logs`, next to
+/// the JSON config stores, and mirror info-level (and above) messages to stderr.
 ///
 /// Filter via `RUST_LOG`, e.g. `RUST_LOG=modkistmkii_lib=debug` for verbose output.
 pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
