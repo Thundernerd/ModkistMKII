@@ -177,7 +177,7 @@ function notifySubscriptionSyncComplete(
     pushNotification({
       title: "Subscriptions synced with warnings",
       message:
-        "Some dependencies could not be installed. See Settings → Failed sync mods.",
+        "Some dependencies could not be installed. See Settings → Sync failures.",
       tone: "warning",
       durationMs: WARNING_TOAST_DURATION_MS,
     });

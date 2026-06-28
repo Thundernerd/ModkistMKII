@@ -280,10 +280,10 @@ function profileKindLabel(kind: string) {
       <div class="setting-subsection">
         <div class="setting-row">
           <div class="setting-copy">
-            <span class="setting-label">Failed sync mods</span>
+            <span class="setting-label">Sync failures</span>
             <span class="setting-hint">
-              Subscribed mods that could not be installed during sync. You can
-              ignore them or unsubscribe on mod.io.
+              Subscribed mods that could not be fully synced. You can ignore
+              them or unsubscribe on mod.io.
             </span>
           </div>
           <button

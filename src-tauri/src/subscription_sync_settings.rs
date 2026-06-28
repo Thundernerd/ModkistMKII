@@ -219,7 +219,7 @@ pub fn set_sync_mod_ignored(app: &AppHandle, mod_id: u64, ignored: bool) -> Resu
         let failed = read_failed_sync_mod_ids(app);
         if failed.binary_search(&mod_id).is_err() {
             return Err(format!(
-                "Mod {mod_id} is not in the failed subscription sync list."
+                "Mod {mod_id} is not in the sync failures list."
             ));
         }
         if position.is_ok() {

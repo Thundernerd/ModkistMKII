@@ -103,9 +103,9 @@ onMounted(refreshFailedSyncMods);
   <div class="page">
     <header class="page-header">
       <NuxtLink to="/settings" class="back-link">← Settings</NuxtLink>
-      <h1>Failed sync mods</h1>
+      <h1>Sync failures</h1>
       <p class="hint page-desc">
-        Subscribed mods that could not be installed during sync. Ignored mods are
+        Subscribed mods that could not be fully synced. Ignored mods are
         skipped on future syncs.
       </p>
     </header>
@@ -114,11 +114,11 @@ onMounted(refreshFailedSyncMods);
 
     <div v-if="loading" class="state">
       <span class="spinner" aria-hidden="true" />
-      Loading failed mods…
+      Loading sync failures…
     </div>
 
     <p v-else-if="mods.length === 0" class="hint empty-state">
-      No failed subscription sync mods.
+      No sync failures.
     </p>
 
     <ul v-else class="failed-list">
