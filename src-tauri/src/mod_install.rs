@@ -380,17 +380,21 @@ async fn refresh_dependency_map(
     state: &ModioState,
     dependency_map: &mut HashMap<u64, Vec<u64>>,
     records: &[InstalledModRecord],
-) -> Result<(), String> {
+) {
     for record in records {
         if dependency_map.contains_key(&record.mod_id) {
             continue;
         }
         dependency_map.insert(
             record.mod_id,
-            fetch_dependency_ids(state, record.mod_id).await?,
+            fetch_dependency_ids_or_empty(
+                state,
+                record.mod_id,
+                "Refreshing installed mod dependency map",
+            )
+            .await,
         );
     }
-    Ok(())
 }
 
 async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, String> {
@@ -414,6 +418,20 @@ async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64
     Ok(dependencies)
 }
 
+async fn fetch_dependency_ids_or_empty(
+    state: &ModioState,
+    mod_id: u64,
+    context: &str,
+) -> Vec<u64> {
+    match fetch_dependency_ids(state, mod_id).await {
+        Ok(deps) => deps,
+        Err(message) => {
+            log::warn!("{context}: could not fetch dependencies for mod {mod_id}: {message}");
+            Vec::new()
+        }
+    }
+}
+
 async fn collect_install_order(state: &ModioState, root_mod_id: u64) -> Result<Vec<u64>, String> {
     let mut nodes = HashSet::new();
     let mut stack = vec![root_mod_id];
@@ -424,7 +442,12 @@ async fn collect_install_order(state: &ModioState, root_mod_id: u64) -> Result<V
             continue;
         }
 
-        let deps = fetch_dependency_ids(state, mod_id).await?;
+        let deps = fetch_dependency_ids_or_empty(
+            state,
+            mod_id,
+            &format!("Resolving install order for mod {root_mod_id}"),
+        )
+        .await;
         dep_map.insert(mod_id, deps.clone());
         stack.extend(deps);
     }
@@ -462,7 +485,10 @@ async fn collect_install_order(state: &ModioState, root_mod_id: u64) -> Result<V
     }
 
     if order.len() != nodes.len() {
-        return Err("Circular dependency detected.".into());
+        log::warn!(
+            "Circular dependency detected while resolving install order for mod {root_mod_id}, installing mod only"
+        );
+        return Ok(vec![root_mod_id]);
     }
 
     Ok(order)
@@ -471,12 +497,20 @@ async fn collect_install_order(state: &ModioState, root_mod_id: u64) -> Result<V
 async fn build_dependency_map(
     state: &ModioState,
     installed_ids: &HashSet<u64>,
-) -> Result<HashMap<u64, Vec<u64>>, String> {
+) -> HashMap<u64, Vec<u64>> {
     let mut map = HashMap::with_capacity(installed_ids.len());
     for &mod_id in installed_ids {
-        map.insert(mod_id, fetch_dependency_ids(state, mod_id).await?);
+        map.insert(
+            mod_id,
+            fetch_dependency_ids_or_empty(
+                state,
+                mod_id,
+                "Building installed mod dependency map",
+            )
+            .await,
+        );
     }
-    Ok(map)
+    map
 }
 
 fn installed_dependents(
@@ -843,7 +877,7 @@ async fn install_targets_internal(
                     let _ = clear_failed_sync_mod(app, target_mod_id);
                 }
                 *records = scan_installed_mods(game_dir)?;
-                refresh_dependency_map(state, dependency_map, records).await?;
+                refresh_dependency_map(state, dependency_map, records).await;
             }
             Err(message) if app.is_some() => {
                 log::error!(
@@ -894,7 +928,7 @@ async fn install_mod_internal(
     log::debug!("Mod {mod_id} install order: {order:?}");
     let mut records = scan_installed_mods_after_cleanup(state, game_dir).await?;
     let mut dependency_map = HashMap::new();
-    refresh_dependency_map(state, &mut dependency_map, &records).await?;
+    refresh_dependency_map(state, &mut dependency_map, &records).await;
 
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
@@ -978,7 +1012,7 @@ async fn sync_subscribed_mods_inner(
 
     let (mut records, mods_by_id) = prepare_installed_records(state, &game_dir).await?;
     let mut dependency_map = HashMap::new();
-    refresh_dependency_map(state, &mut dependency_map, &records).await?;
+    refresh_dependency_map(state, &mut dependency_map, &records).await;
 
     // Build one install order for all subscriptions. Mods are already subscribed —
     // do not call subscribe_to_mod here (OAuth writes are limited to 60/min).
@@ -1005,10 +1039,13 @@ async fn sync_subscribed_mods_inner(
                 }
             }
             Err(message) => {
-                log::error!(
-                    "Failed to build install order for subscribed mod {mod_id}: {message}"
+                log::warn!(
+                    "Failed to build install order for subscribed mod {mod_id}, will try installing mod only: {message}"
                 );
                 let _ = record_failed_sync_mod(app, *mod_id, "install_order", &message);
+                if !ignored.contains(mod_id) && seen_targets.insert(*mod_id) {
+                    install_order.push(*mod_id);
+                }
             }
         }
     }
@@ -1114,7 +1151,7 @@ async fn list_installed_mods_inner(
 
     let (records, mods_by_id) = prepare_installed_records(state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
-    let dependency_map = build_dependency_map(state, &installed_ids).await?;
+    let dependency_map = build_dependency_map(state, &installed_ids).await;
     let mut entries = Vec::with_capacity(records.len());
 
     for record in records {
@@ -1159,7 +1196,7 @@ pub async fn get_mod_install_state(
     ensure_install_prerequisites(&game_dir)?;
     let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
-    let dependency_map = build_dependency_map(&state, &installed_ids).await?;
+    let dependency_map = build_dependency_map(&state, &installed_ids).await;
     install_state_for_mod(&state, mod_id, &records, &dependency_map, None).await
 }
 
@@ -1221,7 +1258,7 @@ pub async fn uninstall_mod(
         return Err("Mod is not installed.".into());
     }
 
-    let dependency_map = build_dependency_map(&state, &installed_ids).await?;
+    let dependency_map = build_dependency_map(&state, &installed_ids).await;
     let blockers = uninstall_blockers_for(&state, mod_id, &installed_ids, &dependency_map).await?;
     if !blockers.is_empty() {
         return Err(format_uninstall_blocked_error(&blockers));
