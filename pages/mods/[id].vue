@@ -209,9 +209,10 @@ async function handleInstall(targetModId = modId.value, fileId?: number) {
   await refreshInstalled();
 }
 
-async function handleInstallVersion(fileId: number) {
+async function handleInstallVersion(fileId: number, versionLabel: string) {
   versionsOpen.value = false;
-  await handleInstall(modId.value, fileId);
+  await installMod(modId.value, fileId, { versionLabel });
+  await refreshInstalled();
 }
 
 async function handleUninstall(targetModId = modId.value, modName?: string) {

@@ -13,7 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: [];
-  install: [fileId: number];
+  install: [fileId: number, versionLabel: string];
 }>();
 
 const { fetchModFiles } = useModDetail();
@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
               'versions-install-btn-installed': installedFileId === file.id,
             }"
             :disabled="!canInstallFile(file)"
-            @click="emit('install', file.id)"
+            @click="emit('install', file.id, versionLabel(file))"
           >
             {{ installLabel(file) }}
           </button>
