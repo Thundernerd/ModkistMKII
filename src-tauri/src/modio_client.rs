@@ -548,6 +548,17 @@ pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<
     }
 }
 
+pub(crate) async fn resolve_mod_name(state: &ModioState, mod_id: u64) -> Option<String> {
+    if let Some(mod_) = state.cached_mod(mod_id) {
+        return Some(mod_.name);
+    }
+
+    fetch_mod_object(state, mod_id)
+        .await
+        .ok()
+        .map(|mod_| mod_.name)
+}
+
 pub(crate) fn is_rate_limited_message(message: &str) -> bool {
     message.to_ascii_lowercase().contains("rate limit")
 }

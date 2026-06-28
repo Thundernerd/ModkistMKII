@@ -23,6 +23,8 @@ struct FailedSyncModRecord {
 #[serde(rename_all = "camelCase")]
 pub struct FailedSyncModEntry {
     pub mod_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mod_name: Option<String>,
     pub ignored: bool,
     pub error_type: String,
     pub error_detail: Option<String>,
@@ -249,6 +251,7 @@ fn build_failed_sync_mod_list(
             .iter()
             .map(|record| FailedSyncModEntry {
                 mod_id: record.mod_id,
+                mod_name: None,
                 ignored: ignored_set.contains(&record.mod_id),
                 error_type: record.error_type.clone(),
                 error_detail: record.error_detail.clone(),
@@ -257,26 +260,48 @@ fn build_failed_sync_mod_list(
     }
 }
 
-pub fn list_failed_sync_mods(app: &AppHandle) -> FailedSyncModList {
+fn build_failed_sync_mod_list_for_app(app: &AppHandle) -> FailedSyncModList {
     build_failed_sync_mod_list(
         &read_failed_sync_records(app),
         &read_ignored_sync_mod_ids(app),
     )
 }
 
-#[tauri::command]
-pub fn list_failed_sync_mods_command(app: AppHandle) -> FailedSyncModList {
-    list_failed_sync_mods(&app)
+async fn enrich_failed_sync_mod_names(
+    state: &crate::modio_client::ModioState,
+    list: &mut FailedSyncModList,
+) {
+    for entry in &mut list.mods {
+        entry.mod_name = crate::modio_client::resolve_mod_name(state, entry.mod_id).await;
+    }
+}
+
+pub async fn list_failed_sync_mods(
+    app: &AppHandle,
+    state: &crate::modio_client::ModioState,
+) -> FailedSyncModList {
+    let mut list = build_failed_sync_mod_list_for_app(app);
+    enrich_failed_sync_mod_names(state, &mut list).await;
+    list
 }
 
 #[tauri::command]
-pub fn set_failed_sync_mod_ignored(
+pub async fn list_failed_sync_mods_command(
     app: AppHandle,
+    state: tauri::State<'_, crate::modio_client::ModioState>,
+) -> Result<FailedSyncModList, String> {
+    Ok(list_failed_sync_mods(&app, &state).await)
+}
+
+#[tauri::command]
+pub async fn set_failed_sync_mod_ignored(
+    app: AppHandle,
+    state: tauri::State<'_, crate::modio_client::ModioState>,
     mod_id: u64,
     ignored: bool,
 ) -> Result<FailedSyncModList, String> {
     set_sync_mod_ignored(&app, mod_id, ignored)?;
-    Ok(list_failed_sync_mods(&app))
+    Ok(list_failed_sync_mods(&app, &state).await)
 }
 
 #[tauri::command]
@@ -298,7 +323,7 @@ async fn unsubscribe_failed_sync_mod_inner(
         return Err(error);
     }
     remove_sync_mod_tracking(app, mod_id)?;
-    Ok(list_failed_sync_mods(app))
+    Ok(list_failed_sync_mods(app, state).await)
 }
 
 #[cfg(test)]

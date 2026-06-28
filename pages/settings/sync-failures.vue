@@ -92,6 +92,10 @@ function failedSyncErrorLabel(errorType: string) {
   return FAILED_SYNC_ERROR_LABELS[errorType] ?? "Sync failed";
 }
 
+function failedModLabel(entry: { modId: number; modName?: string }) {
+  return entry.modName ?? `Mod ID ${entry.modId}`;
+}
+
 onMounted(refreshFailedSyncMods);
 </script>
 
@@ -120,7 +124,8 @@ onMounted(refreshFailedSyncMods);
     <ul v-else class="failed-list">
       <li v-for="entry in mods" :key="entry.modId" class="failed-item panel">
         <div class="failed-main">
-          <span class="failed-id">Mod ID {{ entry.modId }}</span>
+          <span class="failed-id">{{ failedModLabel(entry) }}</span>
+          <p v-if="entry.modName" class="failed-id-sub">Mod ID {{ entry.modId }}</p>
           <p class="failed-error-type">
             {{ failedSyncErrorLabel(entry.errorType) }}
           </p>
@@ -140,7 +145,7 @@ onMounted(refreshFailedSyncMods);
               class="setting-toggle"
               role="switch"
               :aria-checked="entry.ignored"
-              :aria-label="`Ignore mod ${entry.modId}`"
+              :aria-label="`Ignore ${failedModLabel(entry)}`"
               :disabled="ignoringIds.has(entry.modId)"
               @click="handleIgnoreToggle(entry.modId, !entry.ignored)"
             >
@@ -256,6 +261,12 @@ onMounted(refreshFailedSyncMods);
 
 .failed-id {
   font-weight: 600;
+}
+
+.failed-id-sub {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  color: var(--modio-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
