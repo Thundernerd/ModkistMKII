@@ -151,6 +151,12 @@ pub struct InstallModResult {
     pub skipped: Vec<u64>,
     #[serde(default)]
     pub dependency_failure_count: u32,
+    #[serde(default)]
+    pub failed_dependencies: Vec<u64>,
+}
+
+fn is_requested_mod(root_mod_id: Option<u64>, target_mod_id: u64) -> bool {
+    root_mod_id.is_some_and(|root| root == target_mod_id)
 }
 
 fn bepinex_plugins_dir(game_dir: &Path) -> PathBuf {
@@ -768,9 +774,11 @@ async fn install_targets_internal(
     mods_by_id: Option<&HashMap<u64, ModObject>>,
     sync_failure_roots: Option<&HashSet<u64>>,
     dependency_to_subscribers: Option<&HashMap<u64, HashSet<u64>>>,
+    root_mod_id: Option<u64>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
+    let mut failed_dependencies = Vec::new();
 
     log::debug!(
         "Installing {} mod target(s){}",
@@ -822,6 +830,13 @@ async fn install_targets_internal(
                         }
                     }
                 }
+                continue;
+            }
+            Err(message) if !is_requested_mod(root_mod_id, target_mod_id) => {
+                log::warn!(
+                    "Failed to resolve install state for dependency {target_mod_id}: {message}"
+                );
+                failed_dependencies.push(target_mod_id);
                 continue;
             }
             Err(message) => return Err(message),
@@ -900,6 +915,10 @@ async fn install_targets_internal(
                     }
                 }
             }
+            Err(message) if !is_requested_mod(root_mod_id, target_mod_id) => {
+                log::warn!("Failed to install dependency {target_mod_id}: {message}");
+                failed_dependencies.push(target_mod_id);
+            }
             Err(message) => return Err(message),
         }
     }
@@ -913,6 +932,7 @@ async fn install_targets_internal(
         installed,
         skipped,
         dependency_failure_count: 0,
+        failed_dependencies,
     })
 }
 
@@ -924,7 +944,15 @@ async fn install_mod_internal(
     file_id: Option<u64>,
 ) -> Result<InstallModResult, String> {
     log::info!("Installing mod {mod_id}");
-    let order = collect_install_order(state, mod_id).await?;
+    let order = match collect_install_order(state, mod_id).await {
+        Ok(order) => order,
+        Err(message) => {
+            log::warn!(
+                "Could not resolve dependencies for mod {mod_id}, installing mod only: {message}"
+            );
+            vec![mod_id]
+        }
+    };
     log::debug!("Mod {mod_id} install order: {order:?}");
     let mut records = scan_installed_mods_after_cleanup(state, game_dir).await?;
     let mut dependency_map = HashMap::new();
@@ -955,6 +983,7 @@ async fn install_mod_internal(
         None,
         None,
         None,
+        Some(mod_id),
     )
     .await
 }
@@ -978,6 +1007,7 @@ async fn sync_subscribed_mods_inner(
             installed: Vec::new(),
             skipped: Vec::new(),
             dependency_failure_count: 0,
+            failed_dependencies: Vec::new(),
         });
     }
 
@@ -987,6 +1017,7 @@ async fn sync_subscribed_mods_inner(
             installed: Vec::new(),
             skipped: Vec::new(),
             dependency_failure_count: 0,
+            failed_dependencies: Vec::new(),
         });
     }
 
@@ -1070,6 +1101,7 @@ async fn sync_subscribed_mods_inner(
         Some(&mods_by_id),
         Some(&subscribed_roots),
         Some(&dependency_to_subscribers),
+        None,
     )
     .await;
     reconcile_failed_sync_mods(
