@@ -10,6 +10,7 @@
     "opener:default",
     "store:default",
     "dialog:default",
-    "sentry:default"
+    "sentry:default",
+    "window-state:default"
   ]
 }
