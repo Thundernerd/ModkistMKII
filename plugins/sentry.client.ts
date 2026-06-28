@@ -1,28 +1,23 @@
 import * as Sentry from "@sentry/vue";
+import { defaultOptions } from "tauri-plugin-sentry-api";
 
-function sentryDsn(): string | undefined {
-  const value = import.meta.env.VITE_SENTRY_DSN;
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+import { sentryEnvironment } from "~/utils/sentry";
 
 export default defineNuxtPlugin({
   name: "sentry",
-  enforce: "pre",
   setup(nuxtApp) {
-    const dsn = sentryDsn();
-    if (!dsn) {
+    if (!import.meta.env.TAURI_ENV_PLATFORM) {
+      return;
+    }
+
+    if (Sentry.getClient()) {
       return;
     }
 
     Sentry.init({
+      ...defaultOptions,
       app: nuxtApp.vueApp,
-      dsn,
-      environment: import.meta.env.DEV ? "development" : "production",
+      environment: sentryEnvironment(),
       attachProps: false,
     });
   },

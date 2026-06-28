@@ -94,10 +94,16 @@ pub fn run() {
 
     let _sentry_guard = sentry_init::init();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    if let Some(client) = sentry_init::client() {
+        builder = builder.plugin(tauri_plugin_sentry::init_with_no_injection(&client));
+    }
+
+    builder
         .on_page_load(|webview, payload| {
             if payload.event() != PageLoadEvent::Finished {
                 return;
