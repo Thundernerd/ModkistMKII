@@ -1,14 +1,55 @@
 use std::path::PathBuf;
 
-use flexi_logger::{Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming};
+use flexi_logger::writers::LogWriter;
+use flexi_logger::{Cleanup, Criterion, DeferredNow, Duplicate, FileSpec, Logger, Naming};
+use log::Record;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
+
+use crate::sentry_init;
 
 const DEFAULT_LOG_FILTER: &str = "info,modkistmkii_lib=info";
 const LOG_BASENAME: &str = "modkist";
 const LOG_SUBDIR: &str = "logs";
 const MAX_LOG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_LOG_FILES: usize = 5;
+
+struct SentryLogWriter;
+
+impl LogWriter for SentryLogWriter {
+    fn write(&self, _now: &mut DeferredNow, record: &Record) -> std::io::Result<()> {
+        let level = match record.level() {
+            log::Level::Error => sentry::Level::Error,
+            log::Level::Warn => sentry::Level::Warning,
+            _ => return Ok(()),
+        };
+
+        let message = record.args().to_string();
+        sentry::with_scope(
+            |scope| {
+                if let Some(module) = record.module_path() {
+                    scope.set_tag("log.module", module);
+                }
+                if let Some(target) = record.target().strip_prefix("modkistmkii_lib::") {
+                    scope.set_tag("log.target", target);
+                }
+            },
+            || {
+                sentry::capture_message(&message, level);
+            },
+        );
+
+        Ok(())
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn max_log_level(&self) -> log::LevelFilter {
+        log::LevelFilter::Warn
+    }
+}
 
 fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -27,14 +68,20 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
 
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
 
-    Logger::try_with_str(filter)
-        .map_err(|error| format!("Invalid log filter: {error}"))?
-        .log_to_file(
-            FileSpec::default()
-                .directory(&log_dir)
-                .basename(LOG_BASENAME)
-                .suffix("log"),
-        )
+    let file_spec = FileSpec::default()
+        .directory(&log_dir)
+        .basename(LOG_BASENAME)
+        .suffix("log");
+
+    let mut logger = Logger::try_with_str(filter).map_err(|error| format!("Invalid log filter: {error}"))?;
+
+    logger = if sentry_init::is_enabled() {
+        logger.log_to_file_and_writer(file_spec, Box::new(SentryLogWriter))
+    } else {
+        logger.log_to_file(file_spec)
+    };
+
+    logger
         .rotate(
             Criterion::Size(MAX_LOG_FILE_BYTES),
             Naming::Timestamps,
