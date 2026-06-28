@@ -139,6 +139,20 @@ const unavailableDependencyCount = computed(
   () => dependencies.value.filter((dep) => dep.unavailable).length,
 );
 
+const missingDependencyCount = computed(() =>
+  dependencies.value.filter(
+    (dep) => !dep.unavailable && getUiStatus(dep.id) === "notInstalled",
+  ).length,
+);
+
+const showDependenciesStatus = computed(
+  () =>
+    !!mod.value?.hasDependencies &&
+    (dependenciesLoading.value ||
+      !!dependenciesError.value ||
+      dependencies.value.length > 0),
+);
+
 watch(
   modId,
   (id) => {
@@ -324,6 +338,54 @@ function dependencyMeta(dep: ModDependency) {
             </div>
           </div>
 
+          <section
+            v-if="showDependenciesStatus"
+            class="dependencies-status"
+            aria-live="polite"
+          >
+            <div
+              v-if="dependenciesLoading && !dependencies.length"
+              class="dependencies-status-loading"
+            >
+              <span class="spinner" aria-hidden="true" />
+              Checking dependencies…
+            </div>
+
+            <template v-else>
+              <p v-if="dependenciesError" class="error dependencies-status-error">
+                {{ dependenciesError }}
+              </p>
+
+              <p
+                v-if="unavailableDependencyCount > 0"
+                class="hint dependencies-warning"
+              >
+                {{ unavailableDependencyCount }} dependenc{{
+                  unavailableDependencyCount === 1 ? "y" : "ies"
+                }}
+                could not be loaded. They may be private or you may need a
+                separate mod.io subscription.
+              </p>
+
+              <p
+                v-if="missingDependencyCount > 0"
+                class="hint dependencies-missing"
+              >
+                {{ missingDependencyCount }} dependenc{{
+                  missingDependencyCount === 1 ? "y" : "ies"
+                }}
+                still need to be installed before this mod will work.
+                <button
+                  type="button"
+                  class="dependencies-status-link"
+                  @click="selectTab('dependencies')"
+                >
+                  View dependencies
+                </button>
+              </p>
+            </template>
+          </section>
+
           <section class="tabs-panel">
             <nav class="tabs-nav" aria-label="Mod details">
               <button
@@ -387,21 +449,6 @@ function dependencyMeta(dep: ModDependency) {
               </div>
 
               <template v-else>
-                <p v-if="dependenciesError" class="error tab-error">
-                  {{ dependenciesError }}
-                </p>
-
-                <p
-                  v-if="unavailableDependencyCount > 0"
-                  class="hint dependencies-warning"
-                >
-                  {{ unavailableDependencyCount }} dependenc{{
-                    unavailableDependencyCount === 1 ? "y" : "ies"
-                  }}
-                  could not be loaded. They may be private or you may need a
-                  separate mod.io subscription.
-                </p>
-
                 <p
                   v-if="!dependenciesError && !sortedDependencies.length"
                   class="tab-empty"
@@ -828,6 +875,51 @@ function dependencyMeta(dep: ModDependency) {
   padding-left: 1.25rem;
 }
 
+.dependencies-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.dependencies-status-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--modio-text-muted);
+  font-size: 0.85rem;
+}
+
+.dependencies-status-error {
+  margin: 0;
+}
+
+.dependencies-missing {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--modio-radius-sm);
+  border: 1px solid rgba(var(--modio-accent-rgb), 0.35);
+  background: rgba(var(--modio-accent-rgb), 0.08);
+  color: var(--modio-text-muted);
+  font-size: 0.85rem;
+}
+
+.dependencies-status-link {
+  margin-left: 0.15rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--modio-accent);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dependencies-status-link:hover {
+  color: var(--modio-accent-hover);
+}
+
 .dependencies-toolbar {
   display: flex;
   align-items: center;
@@ -843,7 +935,7 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .dependencies-warning {
-  margin: 0 0 0.85rem;
+  margin: 0;
   padding: 0.75rem 0.9rem;
   border-radius: var(--modio-radius-sm);
   border: 1px solid rgba(248, 113, 113, 0.35);
