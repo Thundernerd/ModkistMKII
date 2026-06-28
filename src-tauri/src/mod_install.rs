@@ -800,6 +800,84 @@ fn record_sync_failure_for_target(
     }
 }
 
+type SyncFailureContext<'a> = (
+    &'a AppHandle,
+    &'a HashSet<u64>,
+    &'a HashMap<u64, HashSet<u64>>,
+);
+
+fn record_install_target_failure(
+    sync_failure_context: Option<SyncFailureContext<'_>>,
+    subscription_sync: bool,
+    root_mod_id: Option<u64>,
+    target_mod_id: u64,
+    category: &str,
+    message: &str,
+    failed_dependencies: &mut Vec<u64>,
+) -> bool {
+    let is_dependency = !is_requested_mod(root_mod_id, target_mod_id);
+    if !subscription_sync && !is_dependency {
+        return false;
+    }
+
+    if subscription_sync {
+        if category == "install_state" {
+            log::error!(
+                "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
+            );
+        } else {
+            log::error!(
+                "Failed to install mod {target_mod_id} during subscription sync: {message}"
+            );
+        }
+    } else if category == "install_state" {
+        log::warn!(
+            "Failed to resolve install state for dependency {target_mod_id}: {message}"
+        );
+    } else {
+        log::warn!("Failed to install dependency {target_mod_id}: {message}");
+    }
+
+    if let Some((app, roots, subscribers)) = sync_failure_context {
+        if subscribers.is_empty() {
+            if roots.contains(&target_mod_id) {
+                let _ = record_failed_sync_mod(app, target_mod_id, category, message);
+            }
+        } else {
+            record_sync_failure_for_target(
+                app,
+                target_mod_id,
+                category,
+                message,
+                roots,
+                subscribers,
+            );
+        }
+        track_sync_dependency_failure(target_mod_id, roots, failed_dependencies);
+    } else if is_dependency && !failed_dependencies.contains(&target_mod_id) {
+        failed_dependencies.push(target_mod_id);
+    }
+
+    true
+}
+
+fn build_manual_install_sync_failure_context(
+    mod_id: u64,
+    order: &[u64],
+) -> (HashSet<u64>, HashMap<u64, HashSet<u64>>) {
+    let sync_failure_roots: HashSet<u64> = HashSet::from([mod_id]);
+    let mut dependency_to_subscribers: HashMap<u64, HashSet<u64>> = HashMap::new();
+    for &target_mod_id in order {
+        if target_mod_id != mod_id {
+            dependency_to_subscribers
+                .entry(target_mod_id)
+                .or_default()
+                .insert(mod_id);
+        }
+    }
+    (sync_failure_roots, dependency_to_subscribers)
+}
+
 async fn install_targets_internal(
     app: Option<&AppHandle>,
     state: &ModioState,
@@ -811,18 +889,18 @@ async fn install_targets_internal(
     auto_update: bool,
     file_override: Option<(u64, u64)>,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
-    sync_failure_roots: Option<&HashSet<u64>>,
-    dependency_to_subscribers: Option<&HashMap<u64, HashSet<u64>>>,
+    sync_failure_context: Option<SyncFailureContext<'_>>,
     root_mod_id: Option<u64>,
 ) -> Result<InstallModResult, String> {
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
     let mut failed_dependencies = Vec::new();
+    let subscription_sync = app.is_some();
 
     log::debug!(
         "Installing {} mod target(s){}",
         order.len(),
-        if app.is_some() { " (subscription sync)" } else { "" }
+        if subscription_sync { " (subscription sync)" } else { "" }
     );
 
     for target_mod_id in order {
@@ -844,46 +922,20 @@ async fn install_targets_internal(
         .await
         {
             Ok(state_for_mod) => state_for_mod,
-            Err(message) if app.is_some() => {
-                log::error!(
-                    "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
-                );
-                if let Some(app) = app {
-                    if let Some(roots) = sync_failure_roots {
-                        if let Some(subscribers) = dependency_to_subscribers {
-                            record_sync_failure_for_target(
-                                app,
-                                target_mod_id,
-                                "install_state",
-                                &message,
-                                roots,
-                                subscribers,
-                            );
-                            track_sync_dependency_failure(
-                                target_mod_id,
-                                roots,
-                                &mut failed_dependencies,
-                            );
-                        } else if roots.contains(&target_mod_id) {
-                            let _ = record_failed_sync_mod(
-                                app,
-                                target_mod_id,
-                                "install_state",
-                                &message,
-                            );
-                        }
-                    }
+            Err(message) => {
+                if record_install_target_failure(
+                    sync_failure_context,
+                    subscription_sync,
+                    root_mod_id,
+                    target_mod_id,
+                    "install_state",
+                    &message,
+                    &mut failed_dependencies,
+                ) {
+                    continue;
                 }
-                continue;
+                return Err(message);
             }
-            Err(message) if !is_requested_mod(root_mod_id, target_mod_id) => {
-                log::warn!(
-                    "Failed to resolve install state for dependency {target_mod_id}: {message}"
-                );
-                failed_dependencies.push(target_mod_id);
-                continue;
-            }
-            Err(message) => return Err(message),
         };
         if matches!(state_for_mod.status.as_str(), "upToDate") {
             if let Some((override_mod, override_file)) = file_override {
@@ -893,7 +945,7 @@ async fn install_targets_internal(
                     // Install a specific older or alternate file version.
                 } else {
                     log::debug!("Mod {target_mod_id} already up to date, skipping");
-                    if let Some(app) = app {
+                    if let Some((app, _, _)) = sync_failure_context {
                         maybe_clear_failed_sync_mod(app, target_mod_id);
                     }
                     skipped.push(target_mod_id);
@@ -901,7 +953,7 @@ async fn install_targets_internal(
                 }
             } else {
                 log::debug!("Mod {target_mod_id} already up to date, skipping");
-                if let Some(app) = app {
+                if let Some((app, _, _)) = sync_failure_context {
                     maybe_clear_failed_sync_mod(app, target_mod_id);
                 }
                 skipped.push(target_mod_id);
@@ -913,7 +965,7 @@ async fn install_targets_internal(
             log::debug!(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
-            if let Some(app) = app {
+            if let Some((app, _, _)) = sync_failure_context {
                 maybe_clear_failed_sync_mod(app, target_mod_id);
             }
             skipped.push(target_mod_id);
@@ -932,43 +984,26 @@ async fn install_targets_internal(
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
                 installed.push(target_mod_id);
-                if let Some(app) = app {
+                if let Some((app, _, _)) = sync_failure_context {
                     maybe_clear_failed_sync_mod(app, target_mod_id);
                 }
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
             }
-            Err(message) if app.is_some() => {
-                log::error!(
-                    "Failed to install mod {target_mod_id} during subscription sync: {message}"
-                );
-                if let Some(app) = app {
-                    if let Some(roots) = sync_failure_roots {
-                        if let Some(subscribers) = dependency_to_subscribers {
-                            record_sync_failure_for_target(
-                                app,
-                                target_mod_id,
-                                "install",
-                                &message,
-                                roots,
-                                subscribers,
-                            );
-                            track_sync_dependency_failure(
-                                target_mod_id,
-                                roots,
-                                &mut failed_dependencies,
-                            );
-                        } else if roots.contains(&target_mod_id) {
-                            let _ = record_failed_sync_mod(app, target_mod_id, "install", &message);
-                        }
-                    }
+            Err(message) => {
+                if record_install_target_failure(
+                    sync_failure_context,
+                    subscription_sync,
+                    root_mod_id,
+                    target_mod_id,
+                    "install",
+                    &message,
+                    &mut failed_dependencies,
+                ) {
+                    continue;
                 }
+                return Err(message);
             }
-            Err(message) if !is_requested_mod(root_mod_id, target_mod_id) => {
-                log::warn!("Failed to install dependency {target_mod_id}: {message}");
-                failed_dependencies.push(target_mod_id);
-            }
-            Err(message) => return Err(message),
         }
     }
 
@@ -999,6 +1034,7 @@ async fn install_mod_internal(
             log::warn!(
                 "Could not resolve dependencies for mod {mod_id}, installing mod only: {message}"
             );
+            let _ = record_failed_sync_mod(app, mod_id, "install_order", &message);
             vec![mod_id]
         }
     };
@@ -1006,6 +1042,15 @@ async fn install_mod_internal(
     let mut records = scan_installed_mods_after_cleanup(state, game_dir).await?;
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await;
+
+    let (sync_failure_roots, mut dependency_to_subscribers) =
+        build_manual_install_sync_failure_context(mod_id, &order);
+    augment_dependency_subscribers_from_cache(state, &[mod_id], &mut dependency_to_subscribers);
+    let sync_failure_context = (
+        app,
+        &sync_failure_roots,
+        &dependency_to_subscribers,
+    );
 
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
@@ -1019,7 +1064,7 @@ async fn install_mod_internal(
         }
     }
 
-    install_targets_internal(
+    let mut result = install_targets_internal(
         None,
         state,
         game_dir,
@@ -1030,11 +1075,12 @@ async fn install_mod_internal(
         true,
         file_id.map(|file_id| (mod_id, file_id)),
         None,
-        None,
-        None,
+        Some(sync_failure_context),
         Some(mod_id),
     )
-    .await
+    .await?;
+    result.dependency_failure_count = result.failed_dependencies.len() as u32;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1149,8 +1195,7 @@ async fn sync_subscribed_mods_inner(
         auto_update,
         None,
         Some(&mods_by_id),
-        Some(&subscribed_roots),
-        Some(&dependency_to_subscribers),
+        Some((app, &subscribed_roots, &dependency_to_subscribers)),
         None,
     )
     .await;

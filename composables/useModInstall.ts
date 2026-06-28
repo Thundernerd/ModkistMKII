@@ -234,7 +234,7 @@ function notifyInstallSuccess(
   if (failedDeps.length > 0) {
     pushNotification({
       title: wasUpdate ? "Mod updated with warnings" : "Mod installed with warnings",
-      message: `${verb} ${name}${versionSuffix}, but ${formatCountLabel(failedDeps.length, "dependency", "dependencies")} could not be installed.`,
+      message: `${verb} ${name}${versionSuffix}, but ${formatCountLabel(failedDeps.length, "dependency", "dependencies")} could not be installed. See Settings → Sync failures.`,
       tone: "warning",
       durationMs: WARNING_TOAST_DURATION_MS,
     });
