@@ -18,7 +18,8 @@ use crate::modio_api::ModObject;
 use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
 use crate::subscription_sync_settings::{
     clear_failed_sync_mod, count_dependency_sync_failures, is_dependency_sync_failure,
-    read_failed_sync_mod_ids, read_ignored_sync_mod_ids, record_failed_sync_mod,
+    list_failed_sync_mods, read_failed_sync_mod_ids, read_ignored_sync_mod_ids,
+    record_failed_sync_mod, remove_sync_mod_tracking, FailedSyncModList,
 };
 use crate::modio_client::{
     fetch_mod_object, fetch_mod_outcome, fetch_mod_dependency_ids, fetch_subscribed_mod_ids,
@@ -1320,6 +1321,47 @@ pub async fn install_mod(
 pub fn cancel_subscription_sync(state: State<'_, ModioState>) {
     log::debug!("cancel_subscription_sync command invoked");
     state.cancel_subscription_sync();
+}
+
+#[tauri::command]
+pub async fn unsubscribe_failed_sync_mod(
+    app: AppHandle,
+    state: State<'_, ModioState>,
+    mod_id: u64,
+) -> Result<FailedSyncModList, String> {
+    log::info!("unsubscribe_failed_sync_mod command: mod {mod_id}");
+    ensure_game_not_running()?;
+    let game_dir = game_directory(&app)?;
+    ensure_install_prerequisites(&game_dir)?;
+
+    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
+    let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
+    let is_installed = installed_ids.contains(&mod_id);
+
+    if is_installed {
+        let dependency_map = build_dependency_map(&state, &installed_ids).await;
+        let blockers =
+            uninstall_blockers_for(&state, mod_id, &installed_ids, &dependency_map).await?;
+        if !blockers.is_empty() {
+            return Err(format_uninstall_blocked_error(&blockers));
+        }
+    }
+
+    state.cancel_subscription_sync();
+    let result = unsubscribe_from_mod(&state, mod_id).await;
+    state.reset_subscription_sync_cancel();
+    result?;
+
+    remove_sync_mod_tracking(&app, mod_id)?;
+
+    if is_installed {
+        remove_installed_mod_folders(&game_dir, mod_id)?;
+        log::info!("Unsubscribed and removed installed mod {mod_id} from sync failures");
+    } else {
+        log::info!("Unsubscribed mod {mod_id} from sync failures");
+    }
+
+    Ok(list_failed_sync_mods(&app, &state).await)
 }
 
 #[tauri::command]

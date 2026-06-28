@@ -374,29 +374,6 @@ pub async fn set_failed_sync_mod_ignored(
     set_sync_mod_ignored(&app, mod_id, ignored)?;
     Ok(list_failed_sync_mods(&app, &state).await)
 }
-
-#[tauri::command]
-pub async fn unsubscribe_failed_sync_mod(
-    app: AppHandle,
-    state: tauri::State<'_, crate::modio_client::ModioState>,
-    mod_id: u64,
-) -> Result<FailedSyncModList, String> {
-    unsubscribe_failed_sync_mod_inner(&app, &state, mod_id).await
-}
-
-async fn unsubscribe_failed_sync_mod_inner(
-    app: &AppHandle,
-    state: &crate::modio_client::ModioState,
-    mod_id: u64,
-) -> Result<FailedSyncModList, String> {
-    if let Err(error) = crate::modio_client::unsubscribe_from_mod(state, mod_id).await {
-        log::warn!("Unsubscribe failed for mod {mod_id}: {error}");
-        return Err(error);
-    }
-    remove_sync_mod_tracking(app, mod_id)?;
-    Ok(list_failed_sync_mods(app, state).await)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

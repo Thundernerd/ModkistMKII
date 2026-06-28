@@ -59,13 +59,14 @@ use logging::log_directory_path;
 use mod_install::{
     cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mod_records,
     list_installed_mods, refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
+    unsubscribe_failed_sync_mod,
 };
 use profiles::{
     create_profile, delete_profile, get_active_profile, list_profiles,
     logout_requires_profile_selection_command, rename_profile, switch_profile,
 };
 use subscription_sync_settings::{
-    list_failed_sync_mods_command, set_failed_sync_mod_ignored, unsubscribe_failed_sync_mod,
+    list_failed_sync_mods_command, set_failed_sync_mod_ignored,
 };
 use modio_client::{
     get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mod_files,
