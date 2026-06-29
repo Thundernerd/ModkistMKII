@@ -137,7 +137,7 @@ pub fn run() {
                     state.auth_status().username.as_deref().unwrap_or("user")
                 );
             }
-            state.load_persisted_cache(app.handle());
+            ModioState::clear_legacy_persisted_cache(app.handle());
             app.manage(state);
             log::info!("Application setup complete");
             Ok(())
