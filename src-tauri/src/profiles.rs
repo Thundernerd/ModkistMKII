@@ -7,6 +7,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
+use crate::fs_move::move_dir;
 use crate::game_path::game_directory;
 use crate::mod_folder::is_valid_install_folder_name;
 use crate::modio_client::ModioState;
@@ -290,7 +291,7 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
                     format!("Could not replace existing profile folder {}: {e}", dest.display())
                 })?;
             }
-            fs::rename(&path, &dest).map_err(|e| {
+            move_dir(&path, &dest).map_err(|e| {
                 format!("Could not move mod folder {}: {e}", path.display())
             })?;
         }
@@ -455,13 +456,7 @@ fn migrate_single_profile_archive(
         }
         let _ = fs::remove_dir_all(&from);
     } else {
-        fs::rename(&from, &to).map_err(|error| {
-            format!(
-                "Could not move profile archive {} to {}: {error}",
-                from.display(),
-                to.display()
-            )
-        })?;
+        move_dir(&from, &to)?;
     }
 
     Ok(())

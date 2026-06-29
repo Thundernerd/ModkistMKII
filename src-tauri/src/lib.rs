@@ -31,6 +31,7 @@ mod game_detect;
 mod game_launch;
 mod game_path;
 mod game_process;
+mod fs_move;
 mod logging;
 mod mod_api_cache;
 mod mod_download;
