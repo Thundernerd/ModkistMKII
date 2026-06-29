@@ -454,7 +454,12 @@ fn migrate_single_profile_archive(
         for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
             move_valid_folders(&from.join(kind_dir_name), &to.join(kind_dir_name))?;
         }
-        let _ = fs::remove_dir_all(&from);
+        fs::remove_dir_all(&from).map_err(|error| {
+            format!(
+                "Could not remove legacy profile archive {} after migration: {error}",
+                from.display()
+            )
+        })?;
     } else {
         move_dir(&from, &to)?;
     }
