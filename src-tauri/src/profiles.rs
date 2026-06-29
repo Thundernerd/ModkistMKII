@@ -9,7 +9,7 @@ use tauri_plugin_store::StoreExt;
 
 use crate::fs_move::move_dir;
 use crate::game_path::game_directory;
-use crate::mod_folder::is_valid_install_folder_name;
+use crate::mod_folder::{is_valid_install_folder_name, sanitize_mod_name};
 use crate::modio_client::ModioState;
 
 pub const PROFILES_STORE_PATH: &str = "modkist-profiles.json";
@@ -97,8 +97,13 @@ pub fn profile_archives_root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("Could not resolve profile archives directory: {error}"))
 }
 
-pub fn profile_archive_root(app: &AppHandle, profile_id: &str) -> Result<PathBuf, String> {
-    Ok(profile_archives_root(app)?.join(profile_id))
+pub fn profile_archive_dir_name(profile_id: &str, profile_name: &str) -> String {
+    let sanitized = sanitize_mod_name(profile_name);
+    if sanitized.is_empty() {
+        profile_id.to_string()
+    } else {
+        format!("{profile_id}_{sanitized}")
+    }
 }
 
 fn legacy_modkist_dir(game_dir: &Path) -> PathBuf {
@@ -109,12 +114,44 @@ fn legacy_profile_archives_root(game_dir: &Path) -> PathBuf {
     legacy_modkist_dir(game_dir).join("profiles")
 }
 
-fn profile_archive_root_at(archives_root: &Path, profile_id: &str) -> PathBuf {
-    archives_root.join(profile_id)
+fn resolve_profile_archive_root_at(
+    archives_root: &Path,
+    profile_id: &str,
+    profile_name: &str,
+) -> PathBuf {
+    let canonical = archives_root.join(profile_archive_dir_name(profile_id, profile_name));
+    if canonical.is_dir() {
+        return canonical;
+    }
+
+    let id_only = archives_root.join(profile_id);
+    if id_only.is_dir() {
+        return id_only;
+    }
+
+    let prefix = format!("{profile_id}_");
+    if let Ok(entries) = fs::read_dir(archives_root) {
+        for entry in entries.flatten() {
+            if !entry
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) {
+                return entry.path();
+            }
+        }
+    }
+
+    canonical
 }
 
-fn archive_kind_dir_at(archives_root: &Path, profile_id: &str, kind_dir_name: &str) -> PathBuf {
-    profile_archive_root_at(archives_root, profile_id).join(kind_dir_name)
+fn archive_kind_dir_at_root(archive_root: &Path, kind_dir_name: &str) -> PathBuf {
+    archive_root.join(kind_dir_name)
 }
 
 fn load_store_data(app: &AppHandle) -> Result<ProfileStoreData, String> {
@@ -357,49 +394,50 @@ fn live_has_valid_mod_folders(game_dir: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-fn save_active_profile_at(
-    game_dir: &Path,
-    archives_root: &Path,
-    profile_id: &str,
-) -> Result<(), String> {
-    log::debug!("Saving live mods to profile archive '{profile_id}'");
+fn save_active_profile_at(game_dir: &Path, archive_root: &Path) -> Result<(), String> {
+    log::debug!("Saving live mods to profile archive '{}'", archive_root.display());
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
-        let archive_dir = archive_kind_dir_at(archives_root, profile_id, kind_dir_name);
+        let archive_dir = archive_kind_dir_at_root(archive_root, kind_dir_name);
         move_valid_folders(&live_dir, &archive_dir)?;
     }
     Ok(())
 }
 
-pub fn save_active_profile(
+fn save_active_profile(
     app: &AppHandle,
     game_dir: &Path,
-    profile_id: &str,
+    profile: &StoredProfile,
 ) -> Result<(), String> {
-    save_active_profile_at(game_dir, &profile_archives_root(app)?, profile_id)
+    let archives_root = profile_archives_root(app)?;
+    let archive_root =
+        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
+    save_active_profile_at(game_dir, &archive_root)
 }
 
-fn restore_profile_at(
-    game_dir: &Path,
-    archives_root: &Path,
-    profile_id: &str,
-) -> Result<(), String> {
-    log::debug!("Restoring profile '{profile_id}' to live mod folders");
+fn restore_profile_at(game_dir: &Path, archive_root: &Path) -> Result<(), String> {
+    log::debug!(
+        "Restoring profile archive '{}' to live mod folders",
+        archive_root.display()
+    );
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
-        let archive_dir = archive_kind_dir_at(archives_root, profile_id, kind_dir_name);
+        let archive_dir = archive_kind_dir_at_root(archive_root, kind_dir_name);
         clear_valid_mod_folders(&live_dir)?;
         move_valid_folders(&archive_dir, &live_dir)?;
     }
     Ok(())
 }
 
-pub fn restore_profile(
+fn restore_profile(
     app: &AppHandle,
     game_dir: &Path,
-    profile_id: &str,
+    profile: &StoredProfile,
 ) -> Result<(), String> {
-    restore_profile_at(game_dir, &profile_archives_root(app)?, profile_id)
+    let archives_root = profile_archives_root(app)?;
+    let archive_root =
+        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
+    restore_profile_at(game_dir, &archive_root)
 }
 
 fn new_custom_profile_id() -> Result<String, String> {
@@ -415,21 +453,76 @@ fn new_custom_profile_id() -> Result<String, String> {
 fn adopt_live_mods_into_profile(
     app: &AppHandle,
     game_dir: &Path,
-    profile_id: &str,
+    profile: &StoredProfile,
 ) -> Result<(), String> {
     let archives_root = profile_archives_root(app)?;
+    let archive_root =
+        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
-        let archive_dir = archive_kind_dir_at(&archives_root, profile_id, kind_dir_name);
+        let archive_dir = archive_kind_dir_at_root(&archive_root, kind_dir_name);
         move_valid_folders(&live_dir, &archive_dir)?;
     }
-    restore_profile_at(game_dir, &archives_root, profile_id)
+    restore_profile_at(game_dir, &archive_root)
 }
 
-fn ensure_profile_archive_dirs(archives_root: &Path, profile_id: &str) -> Result<(), String> {
+fn ensure_profile_archive_dirs_at(archive_root: &Path) -> Result<(), String> {
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
-        let archive_dir = archive_kind_dir_at(archives_root, profile_id, kind_dir_name);
+        let archive_dir = archive_kind_dir_at_root(archive_root, kind_dir_name);
         fs::create_dir_all(&archive_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn ensure_profile_archive_dirs(
+    archives_root: &Path,
+    profile_id: &str,
+    profile_name: &str,
+) -> Result<(), String> {
+    let archive_root = archives_root.join(profile_archive_dir_name(profile_id, profile_name));
+    ensure_profile_archive_dirs_at(&archive_root)
+}
+
+fn sync_profile_archive_dir_name(
+    archives_root: &Path,
+    profile: &StoredProfile,
+) -> Result<(), String> {
+    let canonical = archives_root.join(profile_archive_dir_name(&profile.id, &profile.name));
+    let current = resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
+
+    if !current.is_dir() {
+        return ensure_profile_archive_dirs_at(&canonical);
+    }
+
+    if current == canonical {
+        return ensure_profile_archive_dirs_at(&canonical);
+    }
+
+    if canonical.exists() {
+        for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
+            move_valid_folders(&current.join(kind_dir_name), &canonical.join(kind_dir_name))?;
+        }
+        fs::remove_dir_all(&current).map_err(|error| {
+            format!(
+                "Could not remove old profile archive {}: {error}",
+                current.display()
+            )
+        })?;
+    } else {
+        move_dir(&current, &canonical)?;
+    }
+
+    ensure_profile_archive_dirs_at(&canonical)
+}
+
+fn sync_profile_archive_dir_names(
+    app: &AppHandle,
+    data: &ProfileStoreData,
+) -> Result<(), String> {
+    let archives_root = profile_archives_root(app)?;
+    fs::create_dir_all(&archives_root).map_err(|e| e.to_string())?;
+    for profile in &data.profiles {
+        sync_profile_archive_dir_name(&archives_root, profile)?;
     }
     Ok(())
 }
@@ -438,6 +531,7 @@ fn migrate_single_profile_archive(
     legacy_root: Option<&Path>,
     archives_root: &Path,
     profile_id: &str,
+    profile_name: &str,
 ) -> Result<(), String> {
     let Some(legacy_root) = legacy_root else {
         return Ok(());
@@ -448,7 +542,7 @@ fn migrate_single_profile_archive(
         return Ok(());
     }
 
-    let to = archives_root.join(profile_id);
+    let to = archives_root.join(profile_archive_dir_name(profile_id, profile_name));
     fs::create_dir_all(archives_root).map_err(|e| e.to_string())?;
     if to.exists() {
         for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
@@ -512,11 +606,13 @@ fn remove_profile_archive_dirs_at(
     Ok(())
 }
 
-fn remove_profile_archive_from_disk(app: &AppHandle, profile_id: &str) -> Result<(), String> {
-    let app_data_archive = profile_archive_root(app, profile_id)?;
+fn remove_profile_archive_from_disk(app: &AppHandle, profile: &StoredProfile) -> Result<(), String> {
+    let archives_root = profile_archives_root(app)?;
+    let app_data_archive =
+        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
     let legacy_archive = game_directory(app)
         .ok()
-        .map(|game_dir| legacy_profile_archives_root(&game_dir).join(profile_id));
+        .map(|game_dir| legacy_profile_archives_root(&game_dir).join(&profile.id));
     remove_profile_archive_dirs_at(&app_data_archive, legacy_archive.as_deref())
 }
 
@@ -558,8 +654,22 @@ fn migrate_profile_archives_to_app_data(
     }
 
     for profile_id in profile_ids {
-        migrate_single_profile_archive(legacy_root.as_deref(), &archives_root, &profile_id)?;
-        ensure_profile_archive_dirs(&archives_root, &profile_id)?;
+        let profile_name = data
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .map(|profile| profile.name.as_str())
+            .unwrap_or(profile_id.as_str());
+        migrate_single_profile_archive(
+            legacy_root.as_deref(),
+            &archives_root,
+            &profile_id,
+            profile_name,
+        )?;
+    }
+
+    for profile in &data.profiles {
+        sync_profile_archive_dir_name(&archives_root, profile)?;
     }
 
     if let Some(game_dir) = game_directory(app).ok() {
@@ -586,19 +696,23 @@ fn run_migration_if_needed(app: &AppHandle, data: &mut ProfileStoreData) -> Resu
 
     if live_has_valid_mod_folders(&game_dir)? {
         let profile_id = new_custom_profile_id()?;
-        data.profiles.push(StoredProfile {
+        let profile = StoredProfile {
             id: profile_id.clone(),
             name: IMPORTED_PROFILE_NAME.to_string(),
             kind: ProfileKind::Custom,
-        });
-        adopt_live_mods_into_profile(app, &game_dir, &profile_id)?;
+        };
+        data.profiles.push(profile.clone());
+        adopt_live_mods_into_profile(app, &game_dir, &profile)?;
         data.active_profile_id = profile_id.clone();
         log::info!(
             "Imported existing mods into new profile '{IMPORTED_PROFILE_NAME}' ({profile_id})"
         );
     } else {
         data.active_profile_id = VANILLA_PROFILE_ID.to_string();
-        restore_profile(app, &game_dir, VANILLA_PROFILE_ID)?;
+        let vanilla = profile_by_id(data, VANILLA_PROFILE_ID).ok_or_else(|| {
+            "Vanilla profile is not configured.".to_string()
+        })?;
+        restore_profile(app, &game_dir, vanilla)?;
     }
 
     data.migrated = true;
@@ -617,6 +731,7 @@ fn prepare_store(app: &AppHandle, modio_state: &ModioState) -> Result<ProfileSto
     if let Ok(game_dir) = game_directory(app) {
         remove_legacy_modkist_folder(&game_dir)?;
     }
+    sync_profile_archive_dir_names(app, &data)?;
     save_store_data(app, &data)?;
     Ok(data)
 }
@@ -688,17 +803,21 @@ fn switch_profile_inner(
         target.name
     );
 
+    let from_profile = profile_by_id(&data, &from_profile_id)
+        .ok_or_else(|| format!("Profile {from_profile_id} does not exist."))?
+        .clone();
+
     let game_dir = game_directory(app).ok();
 
     if let Some(game_dir) = &game_dir {
-        save_active_profile(app, game_dir, &from_profile_id)?;
+        save_active_profile(app, game_dir, &from_profile)?;
     }
 
     data.active_profile_id = target_profile_id.to_string();
     save_store_data(app, &data)?;
 
     match game_dir {
-        Some(game_dir) => restore_profile(app, &game_dir, target_profile_id)?,
+        Some(game_dir) => restore_profile(app, &game_dir, &target)?,
         None => log::debug!(
             "Profile switch stored without mod folder changes: game directory is not configured"
         ),
@@ -778,7 +897,7 @@ pub fn create_profile(
     log::info!("Created profile '{}' ({id})", trimmed);
 
     if let Ok(archives_root) = profile_archives_root(&app) {
-        ensure_profile_archive_dirs(&archives_root, &id)?;
+        ensure_profile_archive_dirs(&archives_root, &id, trimmed)?;
     }
 
     let logged_in = modio_state.auth_status().logged_in;
@@ -805,7 +924,7 @@ pub fn delete_profile(
     }
 
     let profile_name = profile.name.clone();
-    remove_profile_archive_from_disk(&app, profile_id)?;
+    remove_profile_archive_from_disk(&app, profile)?;
 
     let mut data = data;
     data.profiles.retain(|entry| entry.id != profile_id);
@@ -856,6 +975,10 @@ pub fn rename_profile(
     let profile = profile.clone();
     save_store_data(&app, &data)?;
 
+    if let Ok(archives_root) = profile_archives_root(&app) {
+        sync_profile_archive_dir_name(&archives_root, &profile)?;
+    }
+
     let logged_in = modio_state.auth_status().logged_in;
     Ok(to_summary(&profile, &data.active_profile_id, logged_in))
 }
@@ -892,18 +1015,29 @@ mod tests {
     }
 
     #[test]
+    fn profile_archive_dir_name_appends_sanitized_profile_name() {
+        assert_eq!(
+            profile_archive_dir_name("custom-1", "My Mod Pack"),
+            "custom-1_My Mod Pack"
+        );
+        assert_eq!(profile_archive_dir_name("vanilla", "Vanilla"), "vanilla_Vanilla");
+        assert_eq!(profile_archive_dir_name("custom-1", ""), "custom-1");
+    }
+
+    #[test]
     fn save_and_restore_round_trip_moves_folders() {
         let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        let archive_root = archives_root.join(profile_archive_dir_name("test-profile", "Test"));
         write_mod_folder(&game_dir, MODS_DIR, "10_20");
         write_mod_folder(&game_dir, BLUEPRINTS_DIR, "30_40");
 
-        save_active_profile_at(&game_dir, &archives_root, "test-profile").unwrap();
+        save_active_profile_at(&game_dir, &archive_root).unwrap();
         assert!(!live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
-        assert!(archive_kind_dir_at(&archives_root, "test-profile", MODS_DIR)
+        assert!(archive_kind_dir_at_root(&archive_root, MODS_DIR)
             .join("10_20")
             .exists());
 
-        restore_profile_at(&game_dir, &archives_root, "test-profile").unwrap();
+        restore_profile_at(&game_dir, &archive_root).unwrap();
         assert!(live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
         assert!(live_kind_dir(&game_dir, BLUEPRINTS_DIR)
             .join("30_40")
@@ -913,16 +1047,18 @@ mod tests {
     #[test]
     fn switch_clears_live_before_restore() {
         let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        let archive_a = archives_root.join(profile_archive_dir_name("profile-a", "A"));
+        let archive_b = archives_root.join(profile_archive_dir_name("profile-b", "B"));
         write_mod_folder(&game_dir, MODS_DIR, "1_1");
-        save_active_profile_at(&game_dir, &archives_root, "profile-a").unwrap();
+        save_active_profile_at(&game_dir, &archive_a).unwrap();
 
         write_mod_folder(&game_dir, MODS_DIR, "2_2");
-        save_active_profile_at(&game_dir, &archives_root, "profile-b").unwrap();
-        assert!(archive_kind_dir_at(&archives_root, "profile-b", MODS_DIR)
+        save_active_profile_at(&game_dir, &archive_b).unwrap();
+        assert!(archive_kind_dir_at_root(&archive_b, MODS_DIR)
             .join("2_2")
             .exists());
 
-        restore_profile_at(&game_dir, &archives_root, "profile-a").unwrap();
+        restore_profile_at(&game_dir, &archive_a).unwrap();
         assert!(live_kind_dir(&game_dir, MODS_DIR).join("1_1").exists());
         assert!(!live_kind_dir(&game_dir, MODS_DIR).join("2_2").exists());
     }
@@ -930,15 +1066,17 @@ mod tests {
     #[test]
     fn adopt_live_mods_into_profile_keeps_mods_active() {
         let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        let archive_root =
+            archives_root.join(profile_archive_dir_name("imported-profile", "Imported"));
         write_mod_folder(&game_dir, MODS_DIR, "10_20");
         write_mod_folder(&game_dir, BLUEPRINTS_DIR, "30_40");
 
         for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
             let live_dir = live_kind_dir(&game_dir, kind_dir_name);
-            let archive_dir = archive_kind_dir_at(&archives_root, "imported-profile", kind_dir_name);
+            let archive_dir = archive_kind_dir_at_root(&archive_root, kind_dir_name);
             move_valid_folders(&live_dir, &archive_dir).unwrap();
         }
-        restore_profile_at(&game_dir, &archives_root, "imported-profile").unwrap();
+        restore_profile_at(&game_dir, &archive_root).unwrap();
 
         assert!(live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
         assert!(live_kind_dir(&game_dir, BLUEPRINTS_DIR)
@@ -949,6 +1087,8 @@ mod tests {
     #[test]
     fn profile_operations_leave_unmanaged_entries_alone() {
         let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        let archive_root =
+            archives_root.join(profile_archive_dir_name("imported-profile", "Imported"));
         write_mod_folder(&game_dir, MODS_DIR, "10_20");
         let manual_mod_dir = live_kind_dir(&game_dir, MODS_DIR).join("MyManualMod");
         fs::create_dir_all(&manual_mod_dir).unwrap();
@@ -958,15 +1098,19 @@ mod tests {
 
         for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
             let live_dir = live_kind_dir(&game_dir, kind_dir_name);
-            let archive_dir = archive_kind_dir_at(&archives_root, "imported-profile", kind_dir_name);
+            let archive_dir = archive_kind_dir_at_root(&archive_root, kind_dir_name);
             move_valid_folders(&live_dir, &archive_dir).unwrap();
         }
-        restore_profile_at(&game_dir, &archives_root, "imported-profile").unwrap();
+        restore_profile_at(&game_dir, &archive_root).unwrap();
         assert!(manual_mod_dir.exists());
         assert!(loose_file.exists());
 
-        save_active_profile_at(&game_dir, &archives_root, "imported-profile").unwrap();
-        restore_profile_at(&game_dir, &archives_root, VANILLA_PROFILE_ID).unwrap();
+        save_active_profile_at(&game_dir, &archive_root).unwrap();
+        restore_profile_at(
+            &game_dir,
+            &archives_root.join(profile_archive_dir_name(VANILLA_PROFILE_ID, "Vanilla")),
+        )
+        .unwrap();
         assert!(manual_mod_dir.exists());
         assert!(loose_file.exists());
         assert!(!live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
@@ -982,14 +1126,36 @@ mod tests {
         fs::create_dir_all(&legacy_mod_dir).unwrap();
         fs::write(legacy_mod_dir.join("mod.dll"), b"test").unwrap();
 
-        migrate_single_profile_archive(Some(&legacy_root), &archives_root, "profile-a").unwrap();
-        ensure_profile_archive_dirs(&archives_root, "profile-a").unwrap();
+        migrate_single_profile_archive(Some(&legacy_root), &archives_root, "profile-a", "Alpha")
+            .unwrap();
+        ensure_profile_archive_dirs(&archives_root, "profile-a", "Alpha").unwrap();
         remove_legacy_modkist_folder(&game_dir).unwrap();
 
         assert!(!legacy_modkist_dir(&game_dir).exists());
-        assert!(archive_kind_dir_at(&archives_root, "profile-a", MODS_DIR)
+        assert!(archives_root
+            .join(profile_archive_dir_name("profile-a", "Alpha"))
+            .join(MODS_DIR)
             .join("10_20")
             .exists());
+    }
+
+    #[test]
+    fn sync_profile_archive_dir_name_renames_id_only_folder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archives_root = temp.path().join("profiles");
+        let profile = StoredProfile {
+            id: "custom-1".to_string(),
+            name: "Survival".to_string(),
+            kind: ProfileKind::Custom,
+        };
+        let id_only = archives_root.join("custom-1");
+        fs::create_dir_all(id_only.join(MODS_DIR)).unwrap();
+
+        sync_profile_archive_dir_name(&archives_root, &profile).unwrap();
+
+        let named = archives_root.join("custom-1_Survival");
+        assert!(named.is_dir());
+        assert!(!id_only.exists());
     }
 
     #[test]
