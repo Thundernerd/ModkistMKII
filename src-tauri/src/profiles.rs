@@ -483,6 +483,43 @@ fn remove_legacy_modkist_folder(game_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_profile_archive_dirs_at(
+    app_data_archive: &Path,
+    legacy_archive: Option<&Path>,
+) -> Result<(), String> {
+    if app_data_archive.is_dir() {
+        fs::remove_dir_all(app_data_archive).map_err(|error| {
+            format!(
+                "Could not remove profile archive {}: {error}",
+                app_data_archive.display()
+            )
+        })?;
+        log::debug!("Removed profile archive {}", app_data_archive.display());
+    }
+
+    if let Some(legacy_archive) = legacy_archive {
+        if legacy_archive.is_dir() {
+            fs::remove_dir_all(legacy_archive).map_err(|error| {
+                format!(
+                    "Could not remove legacy profile archive {}: {error}",
+                    legacy_archive.display()
+                )
+            })?;
+            log::debug!("Removed legacy profile archive {}", legacy_archive.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_profile_archive_from_disk(app: &AppHandle, profile_id: &str) -> Result<(), String> {
+    let app_data_archive = profile_archive_root(app, profile_id)?;
+    let legacy_archive = game_directory(app)
+        .ok()
+        .map(|game_dir| legacy_profile_archives_root(&game_dir).join(profile_id));
+    remove_profile_archive_dirs_at(&app_data_archive, legacy_archive.as_deref())
+}
+
 fn migrate_profile_archives_to_app_data(
     app: &AppHandle,
     data: &mut ProfileStoreData,
@@ -768,20 +805,12 @@ pub fn delete_profile(
     }
 
     let profile_name = profile.name.clone();
+    remove_profile_archive_from_disk(&app, profile_id)?;
+
     let mut data = data;
     data.profiles.retain(|entry| entry.id != profile_id);
     save_store_data(&app, &data)?;
     log::info!("Deleted profile '{profile_name}' ({profile_id})");
-
-    let archive_root = profile_archive_root(&app, profile_id)?;
-    if archive_root.exists() {
-        fs::remove_dir_all(&archive_root).map_err(|e| {
-            format!(
-                "Could not remove profile archive {}: {e}",
-                archive_root.display()
-            )
-        })?;
-    }
 
     Ok(())
 }
@@ -961,6 +990,23 @@ mod tests {
         assert!(archive_kind_dir_at(&archives_root, "profile-a", MODS_DIR)
             .join("10_20")
             .exists());
+    }
+
+    #[test]
+    fn remove_profile_archive_from_disk_removes_app_data_and_legacy_folders() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let game_dir = temp.path().join("game");
+        let archives_root = temp.path().join("appdata").join(PROFILE_ARCHIVES_DIR);
+        let profile_id = "custom-123";
+        let app_data_archive = archives_root.join(profile_id);
+        let legacy_archive = legacy_profile_archives_root(&game_dir).join(profile_id);
+        fs::create_dir_all(app_data_archive.join(MODS_DIR).join("10_20")).unwrap();
+        fs::create_dir_all(legacy_archive.join(MODS_DIR).join("20_30")).unwrap();
+
+        remove_profile_archive_dirs_at(&app_data_archive, Some(&legacy_archive)).unwrap();
+
+        assert!(!app_data_archive.exists());
+        assert!(!legacy_archive.exists());
     }
 
     #[test]
