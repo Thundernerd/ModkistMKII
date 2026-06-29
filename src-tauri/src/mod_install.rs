@@ -15,7 +15,7 @@ use crate::mod_folder::{
     rename_install_folder,
 };
 use crate::modio_api::ModObject;
-use crate::profiles::{active_profile_install_blocked, active_profile_is_user};
+use crate::profiles::{active_profile_install_blocked, active_profile_is_user, profile_archives_root};
 use crate::subscription_sync_settings::{
     clear_failed_sync_mod, count_dependency_sync_failures, is_dependency_sync_failure,
     list_failed_sync_mods, read_failed_sync_mod_ids, read_ignored_sync_mod_ids,
@@ -28,7 +28,6 @@ use crate::modio_client::{
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
 const BEPINEX_PLUGINS: &str = "BepInEx/plugins";
-const MODKIST_PROFILES_ROOT: &str = ".modkist/profiles";
 const MODS_DIR: &str = "Mods";
 const BLUEPRINTS_DIR: &str = "Blueprints";
 const PLUGIN_TAG: &str = "Plugin";
@@ -168,13 +167,13 @@ fn kind_root_dir(game_dir: &Path, kind: InstalledModKind) -> PathBuf {
     bepinex_plugins_dir(game_dir).join(kind.directory_name())
 }
 
-fn managed_install_kind_dirs(game_dir: &Path) -> Vec<PathBuf> {
+fn managed_install_kind_dirs(app: &AppHandle, game_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut dirs = vec![
         kind_root_dir(game_dir, InstalledModKind::Plugin),
         kind_root_dir(game_dir, InstalledModKind::Blueprint),
     ];
 
-    let profiles_root = bepinex_plugins_dir(game_dir).join(MODKIST_PROFILES_ROOT);
+    let profiles_root = profile_archives_root(app)?;
     if profiles_root.is_dir() {
         if let Ok(entries) = fs::read_dir(&profiles_root) {
             for entry in entries.flatten() {
@@ -192,7 +191,7 @@ fn managed_install_kind_dirs(game_dir: &Path) -> Vec<PathBuf> {
         }
     }
 
-    dirs
+    Ok(dirs)
 }
 
 fn mod_kind_from_tags(tags: &[String]) -> Result<InstalledModKind, String> {
@@ -303,10 +302,11 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
 }
 
 async fn normalize_legacy_install_folder_names(
+    app: &AppHandle,
     state: &ModioState,
     game_dir: &Path,
 ) -> Result<(), String> {
-    for kind_dir in managed_install_kind_dirs(game_dir) {
+    for kind_dir in managed_install_kind_dirs(app, game_dir)? {
         if !kind_dir.is_dir() {
             continue;
         }
@@ -351,10 +351,11 @@ async fn normalize_legacy_install_folder_names(
 }
 
 async fn prepare_installed_records(
+    app: &AppHandle,
     state: &ModioState,
     game_dir: &Path,
 ) -> Result<(Vec<InstalledModRecord>, HashMap<u64, ModObject>), String> {
-    normalize_legacy_install_folder_names(state, game_dir).await?;
+    normalize_legacy_install_folder_names(app, state, game_dir).await?;
     let records = scan_installed_mods(game_dir)?;
     let mut available = Vec::with_capacity(records.len());
     let mut mods_by_id = HashMap::new();
@@ -377,10 +378,11 @@ async fn prepare_installed_records(
 }
 
 async fn scan_installed_mods_after_cleanup(
+    app: &AppHandle,
     state: &ModioState,
     game_dir: &Path,
 ) -> Result<Vec<InstalledModRecord>, String> {
-    Ok(prepare_installed_records(state, game_dir).await?.0)
+    Ok(prepare_installed_records(app, state, game_dir).await?.0)
 }
 
 async fn refresh_dependency_map(
@@ -1039,7 +1041,7 @@ async fn install_mod_internal(
         }
     };
     log::debug!("Mod {mod_id} install order: {order:?}");
-    let mut records = scan_installed_mods_after_cleanup(state, game_dir).await?;
+    let mut records = scan_installed_mods_after_cleanup(app, state, game_dir).await?;
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await;
 
@@ -1136,7 +1138,7 @@ async fn sync_subscribed_mods_inner(
     let subscribed_count = mod_ids.len();
     let subscribed_roots: HashSet<u64> = mod_ids.iter().copied().collect();
 
-    let (mut records, mods_by_id) = prepare_installed_records(state, &game_dir).await?;
+    let (mut records, mods_by_id) = prepare_installed_records(app, state, &game_dir).await?;
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await;
 
@@ -1276,7 +1278,7 @@ async fn list_installed_mods_inner(
     let game_dir = game_directory(app)?;
     ensure_install_prerequisites(&game_dir)?;
 
-    let (records, mods_by_id) = prepare_installed_records(state, &game_dir).await?;
+    let (records, mods_by_id) = prepare_installed_records(app, state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let dependency_map = build_dependency_map(state, &installed_ids).await;
     let mut entries = Vec::with_capacity(records.len());
@@ -1321,7 +1323,7 @@ pub async fn get_mod_install_state(
 ) -> Result<ModInstallState, String> {
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
-    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
+    let records = scan_installed_mods_after_cleanup(&app, &state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let dependency_map = build_dependency_map(&state, &installed_ids).await;
     install_state_for_mod(&state, mod_id, &records, &dependency_map, None).await
@@ -1378,7 +1380,7 @@ pub async fn unsubscribe_failed_sync_mod(
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
 
-    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
+    let records = scan_installed_mods_after_cleanup(&app, &state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let is_installed = installed_ids.contains(&mod_id);
 
@@ -1419,7 +1421,7 @@ pub async fn uninstall_mod(
     let game_dir = game_directory(&app)?;
     ensure_install_prerequisites(&game_dir)?;
 
-    let records = scan_installed_mods_after_cleanup(&state, &game_dir).await?;
+    let records = scan_installed_mods_after_cleanup(&app, &state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
 
     if !installed_ids.contains(&mod_id) {
