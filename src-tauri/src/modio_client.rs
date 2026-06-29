@@ -1,11 +1,11 @@
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
-use crate::mod_api_cache::{ApiCache, PersistedCache};
+use crate::mod_api_cache::ApiCache;
 use std::collections::HashSet;
 
 use crate::modio_api::{ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile};
@@ -14,18 +14,9 @@ pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
 const USERNAME_KEY: &str = "username";
 
-const CACHE_STORE_PATH: &str = "modio-cache.json";
-const CACHE_PERSIST_KEY: &str = "cache";
-const CACHE_SAVED_AT_KEY: &str = "savedAtUnix";
-/// Persisted dependency cache is reused for a day before being re-fetched.
-const CACHE_PERSIST_TTL_SECS: u64 = 24 * 60 * 60;
-
-fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
+const LEGACY_CACHE_STORE_PATH: &str = "modio-cache.json";
+const LEGACY_CACHE_PERSIST_KEY: &str = "cache";
+const LEGACY_CACHE_SAVED_AT_KEY: &str = "savedAtUnix";
 
 struct SessionData {
     token: Option<String>,
@@ -269,44 +260,22 @@ impl ModioState {
         }
     }
 
-    /// Loads the persisted dependency cache from disk (if recent enough). Called
-    /// once at startup so a cold launch does not re-fetch dependencies.
-    pub fn load_persisted_cache(&self, app: &AppHandle) {
-        let Ok(store) = app.store(CACHE_STORE_PATH) else {
+    /// Removes any legacy on-disk mod.io API cache from older app versions.
+    pub fn clear_legacy_persisted_cache(app: &AppHandle) {
+        let Ok(store) = app.store(LEGACY_CACHE_STORE_PATH) else {
             return;
         };
-        let saved_at = store
-            .get(CACHE_SAVED_AT_KEY)
-            .and_then(|value| value.as_u64())
-            .unwrap_or(0);
-        if saved_at == 0 || now_unix_secs().saturating_sub(saved_at) > CACHE_PERSIST_TTL_SECS {
+        let had_cache = store.get(LEGACY_CACHE_PERSIST_KEY).is_some()
+            || store.get(LEGACY_CACHE_SAVED_AT_KEY).is_some();
+        if !had_cache {
             return;
         }
-        let Some(value) = store.get(CACHE_PERSIST_KEY) else {
-            return;
-        };
-        let Ok(snapshot) = serde_json::from_value::<PersistedCache>(value) else {
-            return;
-        };
-        if let Ok(mut cache) = self.api_cache.lock() {
-            cache.restore_persisted(snapshot);
-        }
-        log::debug!("Restored persisted dependency cache");
-    }
-
-    /// Writes the dependency cache to disk so the next launch can skip re-fetching.
-    pub fn persist_cache(&self, app: &AppHandle) {
-        let snapshot = match self.api_cache.lock() {
-            Ok(cache) => cache.dependency_snapshot(),
-            Err(_) => return,
-        };
-        let Ok(store) = app.store(CACHE_STORE_PATH) else {
-            return;
-        };
-        store.set(CACHE_PERSIST_KEY, serde_json::json!(snapshot));
-        store.set(CACHE_SAVED_AT_KEY, serde_json::json!(now_unix_secs()));
+        let _ = store.delete(LEGACY_CACHE_PERSIST_KEY);
+        let _ = store.delete(LEGACY_CACHE_SAVED_AT_KEY);
         if let Err(error) = store.save() {
-            log::warn!("Failed to persist dependency cache: {error}");
+            log::warn!("Could not remove legacy mod.io cache from disk: {error}");
+        } else {
+            log::info!("Removed legacy mod.io cache from disk");
         }
     }
 

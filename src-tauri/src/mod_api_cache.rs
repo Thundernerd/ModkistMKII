@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-
 use crate::modio_api::{ModObject, Modfile};
 
 const CACHE_TTL: Duration = Duration::from_secs(300);
@@ -23,17 +21,6 @@ impl<T: Clone> Timed<T> {
     fn is_valid(&self) -> bool {
         self.fetched_at.elapsed() < CACHE_TTL
     }
-}
-
-/// Disk-persisted subset of the cache. Only the dependency map is persisted: it
-/// is effectively immutable per mod and is the main cold-start request burst.
-/// Latest-file-ids and subscriptions are intentionally left out so update
-/// detection and subscription state stay fresh after a restart.
-#[derive(Serialize, Deserialize, Default)]
-pub(crate) struct PersistedCache {
-    pub dependencies: HashMap<u64, Vec<u64>>,
-    #[serde(default)]
-    pub dependency_fetch_failures: Vec<u64>,
 }
 
 #[derive(Default)]
@@ -168,40 +155,6 @@ impl ApiCache {
         if let Ok(index) = ids.binary_search(&mod_id) {
             ids.remove(index);
             self.store_subscribed_mod_ids(ids);
-        }
-    }
-
-    /// Snapshot of the still-valid dependency entries for disk persistence.
-    pub(crate) fn dependency_snapshot(&self) -> PersistedCache {
-        let dependencies = self
-            .dependencies
-            .iter()
-            .filter(|(_, entry)| entry.is_valid())
-            .map(|(mod_id, entry)| (*mod_id, entry.value.clone()))
-            .collect();
-        let dependency_fetch_failures = self
-            .failed_dependency_fetches
-            .iter()
-            .filter(|(_, entry)| entry.is_valid())
-            .map(|(mod_id, _)| *mod_id)
-            .collect();
-        PersistedCache {
-            dependencies,
-            dependency_fetch_failures,
-        }
-    }
-
-    /// Loads a persisted snapshot, treating restored entries as freshly fetched.
-    pub(crate) fn restore_persisted(&mut self, snapshot: PersistedCache) {
-        for (mod_id, dependencies) in snapshot.dependencies {
-            self.dependencies
-                .entry(mod_id)
-                .or_insert_with(|| Timed::new(dependencies));
-        }
-        for mod_id in snapshot.dependency_fetch_failures {
-            self.failed_dependency_fetches
-                .entry(mod_id)
-                .or_insert_with(|| Timed::new(()));
         }
     }
 }
