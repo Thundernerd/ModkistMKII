@@ -310,7 +310,7 @@ const installEnvironmentError = ref("");
 const checkingUpdates = ref(false);
 const syncingSubscriptions = ref(false);
 const bulkUpdating = ref(false);
-const startupUpdateCheckDone = ref(false);
+const installedModsLoaded = ref(false);
 
 let refreshInFlight: Promise<void> | null = null;
 
@@ -357,21 +357,26 @@ function mapInstallState(state: ModInstallState): ModInstallState {
   };
 }
 
+function installStateFromEntry(entry: InstalledModEntry): ModInstallState {
+  return {
+    status: entry.updateAvailable ? "updateAvailable" : "upToDate",
+    installedFileId: entry.fileId,
+    latestFileId: entry.latestFileId ?? entry.fileId,
+    kind: entry.kind,
+    canUninstall: entry.canUninstall,
+    uninstallBlockedBy: entry.uninstallBlockedBy ?? [],
+  };
+}
+
 function applyInstalledList(entries: InstalledModEntry[]) {
   installedMods.value = entries;
   const nextStates: Record<number, ModInstallState> = {};
   for (const mod of entries) {
-    nextStates[mod.modId] = {
-      status: mod.updateAvailable ? "updateAvailable" : "upToDate",
-      installedFileId: mod.fileId,
-      latestFileId: mod.latestFileId ?? mod.fileId,
-      kind: mod.kind,
-      canUninstall: mod.canUninstall,
-      uninstallBlockedBy: mod.uninstallBlockedBy ?? [],
-    };
+    nextStates[mod.modId] = installStateFromEntry(mod);
   }
   installStates.value = nextStates;
   installReady.value = true;
+  installedModsLoaded.value = true;
 }
 
 const sessionSyncDone = ref(false);
@@ -393,7 +398,14 @@ function resetSessionSync() {
 }
 
 function resetStartupUpdateCheck() {
-  startupUpdateCheckDone.value = false;
+  installedModsLoaded.value = false;
+}
+
+function invalidateInstalledModsCache() {
+  installedModsLoaded.value = false;
+  installedMods.value = [];
+  installStates.value = {};
+  installReady.value = false;
 }
 
 async function listInstalledMods(): Promise<InstalledModEntry[]> {
@@ -434,7 +446,12 @@ export function useModInstall() {
   } = useProfiles();
   const { gameRunning, gameRunningMessage } = useGameProcess();
 
-  async function refreshInstalled() {
+  async function refreshInstalled(options?: { force?: boolean }) {
+    const force = options?.force ?? false;
+    if (!force && installedModsLoaded.value) {
+      return;
+    }
+
     if (refreshInFlight) {
       await refreshInFlight;
       return;
@@ -453,6 +470,7 @@ export function useModInstall() {
         applyInstalledList(await listInstalledMods());
         logger.debug(`Refreshed installed mods (${installedMods.value.length} total)`);
       } catch (error) {
+        installedModsLoaded.value = false;
         installReady.value = false;
         installEnvironmentError.value =
           error instanceof Error ? error.message : String(error);
@@ -466,6 +484,10 @@ export function useModInstall() {
     } finally {
       refreshInFlight = null;
     }
+  }
+
+  async function ensureInstalledModsLoaded() {
+    await refreshInstalled();
   }
 
   async function syncSubscribedModsIfNeeded() {
@@ -506,7 +528,7 @@ export function useModInstall() {
         }
         sessionSyncDone.value = true;
         logger.info("Subscription sync complete", result);
-        await refreshInstalled();
+        await refreshInstalled({ force: true });
         notifySubscriptionSyncComplete(pushNotification, result, updateCount.value);
       } catch (error) {
         if (generation !== subscriptionSyncGeneration) {
@@ -523,7 +545,7 @@ export function useModInstall() {
           tone: "error",
           durationMs: ERROR_TOAST_DURATION_MS,
         });
-        await refreshInstalled().catch(() => {});
+        await refreshInstalled({ force: true }).catch(() => {});
       } finally {
         if (generation === subscriptionSyncGeneration) {
           syncingSubscriptions.value = false;
@@ -538,7 +560,24 @@ export function useModInstall() {
     }
   }
 
-  async function refreshInstallState(modId: number) {
+  async function refreshInstallState(modId: number, options?: { force?: boolean }) {
+    const force = options?.force ?? false;
+    if (!force && installedModsLoaded.value) {
+      const existing = installStates.value[modId];
+      if (existing) {
+        return existing;
+      }
+
+      const entry = installedMods.value.find((mod) => mod.modId === modId);
+      if (entry) {
+        const state = installStateFromEntry(entry);
+        installStates.value = { ...installStates.value, [modId]: state };
+        return state;
+      }
+
+      return null;
+    }
+
     try {
       const state = mapInstallState(
         await invoke<ModInstallState>("get_mod_install_state", {
@@ -594,13 +633,8 @@ export function useModInstall() {
         sessionSyncDone.value = true;
       }
 
-      applyInstalledList(await listInstalledMods());
+      await refreshInstalled({ force: true });
       installEnvironmentError.value = "";
-
-      const refreshIds = new Set([modId, ...result.installed, ...result.skipped]);
-      for (const id of refreshIds) {
-        await refreshInstallState(id);
-      }
       logger.info(`Install finished for mod ${modId}`, result);
       if (!options?.suppressSuccessToast) {
         notifyInstallSuccess(
@@ -636,7 +670,7 @@ export function useModInstall() {
         );
       }
       await invoke("uninstall_mod", { modId });
-      await refreshInstalled();
+      await refreshInstalled({ force: true });
       logger.info(`Uninstalled mod ${modId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -693,7 +727,7 @@ export function useModInstall() {
   }
 
   async function checkForUpdatesOnStartup() {
-    if (startupUpdateCheckDone.value) {
+    if (installedModsLoaded.value) {
       return installedMods.value;
     }
 
@@ -701,8 +735,7 @@ export function useModInstall() {
 
     checkingUpdates.value = true;
     try {
-      await refreshInstalled();
-      startupUpdateCheckDone.value = true;
+      await refreshInstalled({ force: true });
       return installedMods.value;
     } finally {
       checkingUpdates.value = false;
@@ -753,11 +786,13 @@ export function useModInstall() {
     checkingUpdates,
     syncingSubscriptions,
     bulkUpdating,
-    startupUpdateCheckDone,
+    installedModsLoaded,
     profileInstallBlocked,
     gameRunning,
     gameRunningMessage,
     refreshInstalled,
+    ensureInstalledModsLoaded,
+    invalidateInstalledModsCache,
     resetSessionSync,
     resetStartupUpdateCheck,
     cancelSubscriptionSync,
