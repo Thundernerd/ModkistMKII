@@ -7,26 +7,32 @@ const {
   modsWithUpdates,
   updateCount,
   installEnvironmentError,
-  refreshInstalled,
+  installReady,
+  checkingUpdates,
+  ensureInstalledModsLoaded,
   installMod,
   getUiStatus,
   getInstallError,
   bulkUpdating,
-  checkingUpdates,
   updateAllMods,
   profileInstallBlocked,
   gameRunning,
   gameRunningMessage,
 } = useModInstall();
 
-const loading = ref(true);
+const loading = ref(!installReady.value);
 const pageError = ref("");
 
 async function loadUpdates() {
+  if (installReady.value) {
+    loading.value = false;
+    return;
+  }
+
   loading.value = true;
   pageError.value = "";
   try {
-    await refreshInstalled();
+    await ensureInstalledModsLoaded();
   } catch (error) {
     pageError.value = error instanceof Error ? error.message : String(error);
   } finally {

@@ -162,7 +162,7 @@ const {
   createProfile,
   deleteProfile,
 } = useProfiles();
-const { resetStartupUpdateCheck, refreshInstalled } = useModInstall();
+const { invalidateInstalledModsCache, refreshInstalled } = useModInstall();
 
 const savingAutoUpdate = ref(false);
 const autoUpdateError = ref("");
@@ -209,8 +209,8 @@ async function handleCreateProfile() {
   try {
     await createProfile(name);
     newProfileName.value = "";
-    resetStartupUpdateCheck();
-    await refreshInstalled();
+    invalidateInstalledModsCache();
+    await refreshInstalled({ force: true });
   } catch (err) {
     profileActionError.value = err instanceof Error ? err.message : String(err);
   } finally {

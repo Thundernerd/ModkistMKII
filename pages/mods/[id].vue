@@ -22,10 +22,9 @@ const {
 } = useModDetail();
 
 const {
-  refreshInstalled,
-  refreshInstallState,
   installMod,
   uninstallMod,
+  refreshInstallState,
   getUiStatus,
   getCanUninstall,
   getInstallError,
@@ -190,10 +189,6 @@ watch(mediaImages, () => {
   mediaIndex.value = 0;
 });
 
-onMounted(() => {
-  refreshInstalled();
-});
-
 function formatCount(value: number) {
   return value.toLocaleString();
 }
@@ -238,13 +233,11 @@ async function copyModId() {
 
 async function handleInstall(targetModId = modId.value, fileId?: number) {
   await installMod(targetModId, fileId);
-  await refreshInstalled();
 }
 
 async function handleInstallVersion(fileId: number, versionLabel: string) {
   versionsOpen.value = false;
   await installMod(modId.value, fileId, { versionLabel });
-  await refreshInstalled();
 }
 
 async function handleUninstall(targetModId = modId.value, modName?: string) {
@@ -255,7 +248,6 @@ async function handleUninstall(targetModId = modId.value, modName?: string) {
   );
   if (!confirmed) return;
   await uninstallMod(targetModId);
-  await refreshInstalled();
 }
 
 function dependencyMeta(dep: ModDependency) {

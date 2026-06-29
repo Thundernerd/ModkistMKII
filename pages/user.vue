@@ -13,7 +13,7 @@ const {
   logoutPickerProfiles,
   refreshProfiles,
 } = useProfiles();
-const { resetStartupUpdateCheck } = useModInstall();
+const { invalidateInstalledModsCache } = useModInstall();
 
 const profilePickerOpen = ref(false);
 const logoutError = ref("");
@@ -41,7 +41,7 @@ async function handleLogoutProfileSelect(profileId: string) {
     await switchProfile(profileId);
     profilePickerOpen.value = false;
     await completeLogout();
-    resetStartupUpdateCheck();
+    invalidateInstalledModsCache();
     await navigateTo("/");
   } catch (err) {
     logoutError.value = err instanceof Error ? err.message : String(err);

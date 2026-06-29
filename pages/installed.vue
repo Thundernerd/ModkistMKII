@@ -6,7 +6,8 @@ definePageMeta({ layout: "app" });
 const {
   installedMods,
   installEnvironmentError,
-  refreshInstalled,
+  installReady,
+  ensureInstalledModsLoaded,
   installMod,
   uninstallMod,
   getUiStatus,
@@ -17,14 +18,19 @@ const {
   gameRunningMessage,
 } = useModInstall();
 
-const loading = ref(true);
+const loading = ref(!installReady.value);
 const pageError = ref("");
 
 async function loadInstalled() {
+  if (installReady.value) {
+    loading.value = false;
+    return;
+  }
+
   loading.value = true;
   pageError.value = "";
   try {
-    await refreshInstalled();
+    await ensureInstalledModsLoaded();
   } catch (error) {
     pageError.value = error instanceof Error ? error.message : String(error);
   } finally {

@@ -19,7 +19,7 @@ const {
   syncingSubscriptions,
   bulkUpdating,
   checkingUpdates,
-  resetStartupUpdateCheck,
+  invalidateInstalledModsCache,
   resetSessionSync,
   refreshInstalled,
   syncSubscribedModsIfNeeded,
@@ -189,9 +189,9 @@ async function selectProfile(profile: ProfileSummary) {
   try {
     setProfileSwitchMessage(`Switching to ${profile.name}…`);
     await switchProfile(profile.id);
-    resetStartupUpdateCheck();
+    invalidateInstalledModsCache();
     setProfileSwitchMessage("Loading installed mods…");
-    await refreshInstalled();
+    await refreshInstalled({ force: true });
     if (profile.kind === "user") {
       resetSessionSync();
       setProfileSwitchMessage("Syncing subscribed mods…");

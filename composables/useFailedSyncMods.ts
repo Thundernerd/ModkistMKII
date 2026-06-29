@@ -53,7 +53,7 @@ export function useFailedSyncMods() {
       });
       mods.value = result.mods;
       const { refreshInstalled } = useModInstall();
-      await refreshInstalled().catch(() => {});
+      await refreshInstalled({ force: true }).catch(() => {});
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err);
       throw err;
