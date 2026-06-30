@@ -12,7 +12,7 @@ use crate::game_path::game_directory;
 use crate::wine_prefix::{self, WineWinhttpStatus};
 use crate::zip_extract::extract_zip;
 
-const REQUIRED_VERSION: &str = "5.4.23.5";
+const MINIMUM_VERSION: &str = "5.4.20.0";
 const DOWNLOAD_URL: &str =
     "https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.5/BepInEx_win_x64_5.4.23.5.zip";
 const ARCHIVE_NAME: &str = "BepInEx_win_x64_5.4.23.5.zip";
@@ -54,7 +54,7 @@ impl BepInExStatus {
                 state: "missing".into(),
                 found_version,
                 message: Some(format!(
-                    "BepInEx {REQUIRED_VERSION} (x64) was not found in your game directory."
+                    "BepInEx {MINIMUM_VERSION} or newer (x64) was not found in your game directory."
                 )),
                 can_continue: false,
                 wine_winhttp,
@@ -70,7 +70,7 @@ impl BepInExStatus {
                 state: "wrongVersion".into(),
                 found_version: found_version.clone(),
                 message: Some(format!(
-                    "Found BepInEx {}. Modkist expects {REQUIRED_VERSION}. You can continue, but some mods may not work.",
+                    "Found BepInEx {}. Modkist requires {MINIMUM_VERSION} or newer. You can continue, but some mods may not work.",
                     found_version.unwrap_or_else(|| "an unknown version".into())
                 )),
                 can_continue: true,
@@ -146,8 +146,29 @@ fn read_version_strings(version_info: VersionInfo<'_>) -> Option<String> {
         .or_else(|| version_info.value(lang, "ProductVersion"))
 }
 
+fn parse_version(version: &str) -> Option<(u32, u32, u32, u32)> {
+    let version = version.trim();
+    let version = version.split([',', ' ', '+']).next()?;
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    let build = match parts.next() {
+        Some(part) => part.parse().ok()?,
+        None => 0,
+    };
+    Some((major, minor, patch, build))
+}
+
+fn version_at_least(version: &str, minimum: &str) -> bool {
+    match (parse_version(version), parse_version(minimum)) {
+        (Some(found), Some(minimum)) => found >= minimum,
+        _ => false,
+    }
+}
+
 fn version_matches_required(version: &str) -> bool {
-    version.trim().starts_with(REQUIRED_VERSION)
+    version_at_least(version, MINIMUM_VERSION)
 }
 
 fn detect_bepinex(game_dir: &Path) -> (BepInExState, Option<String>) {
@@ -316,6 +337,27 @@ pub async fn reinstall_bepinex(app: AppHandle) -> Result<BepInExStatus, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_bepinex_versions_at_or_above_minimum() {
+        assert!(version_matches_required("5.4.20.0"));
+        assert!(version_matches_required("5.4.23.5"));
+        assert!(version_matches_required("5.4.99.0"));
+        assert!(version_matches_required("5.5.0.0"));
+    }
+
+    #[test]
+    fn rejects_bepinex_versions_below_minimum() {
+        assert!(!version_matches_required("5.4.19.9"));
+        assert!(!version_matches_required("5.3.0.0"));
+        assert!(!version_matches_required("4.0.0.0"));
+    }
+
+    #[test]
+    fn parses_three_part_versions_as_zero_build() {
+        assert!(version_at_least("5.4.20", MINIMUM_VERSION));
+        assert!(!version_at_least("5.4.19", MINIMUM_VERSION));
+    }
 
     #[test]
     fn reads_bepinex_version_from_pe32_dll() {
