@@ -5,7 +5,8 @@
 //! (`https://g-{game_id}.modapi.io/v1` by default). Mod metadata and dependency
 //! reads try the game `api_key` first; when that fails and a bearer token is
 //! available, the same request is retried with OAuth (e.g. private subscribed
-//! mods). Other OAuth-only endpoints always use the bearer token.
+//! mods). Failures on the api-key attempt are logged at debug level when a
+//! bearer retry is planned. Other OAuth-only endpoints always use the bearer token.
 
 use std::time::{Duration, Instant};
 
@@ -75,6 +76,15 @@ impl ApiError {
             self.status,
             self.error_ref,
             self.retry_after_secs
+        );
+    }
+
+    fn log_suppressed(&self, context: &str) {
+        log::debug!(
+            "mod.io API error [{context}] (api key attempt, retrying with bearer): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
         );
     }
 }
@@ -411,6 +421,7 @@ impl ApiClient {
         token: Option<&str>,
         query: &[(String, String)],
         form: Option<&[(&str, &str)]>,
+        quiet_on_failure: bool,
     ) -> Result<Vec<u8>, ApiError> {
         self.pace().await;
 
@@ -447,12 +458,23 @@ impl ApiClient {
 
         let started = Instant::now();
         let response = request.send().await.map_err(|e| {
-            log::error!("mod.io <- {method_label} {path} transport error: {e}");
+            if quiet_on_failure {
+                log::debug!("mod.io <- {method_label} {path} transport error: {e}");
+            } else {
+                log::error!("mod.io <- {method_label} {path} transport error: {e}");
+            }
             ApiError::transport(format!("mod.io request failed: {e}"))
         })?;
 
         let status = response.status();
-        log_response(&method_label, path, status, response.headers(), started.elapsed());
+        log_response(
+            &method_label,
+            path,
+            status,
+            response.headers(),
+            started.elapsed(),
+            quiet_on_failure,
+        );
 
         let retry_after = response
             .headers()
@@ -491,7 +513,11 @@ impl ApiClient {
         if error.is_rate_limited() {
             self.respect_retry_after(error.retry_after_secs.unwrap_or(60)).await;
         }
-        error.log(path);
+        if quiet_on_failure && !error.is_rate_limited() {
+            error.log_suppressed(path);
+        } else {
+            error.log(path);
+        }
         Err(error)
     }
 
@@ -503,7 +529,22 @@ impl ApiClient {
         query: &[(String, String)],
         form: Option<&[(&str, &str)]>,
     ) -> Result<T, ApiError> {
-        let bytes = self.send_raw(method, path, token, query, form).await?;
+        self.send_with_options(method, path, token, query, form, false)
+            .await
+    }
+
+    async fn send_with_options<T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        token: Option<&str>,
+        query: &[(String, String)],
+        form: Option<&[(&str, &str)]>,
+        quiet_on_failure: bool,
+    ) -> Result<T, ApiError> {
+        let bytes = self
+            .send_raw(method, path, token, query, form, quiet_on_failure)
+            .await?;
         serde_json::from_slice(&bytes).map_err(|e| {
             ApiError::transport(format!("Failed to parse mod.io response: {e}"))
         })
@@ -515,13 +556,35 @@ impl ApiClient {
         path: &str,
         token: Option<&str>,
     ) -> Result<(), ApiError> {
-        self.send_raw(method, path, token, &[], None).await.map(|_| ())
+        self.send_raw(method, path, token, &[], None, false)
+            .await
+            .map(|_| ())
     }
 
     /// When an api-key read fails, retry with OAuth unless mod.io is rate
     /// limiting us (a bearer retry would just consume more quota).
     fn should_retry_with_bearer(error: &ApiError) -> bool {
         !error.is_rate_limited()
+    }
+
+    async fn retry_with_bearer_after_api_key_failure<T, F, Fut>(
+        &self,
+        context: &str,
+        api_key_error: ApiError,
+        retry: F,
+    ) -> Result<T, ApiError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError>>,
+    {
+        log::debug!("{context} failed with api key, retrying with bearer token");
+        match retry().await {
+            Ok(value) => Ok(value),
+            Err(bearer_error) => {
+                api_key_error.log(context);
+                Err(bearer_error)
+            }
+        }
     }
 
     pub async fn get_mods(
@@ -541,15 +604,26 @@ impl ApiClient {
         token: Option<&str>,
     ) -> Result<ModObject, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}");
+        let may_retry_with_bearer = token.is_some();
         match self
-            .send::<ModObject>(reqwest::Method::GET, &path, None, &[], None)
+            .send_with_options::<ModObject>(
+                reqwest::Method::GET,
+                &path,
+                None,
+                &[],
+                None,
+                may_retry_with_bearer,
+            )
             .await
         {
             Ok(mod_) => Ok(mod_),
-            Err(error) if token.is_some() && Self::should_retry_with_bearer(&error) => {
-                log::debug!("get_mod {mod_id} failed with api key, retrying with bearer token");
-                self.send(reqwest::Method::GET, &path, token, &[], None)
-                    .await
+            Err(api_key_error)
+                if may_retry_with_bearer && Self::should_retry_with_bearer(&api_key_error) =>
+            {
+                self.retry_with_bearer_after_api_key_failure(&path, api_key_error, || {
+                    self.send(reqwest::Method::GET, &path, token, &[], None)
+                })
+                .await
             }
             Err(error) => Err(error),
         }
@@ -589,17 +663,26 @@ impl ApiClient {
         token: Option<&str>,
     ) -> Result<ListResponse<DependencyObject>, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/dependencies");
+        let may_retry_with_bearer = token.is_some();
         match self
-            .send::<ListResponse<DependencyObject>>(reqwest::Method::GET, &path, None, &[], None)
+            .send_with_options::<ListResponse<DependencyObject>>(
+                reqwest::Method::GET,
+                &path,
+                None,
+                &[],
+                None,
+                may_retry_with_bearer,
+            )
             .await
         {
             Ok(list) => Ok(list),
-            Err(error) if token.is_some() && Self::should_retry_with_bearer(&error) => {
-                log::debug!(
-                    "get_mod_dependencies {mod_id} failed with api key, retrying with bearer token"
-                );
-                self.send(reqwest::Method::GET, &path, token, &[], None)
-                    .await
+            Err(api_key_error)
+                if may_retry_with_bearer && Self::should_retry_with_bearer(&api_key_error) =>
+            {
+                self.retry_with_bearer_after_api_key_failure(&path, api_key_error, || {
+                    self.send(reqwest::Method::GET, &path, token, &[], None)
+                })
+                .await
             }
             Err(error) => Err(error),
         }
@@ -747,6 +830,7 @@ fn log_response(
     status: reqwest::StatusCode,
     headers: &reqwest::header::HeaderMap,
     elapsed: std::time::Duration,
+    quiet_on_failure: bool,
 ) {
     let header_dump: Vec<String> = headers
         .iter()
@@ -760,6 +844,8 @@ fn log_response(
     );
     if status.is_success() {
         log::info!("{line}");
+    } else if quiet_on_failure && status.as_u16() != 429 {
+        log::debug!("{line}");
     } else {
         log::warn!("{line}");
     }
