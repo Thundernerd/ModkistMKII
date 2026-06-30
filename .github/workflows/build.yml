@@ -6,7 +6,7 @@
 #   SENTRY_DSN     — optional Sentry DSN for Rust and frontend error reporting
 #
 # Run from Actions → Build → Run workflow. Choose which platforms to build.
-# The prerelease suffix is bumped automatically (0.1.0 -> 0.1.0-1 -> 0.1.0-2)
+# The prerelease suffix is set from the workflow run number (0.1.0 -> 0.1.0-34)
 # in package.json, tauri.conf.json, Cargo.toml, and Cargo.lock, committed to the
 # selected branch, then builds run.
 # Bundles appear as workflow artifacts (dmg/msi/deb/AppImage per platform).
@@ -48,26 +48,33 @@ jobs:
 
       - name: Bump prerelease version
         id: bump
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
 
           new_version=$(node <<'EOF'
           const fs = require("fs");
 
+          const runNumber = process.env.RUN_NUMBER;
+          if (!runNumber) {
+            console.error("::error::RUN_NUMBER is not set");
+            process.exit(1);
+          }
+
           const current = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
-          const match = current.match(/^(\d+\.\d+\.\d+)(?:-(\d+))?$/);
+          const match = current.match(/^(\d+\.\d+\.\d+)(?:-.+)?$/);
           if (!match) {
             console.error(
-              `::error::Expected major.minor.patch or major.minor.patch-N, got ${current}`,
+              `::error::Expected major.minor.patch or major.minor.patch-suffix, got ${current}`,
             );
             process.exit(1);
           }
 
           const base = match[1];
-          const prerelease = match[2] ? Number(match[2]) + 1 : 1;
-          const newVersion = `${base}-${prerelease}`;
+          const newVersion = `${base}-${runNumber}`;
 
-          console.error(`Bumping version: ${current} -> ${newVersion}`);
+          console.error(`Setting version: ${current} -> ${newVersion}`);
 
           const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
           pkg.version = newVersion;
