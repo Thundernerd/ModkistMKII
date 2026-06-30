@@ -57,6 +57,7 @@ const primaryNav = computed(() => [
 ]);
 
 const footerNav = computed(() => [
+  { label: "Sideload", to: "/sideload" },
   { label: "Settings", to: "/settings" },
   authStatus.value.loggedIn
     ? { label: "User", to: "/user" }
