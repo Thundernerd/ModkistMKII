@@ -32,6 +32,7 @@ mod game_launch;
 mod game_path;
 mod game_process;
 mod fs_move;
+mod launch_options;
 mod logging;
 mod mod_api_cache;
 mod mod_download;
@@ -56,6 +57,7 @@ use game_detect::detect_game_paths_command;
 use game_launch::launch_game;
 use game_path::{game_path_status, set_game_path};
 use game_process::game_running_status;
+use launch_options::{get_startup_launch_options, LaunchOptions};
 use logging::log_directory_path;
 use mod_install::{
     cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mod_records,
@@ -140,6 +142,17 @@ pub fn run() {
             }
             ModioState::clear_legacy_persisted_cache(app.handle());
             app.manage(state);
+
+            let launch_options = LaunchOptions::from_env_args();
+            if launch_options.profile_name.is_some() || launch_options.launch_game {
+                log::info!(
+                    "Startup launch options: profile={:?}, launch_game={}",
+                    launch_options.profile_name,
+                    launch_options.launch_game
+                );
+            }
+            app.manage(launch_options);
+
             log::info!("Application setup complete");
             Ok(())
         })
@@ -168,6 +181,7 @@ pub fn run() {
             remember_ignore_bepinex_version_warning,
             remember_skip_sign_in,
             game_running_status,
+            get_startup_launch_options,
             launch_game,
             bepinex_status,
             verify_bepinex,
