@@ -10,7 +10,6 @@ const {
   switching,
   loading: profilesLoading,
   refreshProfiles,
-  switchProfile,
 } = useProfiles();
 const {
   updateCount,
@@ -19,20 +18,14 @@ const {
   syncingSubscriptions,
   bulkUpdating,
   checkingUpdates,
-  invalidateInstalledModsCache,
-  resetSessionSync,
-  refreshInstalled,
-  syncSubscribedModsIfNeeded,
 } = useModInstall();
 const { gameRunning } = useGameProcess();
 const { launching, launchError, launchGame, clearLaunchError } = useGameLaunch();
+const { activateProfile } = useProfileActivation();
 const {
   profileSwitchActive,
   profileSwitchMessage,
   profileSwitchTargetName,
-  beginProfileSwitch,
-  setProfileSwitchMessage,
-  endProfileSwitch,
 } = useProfileSwitchUi();
 
 const profileError = ref("");
@@ -184,24 +177,12 @@ async function selectProfile(profile: ProfileSummary) {
 
   menuOpen.value = false;
   profileError.value = "";
-  beginProfileSwitch(profile.name);
 
   try {
-    setProfileSwitchMessage(`Switching to ${profile.name}…`);
-    await switchProfile(profile.id);
-    invalidateInstalledModsCache();
-    setProfileSwitchMessage("Loading installed mods…");
-    await refreshInstalled({ force: true });
-    if (profile.kind === "user") {
-      resetSessionSync();
-      setProfileSwitchMessage("Syncing subscribed mods…");
-      await syncSubscribedModsIfNeeded();
-    }
+    await activateProfile(profile);
   } catch (error) {
     profileError.value =
       error instanceof Error ? error.message : String(error);
-  } finally {
-    endProfileSwitch();
   }
 }
 </script>
