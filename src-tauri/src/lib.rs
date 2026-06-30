@@ -43,6 +43,7 @@ pub mod modio_api;
 mod modio_client;
 mod profiles;
 mod sentry_init;
+mod sideload;
 mod subscription_sync_settings;
 mod zip_extract;
 
@@ -68,6 +69,7 @@ use profiles::{
     create_profile, delete_profile, get_active_profile, list_profiles,
     logout_requires_profile_selection_command, rename_profile, switch_profile,
 };
+use sideload::{add_sideloaded_mod, list_sideloaded_mods, remove_sideloaded_mod};
 use subscription_sync_settings::{
     list_failed_sync_mods_command, set_failed_sync_mod_ignored, FailedSyncState,
 };
@@ -205,6 +207,9 @@ pub fn run() {
             list_failed_sync_mods_command,
             set_failed_sync_mod_ignored,
             unsubscribe_failed_sync_mod,
+            list_sideloaded_mods,
+            add_sideloaded_mod,
+            remove_sideloaded_mod,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
