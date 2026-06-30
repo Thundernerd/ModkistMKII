@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ensureBepInEx, ensureGamePath } from "~/utils/authNavigation";
+import { runStartupLaunchArgs } from "~/composables/useStartupLaunchArgs";
 
 const ready = ref(false);
 const { startGameProcessPolling, stopGameProcessPolling } = useGameProcess();
@@ -12,6 +13,7 @@ onMounted(async () => {
   ready.value = await ensureBepInEx();
   if (ready.value) {
     startGameProcessPolling();
+    await runStartupLaunchArgs();
   }
 });
 
