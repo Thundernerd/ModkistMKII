@@ -3,7 +3,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
 import { invoke } from "~/utils/tauri";
-import { BEPINEX_REQUIRED_VERSION, useBepInEx } from "~/composables/useBepInEx";
+import { BEPINEX_MINIMUM_VERSION, BEPINEX_REQUIRED_VERSION, useBepInEx } from "~/composables/useBepInEx";
 
 definePageMeta({ layout: "app" });
 
@@ -103,7 +103,7 @@ async function verifyBepInExInstall() {
       setVerifyResult(
         "error",
         status.message ||
-          `Expected BepInEx ${BEPINEX_REQUIRED_VERSION} (x64), but a different version was found.`,
+          `Expected BepInEx ${BEPINEX_MINIMUM_VERSION} or newer (x64), but a different version was found.`,
       );
       return;
     }
@@ -380,8 +380,8 @@ function profileKindLabel(kind: string) {
     <section class="panel">
       <h2 class="panel-title">BepInEx</h2>
       <p class="hint panel-desc">
-        Modkist requires BepInEx {{ BEPINEX_REQUIRED_VERSION }} (x64) in your game
-        folder.
+        Modkist requires BepInEx {{ BEPINEX_MINIMUM_VERSION }} or newer (x64) in your game
+        folder. Fresh installs use {{ BEPINEX_REQUIRED_VERSION }}.
       </p>
 
       <p class="status-line">
