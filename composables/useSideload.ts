@@ -1,13 +1,20 @@
 import { invoke } from "~/utils/tauri";
 
-export type SideloadSourceType = "dll" | "archive";
+export type SideloadTargetKind = "plugins" | "blueprints";
+
+export type SideloadSourceType = "dll" | "zeeplevel" | "archive";
 
 export interface SideloadedEntry {
   id: string;
   name: string;
+  targetKind: SideloadTargetKind;
   sourceType: SideloadSourceType;
   addedAt?: string;
 }
+
+export type AddSideloadedModResult =
+  | { status: "added"; entry: SideloadedEntry }
+  | { status: "needsTargetChoice"; folderName: string; sourcePath: string };
 
 export function useSideload() {
   const entries = ref<SideloadedEntry[]>([]);
@@ -30,16 +37,24 @@ export function useSideload() {
     }
   }
 
-  async function addSideloaded(sourcePath: string) {
+  async function addSideloaded(
+    sourcePath: string,
+    targetKind?: SideloadTargetKind,
+  ): Promise<AddSideloadedModResult> {
     adding.value = true;
     error.value = "";
 
     try {
-      const entry = await invoke<SideloadedEntry>("add_sideloaded_mod", {
+      const result = await invoke<AddSideloadedModResult>("add_sideloaded_mod", {
         sourcePath,
+        targetKind: targetKind ?? null,
       });
-      await refreshSideloaded();
-      return entry;
+
+      if (result.status === "added") {
+        await refreshSideloaded();
+      }
+
+      return result;
     } catch (err) {
       error.value = String(err);
       throw err;

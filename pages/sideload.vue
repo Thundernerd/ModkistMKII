@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { confirm, open } from "@tauri-apps/plugin-dialog";
-import type { SideloadedEntry } from "~/composables/useSideload";
+import type { SideloadedEntry, SideloadTargetKind } from "~/composables/useSideload";
 
 definePageMeta({ layout: "app" });
 
@@ -17,6 +17,9 @@ const {
 const { gameRunning, gameRunningMessage } = useGameProcess();
 
 const pageError = ref("");
+const targetChoiceOpen = ref(false);
+const pendingSourcePath = ref("");
+const pendingFolderName = ref("");
 
 async function loadSideloaded() {
   pageError.value = "";
@@ -35,8 +38,9 @@ async function browseForMod() {
     multiple: false,
     title: "Select a mod file",
     filters: [
-      { name: "Mod files", extensions: ["dll", "zip"] },
+      { name: "Mod files", extensions: ["dll", "zeeplevel", "zip"] },
       { name: "DLL files", extensions: ["dll"] },
+      { name: "Blueprint files", extensions: ["zeeplevel"] },
       { name: "Zip archives", extensions: ["zip"] },
     ],
   });
@@ -45,16 +49,52 @@ async function browseForMod() {
     return;
   }
 
+  await handleAddSideloaded(selected);
+}
+
+async function handleAddSideloaded(
+  sourcePath: string,
+  targetKind?: SideloadTargetKind,
+) {
+  pageError.value = "";
+  error.value = "";
+
   try {
-    await addSideloaded(selected);
+    const result = await addSideloaded(sourcePath, targetKind);
+
+    if (result.status === "needsTargetChoice") {
+      pendingSourcePath.value = result.sourcePath;
+      pendingFolderName.value = result.folderName;
+      targetChoiceOpen.value = true;
+      return;
+    }
   } catch (err) {
     pageError.value = err instanceof Error ? err.message : String(err);
   }
 }
 
+async function handleTargetChoice(targetKind: SideloadTargetKind) {
+  targetChoiceOpen.value = false;
+  const sourcePath = pendingSourcePath.value;
+  pendingSourcePath.value = "";
+  pendingFolderName.value = "";
+
+  if (!sourcePath) {
+    return;
+  }
+
+  await handleAddSideloaded(sourcePath, targetKind);
+}
+
+function closeTargetChoice() {
+  targetChoiceOpen.value = false;
+  pendingSourcePath.value = "";
+  pendingFolderName.value = "";
+}
+
 async function handleRemove(entry: SideloadedEntry) {
   const confirmed = await confirm(
-    `Remove "${entry.name}" from BepInEx/plugins/Sideloaded?`,
+    `Remove "${entry.name}" from BepInEx/plugins/Sideloaded/${entry.id}?`,
     { title: "Remove sideloaded mod?", kind: "warning" },
   );
   if (!confirmed) return;
@@ -67,8 +107,19 @@ async function handleRemove(entry: SideloadedEntry) {
   }
 }
 
+function targetKindLabel(targetKind: SideloadedEntry["targetKind"]) {
+  return targetKind === "plugins" ? "Plugin" : "Blueprint";
+}
+
 function sourceTypeLabel(sourceType: SideloadedEntry["sourceType"]) {
-  return sourceType === "dll" ? "DLL" : "Archive";
+  switch (sourceType) {
+    case "dll":
+      return "DLL";
+    case "zeeplevel":
+      return "Blueprint file";
+    default:
+      return "Archive";
+  }
 }
 
 function formatAddedAt(addedAt?: string) {
@@ -90,17 +141,20 @@ onMounted(loadSideloaded);
     <header class="page-header">
       <h1>Sideload</h1>
       <p class="page-subtitle">
-        Add your own mods from a DLL or zip archive. Sideloaded mods are global
-        and are not tied to profiles, updates, or mod.io subscriptions.
+        Add your own mods from a DLL, blueprint file, or zip archive.
+        Sideloaded mods are global and are not tied to profiles, updates, or
+        mod.io subscriptions.
       </p>
     </header>
 
     <section class="panel">
       <h2 class="panel-title">Add mod</h2>
       <p class="hint panel-desc">
-        Files are installed into
-        <code>BepInEx/plugins/Sideloaded</code>, each in its own subfolder.
-        Close Zeepkist before adding or removing sideloaded mods.
+        DLLs go into <code>Sideloaded/Plugins</code>, blueprint files into
+        <code>Sideloaded/Blueprints</code>, each in its own subfolder. Zip
+        archives are classified automatically, or you can choose when they
+        contain both types. Close Zeepkist before adding or removing sideloaded
+        mods.
       </p>
 
       <p v-if="gameRunning" class="hint install-hint">
@@ -135,7 +189,8 @@ onMounted(loadSideloaded);
       </div>
 
       <p v-else-if="entries.length === 0" class="hint empty-state">
-        No sideloaded mods yet. Use Choose file to add a .dll or .zip mod.
+        No sideloaded mods yet. Use Choose file to add a .dll, .zeeplevel, or
+        .zip mod.
       </p>
 
       <ul v-else class="sideload-list">
@@ -144,8 +199,12 @@ onMounted(loadSideloaded);
             <div class="sideload-info">
               <div class="sideload-title-row">
                 <h2>{{ entry.name }}</h2>
+                <span class="kind-badge">{{ targetKindLabel(entry.targetKind) }}</span>
                 <span class="kind-badge">{{ sourceTypeLabel(entry.sourceType) }}</span>
               </div>
+              <p class="sideload-meta">
+                {{ entry.id }}
+              </p>
               <p v-if="formatAddedAt(entry.addedAt)" class="sideload-meta">
                 Added {{ formatAddedAt(entry.addedAt) }}
               </p>
@@ -163,6 +222,13 @@ onMounted(loadSideloaded);
         </li>
       </ul>
     </section>
+
+    <SideloadTargetDialog
+      :open="targetChoiceOpen"
+      :folder-name="pendingFolderName"
+      @close="closeTargetChoice"
+      @select="handleTargetChoice"
+    />
   </div>
 </template>
 
