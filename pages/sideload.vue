@@ -111,17 +111,6 @@ function targetKindLabel(targetKind: SideloadedEntry["targetKind"]) {
   return targetKind === "plugins" ? "Plugin" : "Blueprint";
 }
 
-function sourceTypeLabel(sourceType: SideloadedEntry["sourceType"]) {
-  switch (sourceType) {
-    case "dll":
-      return "DLL";
-    case "zeeplevel":
-      return "Blueprint file";
-    default:
-      return "Archive";
-  }
-}
-
 function formatAddedAt(addedAt?: string) {
   if (!addedAt) return null;
   const date = new Date(addedAt);
@@ -200,7 +189,6 @@ onMounted(loadSideloaded);
               <div class="sideload-title-row">
                 <h2>{{ entry.name }}</h2>
                 <span class="kind-badge">{{ targetKindLabel(entry.targetKind) }}</span>
-                <span class="kind-badge">{{ sourceTypeLabel(entry.sourceType) }}</span>
               </div>
               <p class="sideload-meta">
                 {{ entry.id }}
