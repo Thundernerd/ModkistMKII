@@ -110,6 +110,12 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: node .github/scripts/set-prerelease-version.mjs
 
+      - name: Set MSI version
+        if: matrix.platform == 'windows'
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: node .github/scripts/set-wix-version.mjs
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 

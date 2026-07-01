@@ -23,6 +23,10 @@
 # Prerelease channels mark the GitHub release as a prerelease. Re-running the same
 # version/tag will fail if that tag already exists.
 #
+# Windows MSI installers use WiX, which only accepts numeric versions. The Windows
+# build sets bundle.windows.wix.version from the app version (alpha/beta/rc channels
+# are encoded into the fourth numeric component). Other platforms use the full semver.
+#
 # For ad-hoc CI builds without git commits, use the Build workflow instead.
 
 name: Release
@@ -177,6 +181,12 @@ jobs:
         env:
           VERSION: ${{ needs.prepare_release.outputs.version }}
         run: node .github/scripts/set-release-version.mjs
+
+      - name: Set MSI version
+        if: matrix.platform == 'windows'
+        env:
+          VERSION: ${{ needs.prepare_release.outputs.version }}
+        run: node .github/scripts/set-wix-version.mjs
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
