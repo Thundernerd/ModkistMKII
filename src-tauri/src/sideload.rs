@@ -136,6 +136,32 @@ fn is_zeeplevel_path(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("zeeplevel"))
 }
 
+fn is_dll_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
+}
+
+fn loose_file_source_type(path: &Path, kind: SideloadTargetKind) -> Option<SideloadSourceType> {
+    root_loose_file_kind(path).and_then(|(file_kind, source_type)| {
+        if file_kind == kind {
+            Some(source_type)
+        } else {
+            None
+        }
+    })
+}
+
+fn root_loose_file_kind(path: &Path) -> Option<(SideloadTargetKind, SideloadSourceType)> {
+    if is_dll_path(path) {
+        Some((SideloadTargetKind::Plugins, SideloadSourceType::Dll))
+    } else if is_zeeplevel_path(path) {
+        Some((SideloadTargetKind::Blueprints, SideloadSourceType::Zeeplevel))
+    } else {
+        None
+    }
+}
+
 fn folder_name_from_source(source_path: &Path) -> Result<String, String> {
     let stem = source_path
         .file_stem()
@@ -296,6 +322,50 @@ fn make_entry(
     }
 }
 
+fn make_loose_file_entry(
+    target_kind: SideloadTargetKind,
+    file_name: &str,
+    source_type: SideloadSourceType,
+    file_path: &Path,
+) -> SideloadedEntry {
+    let name = file_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(file_name)
+        .to_string();
+
+    SideloadedEntry {
+        id: entry_id(target_kind, file_name),
+        name,
+        target_kind,
+        source_type,
+        added_at: format_mtime(file_path),
+    }
+}
+
+fn make_root_loose_file_entry(
+    file_name: &str,
+    target_kind: SideloadTargetKind,
+    source_type: SideloadSourceType,
+    file_path: &Path,
+) -> SideloadedEntry {
+    let name = file_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(file_name)
+        .to_string();
+
+    SideloadedEntry {
+        id: file_name.to_string(),
+        name,
+        target_kind,
+        source_type,
+        added_at: format_mtime(file_path),
+    }
+}
+
 fn scan_kind_entries(
     root: &Path,
     kind: SideloadTargetKind,
@@ -310,23 +380,35 @@ fn scan_kind_entries(
         .map_err(|e| format!("Could not read {}: {e}", kind_root.display()))?
     {
         let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
-        if !entry
+        let file_type = entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?
-            .is_dir()
-        {
+            .map_err(|e| format!("Could not read entry type: {e}"))?;
+        let path = entry.path();
+
+        if file_type.is_dir() {
+            let folder_name = entry.file_name();
+            let folder_name = folder_name.to_string_lossy();
+            entries.push(make_entry(
+                kind,
+                &folder_name,
+                detect_source_type(&path)?,
+                &path,
+            ));
             continue;
         }
 
-        let folder_name = entry.file_name();
-        let folder_name = folder_name.to_string_lossy();
-        let entry_dir = kind_root.join(entry.file_name());
-        entries.push(make_entry(
-            kind,
-            &folder_name,
-            detect_source_type(&entry_dir)?,
-            &entry_dir,
-        ));
+        if file_type.is_file() {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if let Some(source_type) = loose_file_source_type(&path, kind) {
+                entries.push(make_loose_file_entry(
+                    kind,
+                    &file_name,
+                    source_type,
+                    &path,
+                ));
+            }
+        }
     }
 
     Ok(entries)
@@ -379,29 +461,40 @@ fn scan_legacy_entries(root: &Path) -> Result<Vec<SideloadedEntry>, String> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(root).map_err(|e| format!("Could not read {}: {e}", root.display()))? {
         let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
-        if !entry
+        let file_type = entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?
-            .is_dir()
-        {
+            .map_err(|e| format!("Could not read entry type: {e}"))?;
+        let path = entry.path();
+
+        if file_type.is_dir() {
+            let folder_name = entry.file_name();
+            let folder_name = folder_name.to_string_lossy();
+            if folder_name == PLUGINS_DIR || folder_name == BLUEPRINTS_DIR {
+                continue;
+            }
+
+            entries.push(SideloadedEntry {
+                id: folder_name.to_string(),
+                name: folder_name.to_string(),
+                target_kind: infer_legacy_target_kind(&path)?,
+                source_type: detect_source_type(&path)?,
+                added_at: format_mtime(&path),
+            });
             continue;
         }
 
-        let folder_name = entry.file_name();
-        let folder_name = folder_name.to_string_lossy();
-        if folder_name == PLUGINS_DIR || folder_name == BLUEPRINTS_DIR {
-            continue;
+        if file_type.is_file() {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if let Some((target_kind, source_type)) = root_loose_file_kind(&path) {
+                entries.push(make_root_loose_file_entry(
+                    &file_name,
+                    target_kind,
+                    source_type,
+                    &path,
+                ));
+            }
         }
-
-        let entry_dir = root.join(entry.file_name());
-        let target_kind = infer_legacy_target_kind(&entry_dir)?;
-        entries.push(SideloadedEntry {
-            id: folder_name.to_string(),
-            name: folder_name.to_string(),
-            target_kind,
-            source_type: detect_source_type(&entry_dir)?,
-            added_at: format_mtime(&entry_dir),
-        });
     }
 
     Ok(entries)
@@ -614,17 +707,24 @@ pub fn remove_sideloaded_mod(
     }
 
     let root = ensure_sideload_ready(&app)?;
-    let entry_dir = resolve_entry_dir(&root, &entry_id);
-    if !entry_dir.is_dir() {
+    let entry_path = resolve_entry_dir(&root, &entry_id);
+    if entry_path.is_file() {
+        fs::remove_file(&entry_path).map_err(|e| {
+            format!(
+                "Could not remove sideload entry {}: {e}",
+                entry_path.display()
+            )
+        })?;
+    } else if entry_path.is_dir() {
+        fs::remove_dir_all(&entry_path).map_err(|e| {
+            format!(
+                "Could not remove sideload entry {}: {e}",
+                entry_path.display()
+            )
+        })?;
+    } else {
         return Err("Sideloaded mod was not found.".into());
     }
-
-    fs::remove_dir_all(&entry_dir).map_err(|e| {
-        format!(
-            "Could not remove sideload entry {}: {e}",
-            entry_dir.display()
-        )
-    })?;
 
     list_all_entries(&root)
 }
@@ -643,8 +743,11 @@ mod tests {
         assert!(!is_safe_entry_id("Plugins"));
         assert!(!is_safe_entry_id("Plugins/foo/extra"));
         assert!(is_safe_entry_id("MyMod"));
+        assert!(is_safe_entry_id("MyMod.dll"));
         assert!(is_safe_entry_id("Plugins/MyMod"));
+        assert!(is_safe_entry_id("Plugins/MyMod.dll"));
         assert!(is_safe_entry_id("Blueprints/MyLevel"));
+        assert!(is_safe_entry_id("Blueprints/MyLevel.zeeplevel"));
     }
 
     #[test]
@@ -688,6 +791,65 @@ mod tests {
             scan_archive_contents(&mixed).unwrap(),
             ArchiveContentKind::Mixed
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_loose_files_in_kind_directories() {
+        let root = std::env::temp_dir().join("modkist-sideload-loose");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Plugins")).unwrap();
+        fs::write(root.join("Plugins/LooseMod.dll"), b"dll").unwrap();
+        fs::create_dir_all(root.join("Blueprints")).unwrap();
+        fs::write(root.join("Blueprints/LooseLevel.zeeplevel"), b"level").unwrap();
+
+        let entries = list_all_entries(&root).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let loose_plugin = entries
+            .iter()
+            .find(|entry| entry.id == "Plugins/LooseMod.dll")
+            .expect("loose plugin dll should be listed");
+        assert_eq!(loose_plugin.name, "LooseMod");
+        assert_eq!(loose_plugin.source_type, SideloadSourceType::Dll);
+
+        let loose_blueprint = entries
+            .iter()
+            .find(|entry| entry.id == "Blueprints/LooseLevel.zeeplevel")
+            .expect("loose blueprint should be listed");
+        assert_eq!(loose_blueprint.name, "LooseLevel");
+        assert_eq!(loose_blueprint.source_type, SideloadSourceType::Zeeplevel);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_loose_files_in_root_directory() {
+        let root = std::env::temp_dir().join("modkist-sideload-root-loose");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("RootMod.dll"), b"dll").unwrap();
+        fs::write(root.join("RootLevel.zeeplevel"), b"level").unwrap();
+
+        let entries = list_all_entries(&root).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let loose_plugin = entries
+            .iter()
+            .find(|entry| entry.id == "RootMod.dll")
+            .expect("root plugin dll should be listed");
+        assert_eq!(loose_plugin.name, "RootMod");
+        assert_eq!(loose_plugin.target_kind, SideloadTargetKind::Plugins);
+        assert_eq!(loose_plugin.source_type, SideloadSourceType::Dll);
+
+        let loose_blueprint = entries
+            .iter()
+            .find(|entry| entry.id == "RootLevel.zeeplevel")
+            .expect("root blueprint should be listed");
+        assert_eq!(loose_blueprint.name, "RootLevel");
+        assert_eq!(loose_blueprint.target_kind, SideloadTargetKind::Blueprints);
+        assert_eq!(loose_blueprint.source_type, SideloadSourceType::Zeeplevel);
 
         let _ = fs::remove_dir_all(&root);
     }
