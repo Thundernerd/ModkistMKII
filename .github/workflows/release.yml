@@ -1,0 +1,247 @@
+# Create a versioned GitHub release with installers for macOS, Windows, and Linux.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   MODIO_API_KEY  — game API key from mod.io
+#   MODIO_GAME_ID  — numeric game ID from mod.io
+#   SENTRY_DSN     — optional Sentry DSN for Rust and frontend error reporting
+#
+# Run from Actions → Release → Run workflow.
+#
+# Inputs:
+#   version            — base semver, e.g. 1.2.3 (required)
+#   prerelease_channel — none, alpha, beta, or rc (default: none)
+#   prerelease_number  — iteration when a channel is set, e.g. 1 → 1.2.3-alpha.1
+#
+# Examples:
+#   Stable:    version=1.2.3, channel=none
+#   Alpha:     version=1.2.3, channel=alpha, prerelease_number=1 → v1.2.3-alpha.1
+#   Beta:      version=1.2.3, channel=beta, prerelease_number=2 → v1.2.3-beta.2
+#   RC:        version=1.2.3, channel=rc, prerelease_number=1 → v1.2.3-rc.1
+#
+# This workflow commits the version bump to main, pushes a git tag, creates a GitHub
+# release, builds Tauri bundles for all platforms, and uploads installers to the release.
+# Prerelease channels mark the GitHub release as a prerelease. Re-running the same
+# version/tag will fail if that tag already exists.
+#
+# For ad-hoc CI builds without git commits, use the Build workflow instead.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Base version (e.g. 1.2.3)
+        required: true
+        type: string
+      prerelease_channel:
+        description: Prerelease channel
+        type: choice
+        options:
+          - none
+          - alpha
+          - beta
+          - rc
+        default: none
+      prerelease_number:
+        description: Prerelease number (e.g. 1 for 1.2.3-alpha.1)
+        type: string
+        default: "1"
+
+concurrency:
+  group: release-${{ inputs.version }}-${{ inputs.prerelease_channel }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare_release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: resolve
+        env:
+          BASE_VERSION: ${{ inputs.version }}
+          PRERELEASE_CHANNEL: ${{ inputs.prerelease_channel }}
+          PRERELEASE_NUMBER: ${{ inputs.prerelease_number }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be major.minor.patch (e.g. 1.2.3)"
+            exit 1
+          fi
+
+          if [[ "$PRERELEASE_CHANNEL" == "none" ]]; then
+            resolved="$BASE_VERSION"
+          else
+            if [[ ! "$PRERELEASE_NUMBER" =~ ^[0-9]+$ ]] || [[ "$PRERELEASE_NUMBER" == "0" ]]; then
+              echo "::error::prerelease_number must be a positive integer"
+              exit 1
+            fi
+            resolved="${BASE_VERSION}-${PRERELEASE_CHANNEL}.${PRERELEASE_NUMBER}"
+          fi
+
+          tag="v${resolved}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::error::Tag ${tag} already exists locally"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::Tag ${tag} already exists on origin"
+            exit 1
+          fi
+
+          echo "version=$resolved" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version: $resolved (${tag})"
+
+      - name: Set release version
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: node .github/scripts/set-release-version.mjs
+
+      - name: Commit version bump
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore(release): bump version to ${{ steps.resolve.outputs.version }}"
+          git push origin HEAD:main
+
+      - name: Create and push tag
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.resolve.outputs.tag }}"
+          git push origin "${{ steps.resolve.outputs.tag }}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          PRERELEASE_CHANNEL: ${{ inputs.prerelease_channel }}
+        run: |
+          set -euo pipefail
+          args=(
+            gh release create "$TAG"
+            --title "Modkist v${VERSION}"
+            --generate-notes
+          )
+          if [[ "$PRERELEASE_CHANNEL" != "none" ]]; then
+            args+=(--prerelease)
+          fi
+          "${args[@]}"
+
+  build:
+    name: ${{ matrix.platform }}
+    needs: prepare_release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-universal
+            tauri_args: --target universal-apple-darwin
+          - os: windows-latest
+            platform: windows
+            tauri_args: --bundles msi
+          - os: ubuntu-22.04
+            platform: linux
+            tauri_args: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare_release.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set release version
+        env:
+          VERSION: ${{ needs.prepare_release.outputs.version }}
+        run: node .github/scripts/set-release-version.mjs
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install macOS universal targets
+        if: matrix.platform == 'macos-universal'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri bundles
+        env:
+          MODIO_API_KEY: ${{ secrets.MODIO_API_KEY }}
+          MODIO_GAME_ID: ${{ secrets.MODIO_GAME_ID }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: npm run tauri build -- ${{ matrix.tauri_args }}
+
+      - name: Upload bundles to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare_release.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          files=()
+          case "$PLATFORM" in
+            macos-universal)
+              while IFS= read -r -d '' file; do
+                files+=("$file")
+              done < <(find src-tauri/target -path '*/release/bundle/*' -name '*.dmg' -type f -print0)
+              ;;
+            windows)
+              while IFS= read -r -d '' file; do
+                files+=("$file")
+              done < <(find src-tauri/target -path '*/release/bundle/*' -name '*.msi' -type f -print0)
+              ;;
+            linux)
+              while IFS= read -r -d '' file; do
+                files+=("$file")
+              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.deb' -o -name '*.AppImage' \) -type f -print0)
+              ;;
+            *)
+              echo "::error::Unknown platform: $PLATFORM"
+              exit 1
+              ;;
+          esac
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::No bundle files found"
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
