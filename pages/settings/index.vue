@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { getVersion } from "@tauri-apps/api/app";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
-import { invoke } from "~/utils/tauri";
+import { invoke, waitForTauri } from "~/utils/tauri";
 import { BEPINEX_MINIMUM_VERSION, BEPINEX_REQUIRED_VERSION, useBepInEx } from "~/composables/useBepInEx";
 
 definePageMeta({ layout: "app" });
@@ -26,6 +27,7 @@ const {
 
 const verifyMessage = ref("");
 const verifyTone = ref<"info" | "success" | "error" | "warn">("info");
+const appVersion = ref("");
 
 const wineFeedback = computed(() =>
   wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
@@ -148,10 +150,18 @@ async function reinstallBepInExInstall() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   refreshBepInExStatus();
   refreshProfiles().catch(() => {});
   refreshAppSettings().catch(() => {});
+
+  if (await waitForTauri()) {
+    try {
+      appVersion.value = await getVersion();
+    } catch {
+      // ignore when running outside the desktop shell
+    }
+  }
 });
 
 const {
@@ -424,6 +434,8 @@ function profileKindLabel(kind: string) {
       </p>
       <p v-else-if="error" class="error feedback">{{ error }}</p>
     </section>
+
+    <p v-if="appVersion" class="app-version">Modkist v{{ appVersion }}</p>
   </div>
 </template>
 
@@ -468,6 +480,13 @@ function profileKindLabel(kind: string) {
 
 .panel + .panel {
   margin-top: 1rem;
+}
+
+.app-version {
+  margin: 1.5rem 0 0;
+  font-size: 0.8rem;
+  color: var(--modio-text-muted);
+  text-align: center;
 }
 
 .panel-title {
