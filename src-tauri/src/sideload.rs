@@ -50,7 +50,7 @@ pub enum AddSideloadedModResult {
     Added { entry: SideloadedEntry },
     NeedsTargetChoice {
         folder_name: String,
-        source_path: String,
+        source_paths: Vec<String>,
     },
 }
 
@@ -171,6 +171,88 @@ fn folder_name_from_source(source_path: &Path) -> Result<String, String> {
         .ok_or_else(|| "Could not derive a folder name from the selected file.".to_string())?;
 
     Ok(stem)
+}
+
+fn folder_name_from_sources(source_paths: &[PathBuf]) -> Result<String, String> {
+    if source_paths.is_empty() {
+        return Err("No files were selected.".into());
+    }
+
+    if source_paths.len() == 1 {
+        return folder_name_from_source(&source_paths[0]);
+    }
+
+    let parents: Vec<_> = source_paths
+        .iter()
+        .filter_map(|path| path.parent())
+        .collect();
+
+    if parents.len() == source_paths.len() {
+        let first_parent = parents[0];
+        if parents.iter().all(|parent| *parent == first_parent) {
+            if let Some(name) = first_parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(sanitize_mod_name)
+                .filter(|name| !name.is_empty())
+            {
+                return Ok(name);
+            }
+        }
+    }
+
+    folder_name_from_source(&source_paths[0])
+}
+
+fn classify_loose_files(source_paths: &[PathBuf]) -> Result<ArchiveContentKind, String> {
+    let mut has_dll = false;
+    let mut has_zeeplevel = false;
+
+    for path in source_paths {
+        if is_dll_path(path) {
+            has_dll = true;
+        } else if is_zeeplevel_path(path) {
+            has_zeeplevel = true;
+        } else {
+            return Err(
+                "Only .dll and .zeeplevel files can be sideloaded together.".into(),
+            );
+        }
+    }
+
+    Ok(if has_dll && has_zeeplevel {
+        ArchiveContentKind::Mixed
+    } else if has_zeeplevel {
+        ArchiveContentKind::BlueprintsOnly
+    } else {
+        ArchiveContentKind::PluginsOnly
+    })
+}
+
+fn unique_dest_file_name(destination: &Path, file_name: &str) -> String {
+    let candidate = destination.join(file_name);
+    if !candidate.exists() {
+        return file_name.to_string();
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let extension = path.extension().and_then(|ext| ext.to_str());
+
+    let mut suffix = 2;
+    loop {
+        let name = match extension {
+            Some(ext) => format!("{stem}_{suffix}.{ext}"),
+            None => format!("{stem}_{suffix}"),
+        };
+        if !destination.join(&name).exists() {
+            return name;
+        }
+        suffix += 1;
+    }
 }
 
 fn unique_folder_name(root: &Path, base_name: &str) -> String {
@@ -589,6 +671,165 @@ fn install_extracted_archive(
     ))
 }
 
+fn install_loose_files(
+    source_paths: &[PathBuf],
+    kind_root: &Path,
+    base_name: &str,
+    target_kind: SideloadTargetKind,
+) -> Result<SideloadedEntry, String> {
+    fs::create_dir_all(kind_root).map_err(|e| {
+        format!(
+            "Could not create sideload directory {}: {e}",
+            kind_root.display()
+        )
+    })?;
+
+    let folder_name = unique_folder_name(kind_root, base_name);
+    let destination = kind_root.join(&folder_name);
+    fs::create_dir_all(&destination).map_err(|e| {
+        format!(
+            "Could not create sideload entry directory {}: {e}",
+            destination.display()
+        )
+    })?;
+
+    for source_path in source_paths {
+        let file_name = sanitize_filename(
+            source_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("mod"),
+        );
+        let dest_name = unique_dest_file_name(&destination, &file_name);
+        let dest_path = destination.join(&dest_name);
+        fs::copy(source_path, &dest_path).map_err(|e| {
+            format!(
+                "Could not copy file to {}: {e}",
+                dest_path.display()
+            )
+        })?;
+    }
+
+    let source_type = if source_paths.len() == 1 {
+        detect_source_type(&destination)?
+    } else {
+        SideloadSourceType::Archive
+    };
+
+    Ok(make_entry(
+        target_kind,
+        &folder_name,
+        source_type,
+        &destination,
+    ))
+}
+
+fn add_single_sideloaded_mod(
+    root: &Path,
+    source_path: &Path,
+    target_kind: Option<SideloadTargetKind>,
+) -> Result<AddSideloadedModResult, String> {
+    if !source_path.is_file() {
+        return Err("Selected file does not exist.".into());
+    }
+
+    let extension = source_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .ok_or_else(|| {
+            "Selected file must be a .dll, .zeeplevel, or .zip file.".to_string()
+        })?;
+    let file_kind = file_kind_for_extension(extension).ok_or_else(|| {
+        "Only .dll, .zeeplevel, and .zip files can be sideloaded.".to_string()
+    })?;
+
+    let base_name = folder_name_from_source(source_path)?;
+    let source_path_string = source_path.to_string_lossy().into_owned();
+
+    match file_kind {
+        SideloadFileKind::Dll => {
+            let kind_root = sideload_kind_root(root, SideloadTargetKind::Plugins);
+            let entry = install_single_file(
+                source_path,
+                &kind_root,
+                &base_name,
+                SideloadTargetKind::Plugins,
+                SideloadSourceType::Dll,
+            )?;
+            Ok(AddSideloadedModResult::Added { entry })
+        }
+        SideloadFileKind::Zeeplevel => {
+            let kind_root = sideload_kind_root(root, SideloadTargetKind::Blueprints);
+            let entry = install_single_file(
+                source_path,
+                &kind_root,
+                &base_name,
+                SideloadTargetKind::Blueprints,
+                SideloadSourceType::Zeeplevel,
+            )?;
+            Ok(AddSideloadedModResult::Added { entry })
+        }
+        SideloadFileKind::Archive => with_temp_archive_extract(source_path, |temp_dir| {
+            let content_kind = scan_archive_contents(temp_dir)?;
+            let Some(resolved_target) = resolve_archive_target(content_kind, target_kind) else {
+                return Ok(AddSideloadedModResult::NeedsTargetChoice {
+                    folder_name: base_name.clone(),
+                    source_paths: vec![source_path_string.clone()],
+                });
+            };
+
+            let kind_root = sideload_kind_root(root, resolved_target);
+            let entry =
+                install_extracted_archive(temp_dir, &kind_root, &base_name, resolved_target)?;
+            Ok(AddSideloadedModResult::Added { entry })
+        }),
+    }
+}
+
+fn add_multi_sideloaded_mod(
+    root: &Path,
+    source_paths: &[PathBuf],
+    target_kind: Option<SideloadTargetKind>,
+) -> Result<AddSideloadedModResult, String> {
+    for path in source_paths {
+        if !path.is_file() {
+            return Err(format!("Selected file does not exist: {}", path.display()));
+        }
+
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .ok_or_else(|| {
+                "Selected files must be .dll or .zeeplevel files.".to_string()
+            })?;
+        let file_kind = file_kind_for_extension(extension).ok_or_else(|| {
+            "Only .dll and .zeeplevel files can be sideloaded together.".to_string()
+        })?;
+
+        if file_kind == SideloadFileKind::Archive {
+            return Err(
+                "Zip archives must be sideloaded one at a time. Drop the zip alone, or select only .dll and .zeeplevel files.".into(),
+            );
+        }
+    }
+
+    let content_kind = classify_loose_files(source_paths)?;
+    let base_name = folder_name_from_sources(source_paths)?;
+    let Some(resolved_target) = resolve_archive_target(content_kind, target_kind) else {
+        return Ok(AddSideloadedModResult::NeedsTargetChoice {
+            folder_name: base_name,
+            source_paths: source_paths
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+        });
+    };
+
+    let kind_root = sideload_kind_root(root, resolved_target);
+    let entry = install_loose_files(source_paths, &kind_root, &base_name, resolved_target)?;
+    Ok(AddSideloadedModResult::Added { entry })
+}
+
 fn with_temp_archive_extract<T, F>(source_path: &Path, operation: F) -> Result<T, String>
 where
     F: FnOnce(&Path) -> Result<T, String>,
@@ -625,25 +866,16 @@ pub fn list_sideloaded_mods(app: AppHandle) -> Result<Vec<SideloadedEntry>, Stri
 #[tauri::command]
 pub fn add_sideloaded_mod(
     app: AppHandle,
-    source_path: String,
+    source_paths: Vec<String>,
     target_kind: Option<SideloadTargetKind>,
 ) -> Result<AddSideloadedModResult, String> {
     ensure_game_not_running()?;
 
-    let source_path = PathBuf::from(&source_path);
-    if !source_path.is_file() {
-        return Err("Selected file does not exist.".into());
+    if source_paths.is_empty() {
+        return Err("No files were selected.".into());
     }
 
-    let extension = source_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .ok_or_else(|| {
-            "Selected file must be a .dll, .zeeplevel, or .zip file.".to_string()
-        })?;
-    let file_kind = file_kind_for_extension(extension).ok_or_else(|| {
-        "Only .dll, .zeeplevel, and .zip files can be sideloaded.".to_string()
-    })?;
+    let paths: Vec<PathBuf> = source_paths.iter().map(PathBuf::from).collect();
 
     let root = ensure_sideload_ready(&app)?;
     fs::create_dir_all(&root).map_err(|e| {
@@ -653,45 +885,10 @@ pub fn add_sideloaded_mod(
         )
     })?;
 
-    let base_name = folder_name_from_source(&source_path)?;
-
-    match file_kind {
-        SideloadFileKind::Dll => {
-            let kind_root = sideload_kind_root(&root, SideloadTargetKind::Plugins);
-            let entry = install_single_file(
-                &source_path,
-                &kind_root,
-                &base_name,
-                SideloadTargetKind::Plugins,
-                SideloadSourceType::Dll,
-            )?;
-            Ok(AddSideloadedModResult::Added { entry })
-        }
-        SideloadFileKind::Zeeplevel => {
-            let kind_root = sideload_kind_root(&root, SideloadTargetKind::Blueprints);
-            let entry = install_single_file(
-                &source_path,
-                &kind_root,
-                &base_name,
-                SideloadTargetKind::Blueprints,
-                SideloadSourceType::Zeeplevel,
-            )?;
-            Ok(AddSideloadedModResult::Added { entry })
-        }
-        SideloadFileKind::Archive => with_temp_archive_extract(&source_path, |temp_dir| {
-            let content_kind = scan_archive_contents(temp_dir)?;
-            let Some(resolved_target) = resolve_archive_target(content_kind, target_kind) else {
-                return Ok(AddSideloadedModResult::NeedsTargetChoice {
-                    folder_name: base_name.clone(),
-                    source_path: source_path.to_string_lossy().into_owned(),
-                });
-            };
-
-            let kind_root = sideload_kind_root(&root, resolved_target);
-            let entry =
-                install_extracted_archive(temp_dir, &kind_root, &base_name, resolved_target)?;
-            Ok(AddSideloadedModResult::Added { entry })
-        }),
+    if paths.len() == 1 {
+        add_single_sideloaded_mod(&root, &paths[0], target_kind)
+    } else {
+        add_multi_sideloaded_mod(&root, &paths, target_kind)
     }
 }
 
@@ -927,6 +1124,97 @@ mod tests {
         let entries = list_all_entries(&sideload_dir).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "Plugins/ArchiveMod");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn classifies_loose_file_selections() {
+        let root = std::env::temp_dir().join("modkist-sideload-loose-classify");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let dll_a = root.join("a.dll");
+        let dll_b = root.join("b.dll");
+        let level = root.join("level.zeeplevel");
+        fs::write(&dll_a, b"dll").unwrap();
+        fs::write(&dll_b, b"dll").unwrap();
+        fs::write(&level, b"level").unwrap();
+
+        assert_eq!(
+            classify_loose_files(&[dll_a.clone(), dll_b.clone()]).unwrap(),
+            ArchiveContentKind::PluginsOnly
+        );
+        assert_eq!(
+            classify_loose_files(&[level.clone()]).unwrap(),
+            ArchiveContentKind::BlueprintsOnly
+        );
+        assert_eq!(
+            classify_loose_files(&[dll_a, level]).unwrap(),
+            ArchiveContentKind::Mixed
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn names_multi_file_bundle_from_shared_parent() {
+        let root = std::env::temp_dir().join("modkist-sideload-multi-name");
+        let _ = fs::remove_dir_all(&root);
+        let parent = root.join("CoolMod");
+        fs::create_dir_all(&parent).unwrap();
+
+        let dll_a = parent.join("a.dll");
+        let dll_b = parent.join("b.dll");
+        fs::write(&dll_a, b"dll").unwrap();
+        fs::write(&dll_b, b"dll").unwrap();
+
+        assert_eq!(
+            folder_name_from_sources(&[dll_a, dll_b]).unwrap(),
+            "CoolMod"
+        );
+
+        let other = root.join("Other");
+        fs::create_dir_all(&other).unwrap();
+        let dll_c = other.join("c.dll");
+        let dll_d = parent.join("d.dll");
+        fs::write(&dll_c, b"dll").unwrap();
+        fs::write(&dll_d, b"dll").unwrap();
+
+        assert_eq!(
+            folder_name_from_sources(&[dll_c, dll_d]).unwrap(),
+            "c"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn installs_multiple_loose_files_as_one_entry() {
+        let root = std::env::temp_dir().join("modkist-sideload-multi-install");
+        let _ = fs::remove_dir_all(&root);
+        let plugins_dir = root.join("Plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+
+        let source_dir = root.join("MyMod");
+        fs::create_dir_all(&source_dir).unwrap();
+        let dll_a = source_dir.join("a.dll");
+        let dll_b = source_dir.join("b.dll");
+        fs::write(&dll_a, b"dll-a").unwrap();
+        fs::write(&dll_b, b"dll-b").unwrap();
+
+        let entry = install_loose_files(
+            &[dll_a, dll_b],
+            &plugins_dir,
+            "MyMod",
+            SideloadTargetKind::Plugins,
+        )
+        .unwrap();
+
+        assert_eq!(entry.id, "Plugins/MyMod");
+        assert_eq!(entry.source_type, SideloadSourceType::Archive);
+        assert!(plugins_dir.join("MyMod/a.dll").is_file());
+        assert!(plugins_dir.join("MyMod/b.dll").is_file());
 
         let _ = fs::remove_dir_all(&root);
     }
