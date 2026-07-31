@@ -50,6 +50,7 @@ pub struct SideloadedEntry {
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum AddSideloadedModResult {
     Added { entry: SideloadedEntry },
+    #[serde(rename_all = "camelCase")]
     NeedsTargetChoice {
         folder_name: String,
         source_paths: Vec<String>,
@@ -176,6 +177,12 @@ fn is_dll_path(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
 }
 
+fn is_zip_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+}
+
 fn loose_file_source_type(path: &Path, kind: SideloadTargetKind) -> Option<SideloadSourceType> {
     root_loose_file_kind(path).and_then(|(file_kind, source_type)| {
         if file_kind == kind {
@@ -261,6 +268,32 @@ fn classify_loose_files(source_paths: &[PathBuf]) -> Result<ArchiveContentKind, 
     } else {
         ArchiveContentKind::PluginsOnly
     })
+}
+
+/// Classify files for symlink installs. Any non-dll/non-zeeplevel file (or a
+/// mix of dll + zeeplevel) requires an explicit target choice.
+fn classify_link_files(source_paths: &[PathBuf]) -> ArchiveContentKind {
+    let mut has_dll = false;
+    let mut has_zeeplevel = false;
+    let mut has_other = false;
+
+    for path in source_paths {
+        if is_dll_path(path) {
+            has_dll = true;
+        } else if is_zeeplevel_path(path) {
+            has_zeeplevel = true;
+        } else {
+            has_other = true;
+        }
+    }
+
+    if has_other || (has_dll && has_zeeplevel) {
+        ArchiveContentKind::Mixed
+    } else if has_zeeplevel {
+        ArchiveContentKind::BlueprintsOnly
+    } else {
+        ArchiveContentKind::PluginsOnly
+    }
 }
 
 fn unique_dest_file_name(destination: &Path, file_name: &str) -> String {
@@ -788,6 +821,10 @@ fn add_single_sideloaded_mod(
         return Err("Selected file does not exist.".into());
     }
 
+    if use_symlinks {
+        return add_single_linked_mod(root, source_path, target_kind);
+    }
+
     let extension = source_path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -797,12 +834,6 @@ fn add_single_sideloaded_mod(
     let file_kind = file_kind_for_extension(extension).ok_or_else(|| {
         "Only .dll, .zeeplevel, and .zip files can be sideloaded.".to_string()
     })?;
-
-    if use_symlinks && file_kind == SideloadFileKind::Archive {
-        return Err(
-            "Zip archives cannot be linked. Use Choose files to copy and extract archives.".into(),
-        );
-    }
 
     let base_name = folder_name_from_source(source_path)?;
     let source_path_string = source_path.to_string_lossy().into_owned();
@@ -816,7 +847,7 @@ fn add_single_sideloaded_mod(
                 &base_name,
                 SideloadTargetKind::Plugins,
                 SideloadSourceType::Dll,
-                use_symlinks,
+                false,
             )?;
             Ok(AddSideloadedModResult::Added { entry })
         }
@@ -828,7 +859,7 @@ fn add_single_sideloaded_mod(
                 &base_name,
                 SideloadTargetKind::Blueprints,
                 SideloadSourceType::Zeeplevel,
-                use_symlinks,
+                false,
             )?;
             Ok(AddSideloadedModResult::Added { entry })
         }
@@ -849,6 +880,69 @@ fn add_single_sideloaded_mod(
     }
 }
 
+fn add_single_linked_mod(
+    root: &Path,
+    source_path: &Path,
+    target_kind: Option<SideloadTargetKind>,
+) -> Result<AddSideloadedModResult, String> {
+    if is_zip_path(source_path) {
+        return Err(
+            "Zip archives cannot be linked. Use Choose files to copy and extract archives.".into(),
+        );
+    }
+
+    let base_name = folder_name_from_source(source_path)?;
+    let source_path_string = source_path.to_string_lossy().into_owned();
+    let extension = source_path.extension().and_then(|ext| ext.to_str());
+    let file_kind = extension.and_then(file_kind_for_extension);
+
+    match file_kind {
+        Some(SideloadFileKind::Dll) => {
+            let kind_root = sideload_kind_root(root, SideloadTargetKind::Plugins);
+            let entry = install_single_file(
+                source_path,
+                &kind_root,
+                &base_name,
+                SideloadTargetKind::Plugins,
+                SideloadSourceType::Dll,
+                true,
+            )?;
+            Ok(AddSideloadedModResult::Added { entry })
+        }
+        Some(SideloadFileKind::Zeeplevel) => {
+            let kind_root = sideload_kind_root(root, SideloadTargetKind::Blueprints);
+            let entry = install_single_file(
+                source_path,
+                &kind_root,
+                &base_name,
+                SideloadTargetKind::Blueprints,
+                SideloadSourceType::Zeeplevel,
+                true,
+            )?;
+            Ok(AddSideloadedModResult::Added { entry })
+        }
+        _ => {
+            let Some(resolved_target) = target_kind else {
+                return Ok(AddSideloadedModResult::NeedsTargetChoice {
+                    folder_name: base_name,
+                    source_paths: vec![source_path_string],
+                });
+            };
+
+            let kind_root = sideload_kind_root(root, resolved_target);
+            let entry = install_single_file(
+                source_path,
+                &kind_root,
+                &base_name,
+                resolved_target,
+                SideloadSourceType::Archive,
+                true,
+            )?;
+            Ok(AddSideloadedModResult::Added { entry })
+        }
+    }
+}
+
 fn add_multi_sideloaded_mod(
     root: &Path,
     source_paths: &[PathBuf],
@@ -858,6 +952,15 @@ fn add_multi_sideloaded_mod(
     for path in source_paths {
         if !path.is_file() {
             return Err(format!("Selected file does not exist: {}", path.display()));
+        }
+
+        if use_symlinks {
+            if is_zip_path(path) {
+                return Err(
+                    "Zip archives cannot be linked. Use Choose files to copy and extract archives.".into(),
+                );
+            }
+            continue;
         }
 
         let extension = path
@@ -877,7 +980,11 @@ fn add_multi_sideloaded_mod(
         }
     }
 
-    let content_kind = classify_loose_files(source_paths)?;
+    let content_kind = if use_symlinks {
+        classify_link_files(source_paths)
+    } else {
+        classify_loose_files(source_paths)?
+    };
     let base_name = folder_name_from_sources(source_paths)?;
     let Some(resolved_target) = resolve_archive_target(content_kind, target_kind) else {
         return Ok(AddSideloadedModResult::NeedsTargetChoice {
@@ -1351,6 +1458,85 @@ mod tests {
             error.contains("Zip archives cannot be linked"),
             "unexpected error: {error}"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn links_arbitrary_files_with_target_choice() {
+        let root = std::env::temp_dir().join("modkist-sideload-link-any");
+        let _ = fs::remove_dir_all(&root);
+        let plugins_dir = root.join("Plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+
+        let source_dir = root.join("Assets");
+        fs::create_dir_all(&source_dir).unwrap();
+        let json = source_dir.join("config.json");
+        let txt = source_dir.join("readme.txt");
+        fs::write(&json, b"{}").unwrap();
+        fs::write(&txt, b"hello").unwrap();
+
+        assert_eq!(
+            classify_link_files(&[json.clone(), txt.clone()]),
+            ArchiveContentKind::Mixed
+        );
+
+        let needs_choice =
+            add_multi_sideloaded_mod(&root, &[json.clone(), txt.clone()], None, true).unwrap();
+        assert!(matches!(
+            needs_choice,
+            AddSideloadedModResult::NeedsTargetChoice { .. }
+        ));
+
+        let result = add_multi_sideloaded_mod(
+            &root,
+            &[json.clone(), txt.clone()],
+            Some(SideloadTargetKind::Plugins),
+            true,
+        )
+        .unwrap();
+
+        let AddSideloadedModResult::Added { entry } = result else {
+            panic!("expected linked entry");
+        };
+        assert!(entry.linked);
+        assert_eq!(entry.id, "Plugins/Assets");
+        assert!(path_is_symlink(&plugins_dir.join("Assets/config.json")));
+        assert!(path_is_symlink(&plugins_dir.join("Assets/readme.txt")));
+        assert!(json.is_file());
+        assert!(txt.is_file());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn links_single_arbitrary_file_with_target() {
+        let root = std::env::temp_dir().join("modkist-sideload-link-single-any");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Plugins")).unwrap();
+
+        let source = root.join("notes.md");
+        fs::write(&source, b"# notes").unwrap();
+
+        let needs_choice = add_single_sideloaded_mod(&root, &source, None, true).unwrap();
+        assert!(matches!(
+            needs_choice,
+            AddSideloadedModResult::NeedsTargetChoice { .. }
+        ));
+
+        let result = add_single_sideloaded_mod(
+            &root,
+            &source,
+            Some(SideloadTargetKind::Plugins),
+            true,
+        )
+        .unwrap();
+        let AddSideloadedModResult::Added { entry } = result else {
+            panic!("expected linked entry");
+        };
+        assert!(entry.linked);
+        assert!(path_is_symlink(&root.join("Plugins/notes/notes.md")));
+        assert!(source.is_file());
 
         let _ = fs::remove_dir_all(&root);
     }

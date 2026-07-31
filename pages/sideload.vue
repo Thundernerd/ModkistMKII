@@ -8,7 +8,6 @@ import type { SideloadedEntry, SideloadTargetKind } from "~/composables/useSidel
 definePageMeta({ layout: "app" });
 
 const ACCEPTED_EXTENSIONS = new Set(["dll", "zeeplevel", "zip"]);
-const LINKABLE_EXTENSIONS = new Set(["dll", "zeeplevel"]);
 
 const {
   entries,
@@ -86,11 +85,6 @@ async function browseForLink() {
   const selected = await open({
     multiple: true,
     title: "Select files to link",
-    filters: [
-      { name: "Mod files", extensions: ["dll", "zeeplevel"] },
-      { name: "DLL files", extensions: ["dll"] },
-      { name: "Blueprint files", extensions: ["zeeplevel"] },
-    ],
   });
 
   if (selected == null) {
@@ -102,15 +96,7 @@ async function browseForLink() {
     return;
   }
 
-  const linkable = paths.filter((path) =>
-    LINKABLE_EXTENSIONS.has(extensionOf(path)),
-  );
-  if (linkable.length === 0) {
-    pageError.value = "Select .dll or .zeeplevel files to link.";
-    return;
-  }
-
-  await handleAddSideloaded(linkable, undefined, true);
+  await handleAddSideloaded(paths, undefined, true);
 }
 
 async function handleAddSideloaded(
@@ -129,8 +115,8 @@ async function handleAddSideloaded(
     const result = await addSideloaded(sourcePaths, targetKind, useSymlinks);
 
     if (result.status === "needsTargetChoice") {
-      pendingSourcePaths.value = result.sourcePaths;
-      pendingFolderName.value = result.folderName;
+      pendingSourcePaths.value = result.sourcePaths ?? [];
+      pendingFolderName.value = result.folderName ?? "";
       pendingUseSymlinks.value = useSymlinks;
       targetChoiceOpen.value = true;
       return;
@@ -150,7 +136,7 @@ async function handleTargetChoice(targetKind: SideloadTargetKind) {
   pendingFolderName.value = "";
   pendingUseSymlinks.value = false;
 
-  if (sourcePaths.length === 0) {
+  if (!sourcePaths || sourcePaths.length === 0) {
     return;
   }
 
@@ -282,9 +268,11 @@ onUnmounted(() => {
         <code>Sideloaded/Blueprints</code>, each in its own subfolder. Zip
         archives are classified automatically, or you can choose when they
         contain both types. Multiple loose files are installed as one entry.
-        Link files creates symlinks in Sideloaded so your originals stay where
-        they are — useful while developing mods. Zip archives must still be
-        copied. Close Zeepkist before adding or removing sideloaded mods.
+        Link files creates symlinks in Sideloaded for any files you select so
+        your originals stay where they are — useful while developing mods. You
+        may be asked to choose Plugins or Blueprints for non-mod files. Zip
+        archives must still be copied. Close Zeepkist before adding or removing
+        sideloaded mods.
       </p>
 
       <p v-if="gameRunning" class="hint install-hint">
