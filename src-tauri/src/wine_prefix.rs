@@ -66,6 +66,8 @@ struct WinePrefix {
 #[derive(Debug, Clone)]
 pub(crate) struct WineLaunchInfo {
     pub prefix: PathBuf,
+    /// Used on macOS for CrossOver `--bottle` launches.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub bottle_name: Option<String>,
     pub wine: PathBuf,
 }
