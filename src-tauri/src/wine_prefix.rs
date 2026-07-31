@@ -25,7 +25,8 @@ impl WineWinhttpStatus {
             state: "notFound".into(),
             message: Some(
                 "Could not find a Wine prefix for your game directory. Configure winhttp \
-                 manually in Wine Configuration (Libraries → winhttp → native, builtin)."
+                 manually in Wine Configuration (Libraries → winhttp → native, builtin), \
+                 or launch Zeepkist from CrossOver/GameHub after installing BepInEx."
                     .into(),
             ),
             prefix_label: None,
@@ -57,28 +58,41 @@ impl WineWinhttpStatus {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WineLaunchKind {
+    /// CrossOver bottle launch via `--bottle` / `--cx-app`.
+    CrossOver { bottle: String },
+    /// Generic `WINEPREFIX` + wine binary (GameHub, Proton, vanilla Wine).
+    WinePrefix,
+}
+
 #[derive(Debug, Clone)]
 struct WinePrefix {
     path: PathBuf,
     label: Option<String>,
+    wine: Option<PathBuf>,
+    launch_kind: WineLaunchKind,
+    #[cfg(target_os = "macos")]
+    gamehub_container_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct WineLaunchInfo {
     pub prefix: PathBuf,
-    /// Used on macOS for CrossOver `--bottle` launches.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub bottle_name: Option<String>,
     pub wine: PathBuf,
+    pub kind: WineLaunchKind,
 }
 
 pub(crate) fn wine_launch_info(game_dir: &Path) -> Option<WineLaunchInfo> {
     let prefix = find_wine_prefix_for_game_path(game_dir)?;
-    let wine = find_wine_binary()?;
+    let wine = prefix
+        .wine
+        .clone()
+        .or_else(|| find_wine_binary_for_kind(&prefix.launch_kind))?;
     Some(WineLaunchInfo {
         prefix: prefix.path,
-        bottle_name: prefix.label,
         wine,
+        kind: prefix.launch_kind,
     })
 }
 
@@ -98,22 +112,52 @@ pub fn configure_winhttp_override(game_dir: &Path) -> WineWinhttpStatus {
         }
     };
 
-    if is_winhttp_configured(&content) {
-        return WineWinhttpStatus::already_configured(prefix.label);
+    let mut changed = false;
+
+    if !is_winhttp_configured(&content) {
+        if let Err(error) = apply_via_wine_reg(&prefix.path, prefix.wine.as_deref()) {
+            log::warn!("wine reg override failed, falling back to user.reg edit: {error}");
+            if let Err(error) = apply_via_user_reg(&user_reg, &content) {
+                return WineWinhttpStatus::failed(error);
+            }
+        }
+        changed = true;
     }
 
-    if let Err(error) = apply_via_wine_reg(&prefix.path) {
-        log::warn!("wine reg override failed, falling back to user.reg edit: {error}");
-        if let Err(error) = apply_via_user_reg(&user_reg, &content) {
-            return WineWinhttpStatus::failed(error);
+    #[cfg(target_os = "macos")]
+    if let Some(container_id) = prefix.gamehub_container_id.as_deref() {
+        match crate::gamehub::ensure_winhttp_dll_override(container_id) {
+            Ok(true) => changed = true,
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!("GameHub dll_overrides patch failed: {error}");
+                if !changed {
+                    return WineWinhttpStatus::failed(error);
+                }
+            }
         }
     }
 
-    WineWinhttpStatus::applied(prefix.label)
+    if changed {
+        WineWinhttpStatus::applied(prefix.label)
+    } else {
+        WineWinhttpStatus::already_configured(prefix.label)
+    }
 }
 
 fn find_wine_prefix_for_game_path(game_dir: &Path) -> Option<WinePrefix> {
     let canonical = canonicalize_path(game_dir).ok()?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(install) = crate::gamehub::find_for_game_dir(&canonical) {
+        return Some(WinePrefix {
+            path: install.prefix,
+            label: Some(install.label),
+            wine: Some(install.wine),
+            launch_kind: WineLaunchKind::WinePrefix,
+            gamehub_container_id: Some(install.virtual_container_id),
+        });
+    }
 
     if let Some(prefix) = find_prefix_via_drive_c(&canonical) {
         return Some(prefix);
@@ -124,6 +168,21 @@ fn find_wine_prefix_for_game_path(game_dir: &Path) -> Option<WinePrefix> {
     }
 
     find_prefix_via_scan(&canonical)
+}
+
+fn wine_prefix(
+    path: PathBuf,
+    label: Option<String>,
+    launch_kind: WineLaunchKind,
+) -> WinePrefix {
+    WinePrefix {
+        path,
+        label,
+        wine: None,
+        launch_kind,
+        #[cfg(target_os = "macos")]
+        gamehub_container_id: None,
+    }
 }
 
 fn canonicalize_path(path: &Path) -> Result<PathBuf, String> {
@@ -140,7 +199,8 @@ fn find_prefix_via_drive_c(game_dir: &Path) -> Option<WinePrefix> {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .map(str::to_string);
-                return Some(WinePrefix { path: prefix_path, label });
+                let launch_kind = crossover_launch_kind(prefix_path.as_path(), label.as_deref());
+                return Some(wine_prefix(prefix_path, label, launch_kind));
             }
         }
         current = parent;
@@ -160,10 +220,11 @@ fn find_proton_prefix(game_dir: &Path) -> Option<WinePrefix> {
             let app_id = find_steam_app_id(steamapps, folder_name)?;
             let prefix_path = steamapps.join("compatdata").join(&app_id).join("pfx");
             if prefix_path.join("user.reg").is_file() {
-                return Some(WinePrefix {
-                    path: prefix_path,
-                    label: Some(format!("Steam app {app_id}")),
-                });
+                return Some(wine_prefix(
+                    prefix_path,
+                    Some(format!("Steam app {app_id}")),
+                    WineLaunchKind::WinePrefix,
+                ));
             }
             return None;
         }
@@ -275,10 +336,8 @@ fn scan_root_for_game(root: &Path, game_dir: &Path) -> Option<WinePrefix> {
                 .and_then(|name| name.to_str())
                 .map(str::to_string);
             if prefix_path.join("user.reg").is_file() {
-                return Some(WinePrefix {
-                    path: prefix_path,
-                    label,
-                });
+                let launch_kind = crossover_launch_kind(&prefix_path, label.as_deref());
+                return Some(wine_prefix(prefix_path, label, launch_kind));
             }
         }
     }
@@ -606,8 +665,11 @@ fn apply_via_user_reg(user_reg: &Path, content: &str) -> Result<(), String> {
     })
 }
 
-fn apply_via_wine_reg(prefix: &Path) -> Result<(), String> {
-    let wine = find_wine_binary().ok_or_else(|| "No wine binary found".to_string())?;
+fn apply_via_wine_reg(prefix: &Path, preferred_wine: Option<&Path>) -> Result<(), String> {
+    let wine = preferred_wine
+        .map(Path::to_path_buf)
+        .or_else(|| find_wine_binary_for_kind(&WineLaunchKind::WinePrefix))
+        .ok_or_else(|| "No wine binary found".to_string())?;
 
     for key in WINE_REG_WINHTTP_KEYS {
         let output = Command::new(&wine)
@@ -639,7 +701,39 @@ fn apply_via_wine_reg(prefix: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn find_wine_binary() -> Option<PathBuf> {
+fn crossover_launch_kind(prefix_path: &Path, label: Option<&str>) -> WineLaunchKind {
+    #[cfg(target_os = "macos")]
+    {
+        let is_crossover_bottle = prefix_path.components().any(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("Bottles"))
+        });
+        if is_crossover_bottle {
+            if let Some(bottle) = label.filter(|name| !name.is_empty()) {
+                return WineLaunchKind::CrossOver {
+                    bottle: bottle.to_string(),
+                };
+            }
+        }
+    }
+
+    let _ = (prefix_path, label);
+    WineLaunchKind::WinePrefix
+}
+
+fn find_wine_binary_for_kind(kind: &WineLaunchKind) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if matches!(kind, WineLaunchKind::CrossOver { .. }) {
+        let crossover_wine = PathBuf::from(
+            "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
+        );
+        if crossover_wine.is_file() {
+            return Some(crossover_wine);
+        }
+    }
+
     #[cfg(target_os = "macos")]
     {
         let crossover_wine = PathBuf::from(
@@ -708,6 +802,48 @@ mod tests {
         let prefix = find_proton_prefix(&game).expect("prefix");
         assert!(prefix.path.ends_with("compatdata/1234567/pfx"));
         assert_eq!(prefix.label.as_deref(), Some("Steam app 1234567"));
+        assert_eq!(prefix.launch_kind, WineLaunchKind::WinePrefix);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn crossover_bottle_uses_crossover_launch_kind() {
+        let root = std::env::temp_dir().join("modkist-wine-test-crossover-kind");
+        let bottle = root.join("Library/Application Support/CrossOver/Bottles/ZeepBottle");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(
+            bottle.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"),
+        )
+        .unwrap();
+        fs::write(bottle.join("user.reg"), "REGEDIT4\n").unwrap();
+
+        let game = bottle.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist");
+        let prefix = find_prefix_via_drive_c(&game).expect("prefix");
+        assert_eq!(
+            prefix.launch_kind,
+            WineLaunchKind::CrossOver {
+                bottle: "ZeepBottle".into()
+            }
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn non_crossover_prefix_uses_wine_prefix_launch_kind() {
+        let root = std::env::temp_dir().join("modkist-wine-test-generic-kind");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(
+            root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"),
+        )
+        .unwrap();
+        fs::write(root.join("user.reg"), "REGEDIT4\n").unwrap();
+
+        let game = root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist");
+        let prefix = find_prefix_via_drive_c(&game).expect("prefix");
+        assert_eq!(prefix.launch_kind, WineLaunchKind::WinePrefix);
 
         let _ = fs::remove_dir_all(&root);
     }
