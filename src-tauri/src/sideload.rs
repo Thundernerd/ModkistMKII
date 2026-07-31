@@ -8,6 +8,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::bepinex::has_bepinex_structure;
+use crate::fs_link::symlink_file;
 use crate::fs_move::move_dir;
 use crate::game_path::game_directory;
 use crate::game_process::ensure_game_not_running;
@@ -41,6 +42,7 @@ pub struct SideloadedEntry {
     pub name: String,
     pub target_kind: SideloadTargetKind,
     pub source_type: SideloadSourceType,
+    pub linked: bool,
     pub added_at: Option<String>,
 }
 
@@ -92,6 +94,38 @@ fn format_mtime(path: &Path) -> Option<String> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     let datetime = OffsetDateTime::from(modified);
     datetime.format(&Rfc3339).ok()
+}
+
+fn path_is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn directory_contains_symlink(dir: &Path) -> bool {
+    fn walk(dir: &Path) -> bool {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return false;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path_is_symlink(&path) {
+                return true;
+            }
+
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() && walk(&path) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    walk(dir)
 }
 
 fn is_safe_path_segment(segment: &str) -> bool {
@@ -394,12 +428,14 @@ fn make_entry(
     folder_name: &str,
     source_type: SideloadSourceType,
     entry_dir: &Path,
+    linked: bool,
 ) -> SideloadedEntry {
     SideloadedEntry {
         id: entry_id(target_kind, folder_name),
         name: folder_name.to_string(),
         target_kind,
         source_type,
+        linked,
         added_at: format_mtime(entry_dir),
     }
 }
@@ -422,6 +458,7 @@ fn make_loose_file_entry(
         name,
         target_kind,
         source_type,
+        linked: path_is_symlink(file_path),
         added_at: format_mtime(file_path),
     }
 }
@@ -444,6 +481,7 @@ fn make_root_loose_file_entry(
         name,
         target_kind,
         source_type,
+        linked: path_is_symlink(file_path),
         added_at: format_mtime(file_path),
     }
 }
@@ -475,6 +513,7 @@ fn scan_kind_entries(
                 &folder_name,
                 detect_source_type(&path)?,
                 &path,
+                directory_contains_symlink(&path),
             ));
             continue;
         }
@@ -560,6 +599,7 @@ fn scan_legacy_entries(root: &Path) -> Result<Vec<SideloadedEntry>, String> {
                 name: folder_name.to_string(),
                 target_kind: infer_legacy_target_kind(&path)?,
                 source_type: detect_source_type(&path)?,
+                linked: directory_contains_symlink(&path),
                 added_at: format_mtime(&path),
             });
             continue;
@@ -598,12 +638,27 @@ fn ensure_sideload_ready(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(sideload_root(&game_dir))
 }
 
+fn place_file(source_path: &Path, dest_path: &Path, use_symlinks: bool) -> Result<(), String> {
+    if use_symlinks {
+        symlink_file(source_path, dest_path)
+    } else {
+        fs::copy(source_path, dest_path).map_err(|e| {
+            format!(
+                "Could not copy file to {}: {e}",
+                dest_path.display()
+            )
+        })?;
+        Ok(())
+    }
+}
+
 fn install_single_file(
     source_path: &Path,
     kind_root: &Path,
     base_name: &str,
     target_kind: SideloadTargetKind,
     source_type: SideloadSourceType,
+    use_symlinks: bool,
 ) -> Result<SideloadedEntry, String> {
     fs::create_dir_all(kind_root).map_err(|e| {
         format!(
@@ -628,14 +683,15 @@ fn install_single_file(
             .unwrap_or("mod"),
     );
     let dest_path = destination.join(&file_name);
-    fs::copy(source_path, &dest_path).map_err(|e| {
-        format!(
-            "Could not copy file to {}: {e}",
-            dest_path.display()
-        )
-    })?;
+    place_file(source_path, &dest_path, use_symlinks)?;
 
-    Ok(make_entry(target_kind, &folder_name, source_type, &destination))
+    Ok(make_entry(
+        target_kind,
+        &folder_name,
+        source_type,
+        &destination,
+        use_symlinks,
+    ))
 }
 
 fn install_extracted_archive(
@@ -668,6 +724,7 @@ fn install_extracted_archive(
         &folder_name,
         SideloadSourceType::Archive,
         &destination,
+        false,
     ))
 }
 
@@ -676,6 +733,7 @@ fn install_loose_files(
     kind_root: &Path,
     base_name: &str,
     target_kind: SideloadTargetKind,
+    use_symlinks: bool,
 ) -> Result<SideloadedEntry, String> {
     fs::create_dir_all(kind_root).map_err(|e| {
         format!(
@@ -702,12 +760,7 @@ fn install_loose_files(
         );
         let dest_name = unique_dest_file_name(&destination, &file_name);
         let dest_path = destination.join(&dest_name);
-        fs::copy(source_path, &dest_path).map_err(|e| {
-            format!(
-                "Could not copy file to {}: {e}",
-                dest_path.display()
-            )
-        })?;
+        place_file(source_path, &dest_path, use_symlinks)?;
     }
 
     let source_type = if source_paths.len() == 1 {
@@ -721,6 +774,7 @@ fn install_loose_files(
         &folder_name,
         source_type,
         &destination,
+        use_symlinks,
     ))
 }
 
@@ -728,6 +782,7 @@ fn add_single_sideloaded_mod(
     root: &Path,
     source_path: &Path,
     target_kind: Option<SideloadTargetKind>,
+    use_symlinks: bool,
 ) -> Result<AddSideloadedModResult, String> {
     if !source_path.is_file() {
         return Err("Selected file does not exist.".into());
@@ -743,6 +798,12 @@ fn add_single_sideloaded_mod(
         "Only .dll, .zeeplevel, and .zip files can be sideloaded.".to_string()
     })?;
 
+    if use_symlinks && file_kind == SideloadFileKind::Archive {
+        return Err(
+            "Zip archives cannot be linked. Use Choose files to copy and extract archives.".into(),
+        );
+    }
+
     let base_name = folder_name_from_source(source_path)?;
     let source_path_string = source_path.to_string_lossy().into_owned();
 
@@ -755,6 +816,7 @@ fn add_single_sideloaded_mod(
                 &base_name,
                 SideloadTargetKind::Plugins,
                 SideloadSourceType::Dll,
+                use_symlinks,
             )?;
             Ok(AddSideloadedModResult::Added { entry })
         }
@@ -766,6 +828,7 @@ fn add_single_sideloaded_mod(
                 &base_name,
                 SideloadTargetKind::Blueprints,
                 SideloadSourceType::Zeeplevel,
+                use_symlinks,
             )?;
             Ok(AddSideloadedModResult::Added { entry })
         }
@@ -790,6 +853,7 @@ fn add_multi_sideloaded_mod(
     root: &Path,
     source_paths: &[PathBuf],
     target_kind: Option<SideloadTargetKind>,
+    use_symlinks: bool,
 ) -> Result<AddSideloadedModResult, String> {
     for path in source_paths {
         if !path.is_file() {
@@ -826,7 +890,13 @@ fn add_multi_sideloaded_mod(
     };
 
     let kind_root = sideload_kind_root(root, resolved_target);
-    let entry = install_loose_files(source_paths, &kind_root, &base_name, resolved_target)?;
+    let entry = install_loose_files(
+        source_paths,
+        &kind_root,
+        &base_name,
+        resolved_target,
+        use_symlinks,
+    )?;
     Ok(AddSideloadedModResult::Added { entry })
 }
 
@@ -868,6 +938,7 @@ pub fn add_sideloaded_mod(
     app: AppHandle,
     source_paths: Vec<String>,
     target_kind: Option<SideloadTargetKind>,
+    use_symlinks: Option<bool>,
 ) -> Result<AddSideloadedModResult, String> {
     ensure_game_not_running()?;
 
@@ -875,6 +946,7 @@ pub fn add_sideloaded_mod(
         return Err("No files were selected.".into());
     }
 
+    let use_symlinks = use_symlinks.unwrap_or(false);
     let paths: Vec<PathBuf> = source_paths.iter().map(PathBuf::from).collect();
 
     let root = ensure_sideload_ready(&app)?;
@@ -886,9 +958,9 @@ pub fn add_sideloaded_mod(
     })?;
 
     if paths.len() == 1 {
-        add_single_sideloaded_mod(&root, &paths[0], target_kind)
+        add_single_sideloaded_mod(&root, &paths[0], target_kind, use_symlinks)
     } else {
-        add_multi_sideloaded_mod(&root, &paths, target_kind)
+        add_multi_sideloaded_mod(&root, &paths, target_kind, use_symlinks)
     }
 }
 
@@ -1093,6 +1165,7 @@ mod tests {
             "TestMod",
             SideloadTargetKind::Plugins,
             SideloadSourceType::Dll,
+            false,
         )
         .unwrap();
         assert_eq!(entry.id, "Plugins/TestMod");
@@ -1208,13 +1281,76 @@ mod tests {
             &plugins_dir,
             "MyMod",
             SideloadTargetKind::Plugins,
+            false,
         )
         .unwrap();
 
         assert_eq!(entry.id, "Plugins/MyMod");
         assert_eq!(entry.source_type, SideloadSourceType::Archive);
+        assert!(!entry.linked);
         assert!(plugins_dir.join("MyMod/a.dll").is_file());
         assert!(plugins_dir.join("MyMod/b.dll").is_file());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn installs_multiple_loose_files_as_symlinks() {
+        let root = std::env::temp_dir().join("modkist-sideload-multi-link");
+        let _ = fs::remove_dir_all(&root);
+        let sideload_dir = root.join("Sideloaded");
+        let plugins_dir = sideload_dir.join("Plugins");
+        fs::create_dir_all(&plugins_dir).unwrap();
+
+        let source_dir = root.join("MyMod");
+        fs::create_dir_all(&source_dir).unwrap();
+        let dll_a = source_dir.join("a.dll");
+        let dll_b = source_dir.join("b.dll");
+        fs::write(&dll_a, b"dll-a").unwrap();
+        fs::write(&dll_b, b"dll-b").unwrap();
+
+        let entry = install_loose_files(
+            &[dll_a.clone(), dll_b.clone()],
+            &plugins_dir,
+            "MyMod",
+            SideloadTargetKind::Plugins,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(entry.id, "Plugins/MyMod");
+        assert!(entry.linked);
+        assert!(path_is_symlink(&plugins_dir.join("MyMod/a.dll")));
+        assert!(path_is_symlink(&plugins_dir.join("MyMod/b.dll")));
+        assert!(plugins_dir.join("MyMod/a.dll").is_file());
+        assert!(plugins_dir.join("MyMod/b.dll").is_file());
+
+        let entries = list_all_entries(&sideload_dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].linked);
+
+        fs::remove_dir_all(plugins_dir.join("MyMod")).unwrap();
+        assert!(dll_a.is_file());
+        assert!(dll_b.is_file());
+        assert!(list_all_entries(&sideload_dir).unwrap().is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_linking_zip_archives() {
+        let root = std::env::temp_dir().join("modkist-sideload-reject-zip-link");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let zip_source = root.join("ArchiveMod.zip");
+        fs::write(&zip_source, b"not a real zip").unwrap();
+
+        let error = add_single_sideloaded_mod(&root, &zip_source, None, true).unwrap_err();
+        assert!(
+            error.contains("Zip archives cannot be linked"),
+            "unexpected error: {error}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
