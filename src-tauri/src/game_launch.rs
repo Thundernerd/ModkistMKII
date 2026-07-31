@@ -109,7 +109,7 @@ fn launch_via_steam() -> Result<(), String> {
 #[cfg(unix)]
 fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
     let info = crate::wine_prefix::wine_launch_info(game_dir).ok_or_else(|| {
-        "Could not find a Wine prefix for your game directory. Launch Zeepkist from Steam or CrossOver."
+        "Could not find a Wine prefix for your game directory. Launch Zeepkist from Steam, CrossOver, or GameHub."
             .to_string()
     })?;
 
@@ -122,11 +122,7 @@ fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
     }
 
     #[cfg(target_os = "macos")]
-    if let Some(bottle) = info
-        .bottle_name
-        .as_deref()
-        .filter(|name| !name.starts_with("Steam app"))
-    {
+    if let crate::wine_prefix::WineLaunchKind::CrossOver { bottle } = &info.kind {
         let mut command = Command::new(&info.wine);
         command
             .args(["--bottle", bottle, "--cx-app", GAME_EXECUTABLE])
@@ -172,7 +168,7 @@ fn launch_game_at(game_dir: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         launch_via_wine(game_dir)?;
-        log::info!("Launched Zeepkist via CrossOver/Wine from {}", game_dir.display());
+        log::info!("Launched Zeepkist via CrossOver/GameHub/Wine from {}", game_dir.display());
         return Ok(());
     }
 }
@@ -193,5 +189,20 @@ mod tests {
     #[test]
     fn steam_app_id_is_zeepkist() {
         assert_eq!(super::STEAM_APP_ID, "1440670");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wine_prefix_launch_kind_is_not_crossover() {
+        assert_eq!(
+            crate::wine_prefix::WineLaunchKind::WinePrefix,
+            crate::wine_prefix::WineLaunchKind::WinePrefix
+        );
+        assert_ne!(
+            crate::wine_prefix::WineLaunchKind::WinePrefix,
+            crate::wine_prefix::WineLaunchKind::CrossOver {
+                bottle: "ZeepBottle".into()
+            }
+        );
     }
 }

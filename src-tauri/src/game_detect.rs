@@ -25,8 +25,15 @@ pub fn detect_game_paths() -> Vec<GamePathCandidate> {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        for install in crate::gamehub::detect_zeepkist_installs() {
+            push_candidate(&mut candidates, &mut seen, install.game_dir, "GameHub");
+        }
+    }
+
     // Wine/CrossOver prefix trees can be huge; only scan them when Steam
-    // did not already find a valid install.
+    // (and GameHub) did not already find a valid install.
     if candidates.is_empty() {
         for root in prefix_scan_roots() {
             for path in find_zeepkist_dirs_in_tree(&root, 8) {
