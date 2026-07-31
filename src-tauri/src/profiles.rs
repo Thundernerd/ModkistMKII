@@ -1225,4 +1225,67 @@ mod tests {
         assert!(install_blocked_for(&vanilla));
         assert_ne!(vanilla.kind, ProfileKind::Custom);
     }
+
+    fn empty_store_with_builtins() -> ProfileStoreData {
+        ProfileStoreData {
+            profiles: default_builtin_profiles(Some("TestUser")),
+            active_profile_id: String::new(),
+            migrated: false,
+            archives_migrated: false,
+        }
+    }
+
+    #[test]
+    fn first_run_with_live_mods_activates_imported_profile() {
+        let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        write_mod_folder(&game_dir, MODS_DIR, "10_20");
+        let mut data = empty_store_with_builtins();
+
+        apply_first_run_profile_selection(&game_dir, &archives_root, &mut data, true).unwrap();
+
+        let active = profile_by_id(&data, &data.active_profile_id).expect("active profile");
+        assert_eq!(active.name, IMPORTED_PROFILE_NAME);
+        assert_eq!(active.kind, ProfileKind::Custom);
+        assert_ne!(data.active_profile_id, VANILLA_PROFILE_ID);
+        assert_ne!(data.active_profile_id, USER_PROFILE_ID);
+        assert!(live_kind_dir(&game_dir, MODS_DIR).join("10_20").exists());
+    }
+
+    #[test]
+    fn first_run_signed_in_without_mods_activates_user_profile() {
+        let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        let mut data = empty_store_with_builtins();
+
+        apply_first_run_profile_selection(&game_dir, &archives_root, &mut data, true).unwrap();
+
+        assert_eq!(data.active_profile_id, USER_PROFILE_ID);
+        assert!(!data
+            .profiles
+            .iter()
+            .any(|profile| profile.name == DEFAULT_FIRST_RUN_PROFILE_NAME));
+        assert!(!data
+            .profiles
+            .iter()
+            .any(|profile| profile.name == IMPORTED_PROFILE_NAME));
+    }
+
+    #[test]
+    fn first_run_signed_out_without_mods_creates_my_mods_profile() {
+        let (_temp, game_dir, archives_root) = temp_game_and_archives();
+        let mut data = empty_store_with_builtins();
+
+        apply_first_run_profile_selection(&game_dir, &archives_root, &mut data, false).unwrap();
+
+        let active = profile_by_id(&data, &data.active_profile_id).expect("active profile");
+        assert_eq!(active.name, DEFAULT_FIRST_RUN_PROFILE_NAME);
+        assert_eq!(active.kind, ProfileKind::Custom);
+        assert_ne!(data.active_profile_id, VANILLA_PROFILE_ID);
+        assert_ne!(data.active_profile_id, USER_PROFILE_ID);
+        assert!(archives_root
+            .join(profile_archive_dir_name(
+                &data.active_profile_id,
+                DEFAULT_FIRST_RUN_PROFILE_NAME
+            ))
+            .is_dir());
+    }
 }
