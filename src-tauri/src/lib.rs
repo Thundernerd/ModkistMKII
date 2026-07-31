@@ -24,6 +24,9 @@ mod wine_prefix {
 #[cfg(unix)]
 mod wine_prefix;
 
+#[cfg(target_os = "macos")]
+mod gamehub;
+
 mod app_settings;
 mod auth;
 mod bepinex;
