@@ -26,6 +26,7 @@ const PROFILE_ARCHIVES_DIR: &str = "profiles";
 const MODS_DIR: &str = "Mods";
 const BLUEPRINTS_DIR: &str = "Blueprints";
 const IMPORTED_PROFILE_NAME: &str = "Imported mods";
+const DEFAULT_FIRST_RUN_PROFILE_NAME: &str = "My mods";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -450,14 +451,13 @@ fn new_custom_profile_id() -> Result<String, String> {
     ))
 }
 
-fn adopt_live_mods_into_profile(
-    app: &AppHandle,
+fn adopt_live_mods_into_profile_at(
     game_dir: &Path,
+    archives_root: &Path,
     profile: &StoredProfile,
 ) -> Result<(), String> {
-    let archives_root = profile_archives_root(app)?;
     let archive_root =
-        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
+        resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
         let archive_dir = archive_kind_dir_at_root(&archive_root, kind_dir_name);
@@ -684,7 +684,64 @@ fn migrate_profile_archives_to_app_data(
     Ok(())
 }
 
-fn run_migration_if_needed(app: &AppHandle, data: &mut ProfileStoreData) -> Result<(), String> {
+fn apply_first_run_profile_selection(
+    game_dir: &Path,
+    archives_root: &Path,
+    data: &mut ProfileStoreData,
+    logged_in: bool,
+) -> Result<(), String> {
+    if live_has_valid_mod_folders(game_dir)? {
+        let profile_id = new_custom_profile_id()?;
+        let profile = StoredProfile {
+            id: profile_id.clone(),
+            name: IMPORTED_PROFILE_NAME.to_string(),
+            kind: ProfileKind::Custom,
+        };
+        data.profiles.push(profile.clone());
+        adopt_live_mods_into_profile_at(game_dir, archives_root, &profile)?;
+        data.active_profile_id = profile_id.clone();
+        log::info!(
+            "Imported existing mods into new profile '{IMPORTED_PROFILE_NAME}' ({profile_id})"
+        );
+        return Ok(());
+    }
+
+    if logged_in {
+        let user = profile_by_id(data, USER_PROFILE_ID)
+            .ok_or_else(|| "User profile is not configured.".to_string())?
+            .clone();
+        data.active_profile_id = USER_PROFILE_ID.to_string();
+        let archive_root =
+            resolve_profile_archive_root_at(archives_root, &user.id, &user.name);
+        ensure_profile_archive_dirs_at(&archive_root)?;
+        restore_profile_at(game_dir, &archive_root)?;
+        log::info!("First run: activated user profile while signed in");
+        return Ok(());
+    }
+
+    let profile_id = new_custom_profile_id()?;
+    let profile = StoredProfile {
+        id: profile_id.clone(),
+        name: DEFAULT_FIRST_RUN_PROFILE_NAME.to_string(),
+        kind: ProfileKind::Custom,
+    };
+    data.profiles.push(profile.clone());
+    let archive_root =
+        resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
+    ensure_profile_archive_dirs_at(&archive_root)?;
+    restore_profile_at(game_dir, &archive_root)?;
+    data.active_profile_id = profile_id.clone();
+    log::info!(
+        "First run: created profile '{DEFAULT_FIRST_RUN_PROFILE_NAME}' ({profile_id})"
+    );
+    Ok(())
+}
+
+fn run_migration_if_needed(
+    app: &AppHandle,
+    data: &mut ProfileStoreData,
+    logged_in: bool,
+) -> Result<(), String> {
     if data.migrated {
         return Ok(());
     }
@@ -694,26 +751,8 @@ fn run_migration_if_needed(app: &AppHandle, data: &mut ProfileStoreData) -> Resu
         Err(_) => return Ok(()),
     };
 
-    if live_has_valid_mod_folders(&game_dir)? {
-        let profile_id = new_custom_profile_id()?;
-        let profile = StoredProfile {
-            id: profile_id.clone(),
-            name: IMPORTED_PROFILE_NAME.to_string(),
-            kind: ProfileKind::Custom,
-        };
-        data.profiles.push(profile.clone());
-        adopt_live_mods_into_profile(app, &game_dir, &profile)?;
-        data.active_profile_id = profile_id.clone();
-        log::info!(
-            "Imported existing mods into new profile '{IMPORTED_PROFILE_NAME}' ({profile_id})"
-        );
-    } else {
-        data.active_profile_id = VANILLA_PROFILE_ID.to_string();
-        let vanilla = profile_by_id(data, VANILLA_PROFILE_ID).ok_or_else(|| {
-            "Vanilla profile is not configured.".to_string()
-        })?;
-        restore_profile(app, &game_dir, vanilla)?;
-    }
+    let archives_root = profile_archives_root(app)?;
+    apply_first_run_profile_selection(&game_dir, &archives_root, data, logged_in)?;
 
     data.migrated = true;
     save_store_data(app, data)
@@ -722,9 +761,10 @@ fn run_migration_if_needed(app: &AppHandle, data: &mut ProfileStoreData) -> Resu
 fn prepare_store(app: &AppHandle, modio_state: &ModioState) -> Result<ProfileStoreData, String> {
     let auth = modio_state.auth_status();
     let username = auth.username.as_deref();
+    let logged_in = auth.logged_in;
     let mut data = load_store_data(app)?;
     ensure_builtin_profiles(&mut data, username);
-    run_migration_if_needed(app, &mut data)?;
+    run_migration_if_needed(app, &mut data, logged_in)?;
     let mut data = load_store_data(app)?;
     ensure_builtin_profiles(&mut data, username);
     migrate_profile_archives_to_app_data(app, &mut data)?;
