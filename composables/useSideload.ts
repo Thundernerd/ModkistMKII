@@ -9,6 +9,7 @@ export interface SideloadedEntry {
   name: string;
   targetKind: SideloadTargetKind;
   sourceType: SideloadSourceType;
+  linked?: boolean;
   addedAt?: string;
 }
 
@@ -40,6 +41,7 @@ export function useSideload() {
   async function addSideloaded(
     sourcePaths: string | string[],
     targetKind?: SideloadTargetKind,
+    useSymlinks = false,
   ): Promise<AddSideloadedModResult> {
     adding.value = true;
     error.value = "";
@@ -50,6 +52,7 @@ export function useSideload() {
       const result = await invoke<AddSideloadedModResult>("add_sideloaded_mod", {
         sourcePaths: paths,
         targetKind: targetKind ?? null,
+        useSymlinks,
       });
 
       if (result.status === "added") {

@@ -8,6 +8,7 @@ import type { SideloadedEntry, SideloadTargetKind } from "~/composables/useSidel
 definePageMeta({ layout: "app" });
 
 const ACCEPTED_EXTENSIONS = new Set(["dll", "zeeplevel", "zip"]);
+const LINKABLE_EXTENSIONS = new Set(["dll", "zeeplevel"]);
 
 const {
   entries,
@@ -25,6 +26,8 @@ const pageError = ref("");
 const targetChoiceOpen = ref(false);
 const pendingSourcePaths = ref<string[]>([]);
 const pendingFolderName = ref("");
+const pendingUseSymlinks = ref(false);
+const linking = ref(false);
 const dropzoneRef = ref<HTMLElement | null>(null);
 const dragActive = ref(false);
 let unlistenDragDrop: UnlistenFn | undefined;
@@ -76,44 +79,89 @@ async function browseForMod() {
   await handleAddSideloaded(paths);
 }
 
+async function browseForLink() {
+  pageError.value = "";
+  error.value = "";
+
+  const selected = await open({
+    multiple: true,
+    title: "Select files to link",
+    filters: [
+      { name: "Mod files", extensions: ["dll", "zeeplevel"] },
+      { name: "DLL files", extensions: ["dll"] },
+      { name: "Blueprint files", extensions: ["zeeplevel"] },
+    ],
+  });
+
+  if (selected == null) {
+    return;
+  }
+
+  const paths = Array.isArray(selected) ? selected : [selected];
+  if (paths.length === 0) {
+    return;
+  }
+
+  const linkable = paths.filter((path) =>
+    LINKABLE_EXTENSIONS.has(extensionOf(path)),
+  );
+  if (linkable.length === 0) {
+    pageError.value = "Select .dll or .zeeplevel files to link.";
+    return;
+  }
+
+  await handleAddSideloaded(linkable, undefined, true);
+}
+
 async function handleAddSideloaded(
   sourcePaths: string[],
   targetKind?: SideloadTargetKind,
+  useSymlinks = false,
 ) {
   pageError.value = "";
   error.value = "";
 
+  if (useSymlinks) {
+    linking.value = true;
+  }
+
   try {
-    const result = await addSideloaded(sourcePaths, targetKind);
+    const result = await addSideloaded(sourcePaths, targetKind, useSymlinks);
 
     if (result.status === "needsTargetChoice") {
       pendingSourcePaths.value = result.sourcePaths;
       pendingFolderName.value = result.folderName;
+      pendingUseSymlinks.value = useSymlinks;
       targetChoiceOpen.value = true;
       return;
     }
   } catch (err) {
     pageError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    linking.value = false;
   }
 }
 
 async function handleTargetChoice(targetKind: SideloadTargetKind) {
   targetChoiceOpen.value = false;
   const sourcePaths = pendingSourcePaths.value;
+  const useSymlinks = pendingUseSymlinks.value;
   pendingSourcePaths.value = [];
   pendingFolderName.value = "";
+  pendingUseSymlinks.value = false;
 
   if (sourcePaths.length === 0) {
     return;
   }
 
-  await handleAddSideloaded(sourcePaths, targetKind);
+  await handleAddSideloaded(sourcePaths, targetKind, useSymlinks);
 }
 
 function closeTargetChoice() {
   targetChoiceOpen.value = false;
   pendingSourcePaths.value = [];
   pendingFolderName.value = "";
+  pendingUseSymlinks.value = false;
 }
 
 async function handleRemove(entry: SideloadedEntry) {
@@ -143,7 +191,7 @@ function formatAddedAt(addedAt?: string) {
 }
 
 const actionsDisabled = computed(
-  () => loading.value || adding.value || gameRunning.value,
+  () => loading.value || adding.value || linking.value || gameRunning.value,
 );
 
 function isPointInDropzone(x: number, y: number) {
@@ -234,7 +282,9 @@ onUnmounted(() => {
         <code>Sideloaded/Blueprints</code>, each in its own subfolder. Zip
         archives are classified automatically, or you can choose when they
         contain both types. Multiple loose files are installed as one entry.
-        Close Zeepkist before adding or removing sideloaded mods.
+        Link files creates symlinks in Sideloaded so your originals stay where
+        they are — useful while developing mods. Zip archives must still be
+        copied. Close Zeepkist before adding or removing sideloaded mods.
       </p>
 
       <p v-if="gameRunning" class="hint install-hint">
@@ -261,8 +311,17 @@ onUnmounted(() => {
             :disabled="actionsDisabled"
             @click="browseForMod"
           >
-            <span v-if="adding" class="spinner" aria-hidden="true" />
-            {{ adding ? "Adding mod…" : "Choose files…" }}
+            <span v-if="adding && !linking" class="spinner" aria-hidden="true" />
+            {{ adding && !linking ? "Adding mod…" : "Choose files…" }}
+          </button>
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="actionsDisabled"
+            @click="browseForLink"
+          >
+            <span v-if="linking" class="spinner" aria-hidden="true" />
+            {{ linking ? "Linking files…" : "Link files…" }}
           </button>
         </div>
       </div>
@@ -292,6 +351,7 @@ onUnmounted(() => {
               <div class="sideload-title-row">
                 <h2>{{ entry.name }}</h2>
                 <span class="kind-badge">{{ targetKindLabel(entry.targetKind) }}</span>
+                <span v-if="entry.linked" class="kind-badge linked-badge">Linked</span>
               </div>
               <p class="sideload-meta">
                 {{ entry.id }}
@@ -474,6 +534,10 @@ onUnmounted(() => {
   font-weight: 600;
   background: var(--modio-surface-raised);
   color: var(--modio-text-muted);
+}
+
+.linked-badge {
+  color: var(--modio-accent);
 }
 
 @media (max-width: 760px) {
