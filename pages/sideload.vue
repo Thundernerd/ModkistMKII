@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { SideloadedEntry, SideloadTargetKind } from "~/composables/useSideload";
 
 definePageMeta({ layout: "app" });
+
+const ACCEPTED_EXTENSIONS = new Set(["dll", "zeeplevel", "zip"]);
 
 const {
   entries,
@@ -18,8 +23,11 @@ const { gameRunning, gameRunningMessage } = useGameProcess();
 
 const pageError = ref("");
 const targetChoiceOpen = ref(false);
-const pendingSourcePath = ref("");
+const pendingSourcePaths = ref<string[]>([]);
 const pendingFolderName = ref("");
+const dropzoneRef = ref<HTMLElement | null>(null);
+const dragActive = ref(false);
+let unlistenDragDrop: UnlistenFn | undefined;
 
 async function loadSideloaded() {
   pageError.value = "";
@@ -30,13 +38,24 @@ async function loadSideloaded() {
   }
 }
 
+function extensionOf(path: string) {
+  const base = path.split(/[\\/]/).pop() ?? path;
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0 || dot === base.length - 1) return "";
+  return base.slice(dot + 1).toLowerCase();
+}
+
+function filterAcceptedPaths(paths: string[]) {
+  return paths.filter((path) => ACCEPTED_EXTENSIONS.has(extensionOf(path)));
+}
+
 async function browseForMod() {
   pageError.value = "";
   error.value = "";
 
   const selected = await open({
-    multiple: false,
-    title: "Select a mod file",
+    multiple: true,
+    title: "Select mod files",
     filters: [
       { name: "Mod files", extensions: ["dll", "zeeplevel", "zip"] },
       { name: "DLL files", extensions: ["dll"] },
@@ -45,25 +64,30 @@ async function browseForMod() {
     ],
   });
 
-  if (typeof selected !== "string") {
+  if (selected == null) {
     return;
   }
 
-  await handleAddSideloaded(selected);
+  const paths = Array.isArray(selected) ? selected : [selected];
+  if (paths.length === 0) {
+    return;
+  }
+
+  await handleAddSideloaded(paths);
 }
 
 async function handleAddSideloaded(
-  sourcePath: string,
+  sourcePaths: string[],
   targetKind?: SideloadTargetKind,
 ) {
   pageError.value = "";
   error.value = "";
 
   try {
-    const result = await addSideloaded(sourcePath, targetKind);
+    const result = await addSideloaded(sourcePaths, targetKind);
 
     if (result.status === "needsTargetChoice") {
-      pendingSourcePath.value = result.sourcePath;
+      pendingSourcePaths.value = result.sourcePaths;
       pendingFolderName.value = result.folderName;
       targetChoiceOpen.value = true;
       return;
@@ -75,20 +99,20 @@ async function handleAddSideloaded(
 
 async function handleTargetChoice(targetKind: SideloadTargetKind) {
   targetChoiceOpen.value = false;
-  const sourcePath = pendingSourcePath.value;
-  pendingSourcePath.value = "";
+  const sourcePaths = pendingSourcePaths.value;
+  pendingSourcePaths.value = [];
   pendingFolderName.value = "";
 
-  if (!sourcePath) {
+  if (sourcePaths.length === 0) {
     return;
   }
 
-  await handleAddSideloaded(sourcePath, targetKind);
+  await handleAddSideloaded(sourcePaths, targetKind);
 }
 
 function closeTargetChoice() {
   targetChoiceOpen.value = false;
-  pendingSourcePath.value = "";
+  pendingSourcePaths.value = [];
   pendingFolderName.value = "";
 }
 
@@ -122,7 +146,74 @@ const actionsDisabled = computed(
   () => loading.value || adding.value || gameRunning.value,
 );
 
-onMounted(loadSideloaded);
+function isPointInDropzone(x: number, y: number) {
+  const el = dropzoneRef.value;
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+async function isOverDropzone(position: { x: number; y: number; toLogical?: (scaleFactor: number) => { x: number; y: number } }) {
+  const scaleFactor = await getCurrentWindow().scaleFactor();
+  const logical = position.toLogical
+    ? position.toLogical(scaleFactor)
+    : { x: position.x / scaleFactor, y: position.y / scaleFactor };
+  return isPointInDropzone(logical.x, logical.y);
+}
+
+onMounted(async () => {
+  await loadSideloaded();
+
+  try {
+    unlistenDragDrop = await getCurrentWebview().onDragDropEvent(async (event) => {
+      const payload = event.payload;
+
+      if (payload.type === "leave") {
+        dragActive.value = false;
+        return;
+      }
+
+      if (payload.type === "enter" || payload.type === "over") {
+        if (actionsDisabled.value) {
+          dragActive.value = false;
+          return;
+        }
+        dragActive.value = await isOverDropzone(payload.position);
+        return;
+      }
+
+      if (payload.type === "drop") {
+        const wasActive = dragActive.value;
+        dragActive.value = false;
+
+        if (actionsDisabled.value) {
+          return;
+        }
+
+        const overZone =
+          wasActive || (await isOverDropzone(payload.position));
+        if (!overZone) {
+          return;
+        }
+
+        const accepted = filterAcceptedPaths(payload.paths);
+        if (accepted.length === 0) {
+          pageError.value =
+            "Drop .dll, .zeeplevel, or .zip files to sideload.";
+          return;
+        }
+
+        await handleAddSideloaded(accepted);
+      }
+    });
+  } catch {
+    // Not running inside Tauri (e.g. browser preview).
+  }
+});
+
+onUnmounted(() => {
+  unlistenDragDrop?.();
+});
 </script>
 
 <template>
@@ -142,8 +233,8 @@ onMounted(loadSideloaded);
         DLLs go into <code>Sideloaded/Plugins</code>, blueprint files into
         <code>Sideloaded/Blueprints</code>, each in its own subfolder. Zip
         archives are classified automatically, or you can choose when they
-        contain both types. Close Zeepkist before adding or removing sideloaded
-        mods.
+        contain both types. Multiple loose files are installed as one entry.
+        Close Zeepkist before adding or removing sideloaded mods.
       </p>
 
       <p v-if="gameRunning" class="hint install-hint">
@@ -153,15 +244,27 @@ onMounted(loadSideloaded);
         }}
       </p>
 
-      <div class="action-row">
-        <button
-          type="button"
-          :disabled="actionsDisabled"
-          @click="browseForMod"
-        >
-          <span v-if="adding" class="spinner" aria-hidden="true" />
-          {{ adding ? "Adding mod…" : "Choose file…" }}
-        </button>
+      <div
+        ref="dropzoneRef"
+        class="dropzone"
+        :class="{
+          'dropzone-active': dragActive && !actionsDisabled,
+          'dropzone-disabled': actionsDisabled,
+        }"
+      >
+        <p class="dropzone-label">
+          Drop .dll, .zeeplevel, or .zip files here, or choose files.
+        </p>
+        <div class="action-row">
+          <button
+            type="button"
+            :disabled="actionsDisabled"
+            @click="browseForMod"
+          >
+            <span v-if="adding" class="spinner" aria-hidden="true" />
+            {{ adding ? "Adding mod…" : "Choose files…" }}
+          </button>
+        </div>
       </div>
     </section>
 
@@ -178,8 +281,8 @@ onMounted(loadSideloaded);
       </div>
 
       <p v-else-if="entries.length === 0" class="hint empty-state">
-        No sideloaded mods yet. Use Choose file to add a .dll, .zeeplevel, or
-        .zip mod.
+        No sideloaded mods yet. Drop or choose .dll, .zeeplevel, or .zip files
+        to add a mod.
       </p>
 
       <ul v-else class="sideload-list">
@@ -259,6 +362,38 @@ onMounted(loadSideloaded);
   border-radius: var(--modio-radius);
   border: 1px dashed var(--modio-border);
   background: var(--modio-surface);
+}
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1.35rem 1.1rem;
+  border-radius: var(--modio-radius);
+  border: 1px dashed var(--modio-border);
+  background: var(--modio-surface);
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.dropzone-active {
+  border-color: var(--modio-accent);
+  background: var(--modio-surface-raised);
+  box-shadow: 0 0 0 2px rgba(var(--modio-accent-rgb), 0.2);
+}
+
+.dropzone-disabled {
+  opacity: 0.65;
+}
+
+.dropzone-label {
+  margin: 0;
+  text-align: center;
+  color: var(--modio-text-muted);
+  font-size: 0.9rem;
 }
 
 .action-row {
