@@ -19,15 +19,15 @@ const emit = defineEmits<{
     @click.self="emit('close')"
   >
     <div
-      class="sideload-target-dialog panel"
+      class="sideload-target-dialog"
       role="dialog"
       aria-modal="true"
       aria-label="Choose sideload destination"
     >
       <h2 class="sideload-target-title">Choose destination</h2>
       <p class="hint sideload-target-desc">
-        This selection (<strong>{{ folderName }}</strong>) contains both
-        blueprint and plugin files. Where should it be installed?
+        Choose where to install <strong>{{ folderName }}</strong> —
+        Plugins or Blueprints.
       </p>
 
       <div class="sideload-target-actions">
@@ -66,6 +66,10 @@ const emit = defineEmits<{
 .sideload-target-dialog {
   width: min(100%, 28rem);
   padding: 1.25rem;
+  border-radius: var(--modio-radius);
+  background: var(--modio-surface);
+  border: 1px solid var(--modio-border);
+  box-shadow: var(--modio-shadow);
 }
 
 .sideload-target-title {
