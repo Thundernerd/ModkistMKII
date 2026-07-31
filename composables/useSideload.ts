@@ -14,7 +14,7 @@ export interface SideloadedEntry {
 
 export type AddSideloadedModResult =
   | { status: "added"; entry: SideloadedEntry }
-  | { status: "needsTargetChoice"; folderName: string; sourcePath: string };
+  | { status: "needsTargetChoice"; folderName: string; sourcePaths: string[] };
 
 export function useSideload() {
   const entries = ref<SideloadedEntry[]>([]);
@@ -38,15 +38,17 @@ export function useSideload() {
   }
 
   async function addSideloaded(
-    sourcePath: string,
+    sourcePaths: string | string[],
     targetKind?: SideloadTargetKind,
   ): Promise<AddSideloadedModResult> {
     adding.value = true;
     error.value = "";
 
+    const paths = Array.isArray(sourcePaths) ? sourcePaths : [sourcePaths];
+
     try {
       const result = await invoke<AddSideloadedModResult>("add_sideloaded_mod", {
-        sourcePath,
+        sourcePaths: paths,
         targetKind: targetKind ?? null,
       });
 

@@ -26,8 +26,8 @@ const emit = defineEmits<{
     >
       <h2 class="sideload-target-title">Choose destination</h2>
       <p class="hint sideload-target-desc">
-        The archive <strong>{{ folderName }}</strong> contains both blueprint
-        and plugin files. Where should it be installed?
+        This selection (<strong>{{ folderName }}</strong>) contains both
+        blueprint and plugin files. Where should it be installed?
       </p>
 
       <div class="sideload-target-actions">
