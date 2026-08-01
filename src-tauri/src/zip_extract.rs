@@ -31,30 +31,30 @@ pub fn sanitize_filename(filename: &str) -> String {
 
 pub fn looks_like_zip(path: &Path) -> Result<bool, String> {
     let mut file =
-        File::open(path).map_err(|e| format!("Could not open downloaded file: {e}"))?;
+        File::open(path).map_err(|e| format!("Did not open downloaded file: {e}"))?;
     let mut header = [0u8; 4];
     let read = file
         .read(&mut header)
-        .map_err(|e| format!("Could not read downloaded file: {e}"))?;
+        .map_err(|e| format!("Did not read downloaded file: {e}"))?;
 
     Ok(read >= 2 && header[0] == b'P' && header[1] == b'K')
 }
 
 pub fn validate_download_payload(path: &Path) -> Result<(), String> {
     let metadata =
-        fs::metadata(path).map_err(|e| format!("Could not read downloaded file: {e}"))?;
+        fs::metadata(path).map_err(|e| format!("Did not read downloaded file: {e}"))?;
 
     if metadata.len() == 0 {
         return Err(
-            "Downloaded mod file is empty. You may need to sign in to mod.io to download this mod."
+            "The downloaded mod file is empty. Sign in to mod.io. Then try again."
                 .into(),
         );
     }
 
-    let bytes = fs::read(path).map_err(|e| format!("Could not read downloaded file: {e}"))?;
+    let bytes = fs::read(path).map_err(|e| format!("Did not read downloaded file: {e}"))?;
     if bytes.starts_with(b"<") {
         return Err(
-            "Download failed: received HTML instead of a mod file. Check your mod.io login and API configuration."
+            "Download failed: the server returned HTML instead of a mod file. Make sure that your mod.io login and API configuration are correct."
                 .into(),
         );
     }
@@ -71,41 +71,41 @@ pub fn validate_download_payload(path: &Path) -> Result<(), String> {
 
 pub fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(), String> {
     let file = File::open(archive_path)
-        .map_err(|e| format!("Could not open downloaded archive: {e}"))?;
+        .map_err(|e| format!("Did not open downloaded archive: {e}"))?;
     let mut archive =
         ZipArchive::new(file).map_err(|e| {
             let size = fs::metadata(archive_path)
                 .map(|meta| meta.len())
                 .unwrap_or(0);
             format!(
-                "Could not read zip archive ({size} bytes on disk): {e}. If this keeps happening, sign in to mod.io and try again."
+                "Did not read zip archive ({size} bytes on disk): {e}. If this keeps happening, sign in to mod.io. Then try again."
             )
         })?;
 
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
-            .map_err(|e| format!("Could not read zip entry: {e}"))?;
+            .map_err(|e| format!("Did not read zip entry: {e}"))?;
         let entry_name = entry.name().to_string();
 
         if entry_name.ends_with('/') {
             let dir_path = safe_join(destination, entry_name.trim_end_matches('/'))?;
             fs::create_dir_all(&dir_path)
-                .map_err(|e| format!("Could not create directory {}: {e}", dir_path.display()))?;
+                .map_err(|e| format!("Did not create directory {}: {e}", dir_path.display()))?;
             continue;
         }
 
         let out_path = safe_join(destination, &entry_name)?;
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                format!("Could not create parent directory {}: {e}", parent.display())
+                format!("Did not create parent directory {}: {e}", parent.display())
             })?;
         }
 
         let mut out_file = File::create(&out_path)
-            .map_err(|e| format!("Could not create file {}: {e}", out_path.display()))?;
+            .map_err(|e| format!("Did not create file {}: {e}", out_path.display()))?;
         copy(&mut entry, &mut out_file)
-            .map_err(|e| format!("Could not extract {}: {e}", out_path.display()))?;
+            .map_err(|e| format!("Did not extract {}: {e}", out_path.display()))?;
     }
 
     Ok(())
@@ -127,7 +127,7 @@ pub fn install_downloaded_mod(
     if let Some(parent) = dest_path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             format!(
-                "Could not create parent directory {}: {e}",
+                "Did not create parent directory {}: {e}",
                 parent.display()
             )
         })?;
@@ -135,7 +135,7 @@ pub fn install_downloaded_mod(
 
     fs::copy(download_path, &dest_path).map_err(|e| {
         format!(
-            "Could not install mod file to {}: {e}",
+            "Did not install mod file to {}: {e}",
             dest_path.display()
         )
     })?;

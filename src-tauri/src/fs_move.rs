@@ -33,21 +33,21 @@ pub fn move_dir(from: &Path, to: &Path) -> Result<(), String> {
         Err(error) if is_cross_device_error(&error) => {
             copy_dir_recursive(from, to).map_err(|copy_error| {
                 format!(
-                    "Could not copy {} to {}: {copy_error}",
+                    "Did not copy {} to {}: {copy_error}",
                     from.display(),
                     to.display()
                 )
             })?;
             fs::remove_dir_all(from).map_err(|remove_error| {
                 format!(
-                    "Could not remove {} after copying to {}: {remove_error}",
+                    "Did not remove {} after copying to {}: {remove_error}",
                     from.display(),
                     to.display()
                 )
             })
         }
         Err(error) => Err(format!(
-            "Could not move {} to {}: {error}",
+            "Did not move {} to {}: {error}",
             from.display(),
             to.display()
         )),

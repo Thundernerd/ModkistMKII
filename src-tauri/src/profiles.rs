@@ -95,7 +95,7 @@ fn live_kind_dir(game_dir: &Path, kind_dir_name: &str) -> PathBuf {
 pub fn profile_archives_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resolve(PROFILE_ARCHIVES_DIR, BaseDirectory::AppData)
-        .map_err(|error| format!("Could not resolve profile archives directory: {error}"))
+        .map_err(|error| format!("Did not resolve profile archives directory: {error}"))
 }
 
 pub fn profile_archive_dir_name(profile_id: &str, profile_name: &str) -> String {
@@ -298,7 +298,7 @@ fn to_summary(
 fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(to_dir).map_err(|e| {
         format!(
-            "Could not create profile directory {}: {e}",
+            "Did not create profile directory {}: {e}",
             to_dir.display()
         )
     })?;
@@ -308,13 +308,13 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
     }
 
     for entry in fs::read_dir(from_dir)
-        .map_err(|e| format!("Could not read {}: {e}", from_dir.display()))?
+        .map_err(|e| format!("Did not read {}: {e}", from_dir.display()))?
     {
-        let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?;
+            .map_err(|e| format!("Did not read entry type: {e}"))?;
 
         if file_type.is_dir() {
             let name = entry.file_name();
@@ -326,11 +326,11 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
             let dest = to_dir.join(entry.file_name());
             if dest.exists() {
                 fs::remove_dir_all(&dest).map_err(|e| {
-                    format!("Could not replace existing profile folder {}: {e}", dest.display())
+                    format!("Did not replace existing profile folder {}: {e}", dest.display())
                 })?;
             }
             move_dir(&path, &dest).map_err(|e| {
-                format!("Could not move mod folder {}: {e}", path.display())
+                format!("Did not move mod folder {}: {e}", path.display())
             })?;
         }
     }
@@ -344,12 +344,12 @@ fn clear_valid_mod_folders(kind_dir: &Path) -> Result<(), String> {
     }
 
     for entry in fs::read_dir(kind_dir)
-        .map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
+        .map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
     {
-        let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         if !entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?
+            .map_err(|e| format!("Did not read entry type: {e}"))?
             .is_dir()
         {
             continue;
@@ -361,7 +361,7 @@ fn clear_valid_mod_folders(kind_dir: &Path) -> Result<(), String> {
 
         fs::remove_dir_all(entry.path()).map_err(|e| {
             format!(
-                "Could not clear mod folder {}: {e}",
+                "Did not clear mod folder {}: {e}",
                 entry.path().display()
             )
         })?;
@@ -378,12 +378,12 @@ fn live_has_valid_mod_folders(game_dir: &Path) -> Result<bool, String> {
         }
 
         for entry in fs::read_dir(&kind_dir)
-            .map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
+            .map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
         {
-            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+            let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             if entry
                 .file_type()
-                .map_err(|e| format!("Could not read entry type: {e}"))?
+                .map_err(|e| format!("Did not read entry type: {e}"))?
                 .is_dir()
                 && is_valid_mod_folder_name(&entry.file_name().to_string_lossy())
             {
@@ -504,7 +504,7 @@ fn sync_profile_archive_dir_name(
         }
         fs::remove_dir_all(&current).map_err(|error| {
             format!(
-                "Could not remove old profile archive {}: {error}",
+                "Did not remove old profile archive {}: {error}",
                 current.display()
             )
         })?;
@@ -550,7 +550,7 @@ fn migrate_single_profile_archive(
         }
         fs::remove_dir_all(&from).map_err(|error| {
             format!(
-                "Could not remove legacy profile archive {} after migration: {error}",
+                "Did not remove legacy profile archive {} after migration: {error}",
                 from.display()
             )
         })?;
@@ -569,7 +569,7 @@ fn remove_legacy_modkist_folder(game_dir: &Path) -> Result<(), String> {
 
     fs::remove_dir_all(&modkist_dir).map_err(|error| {
         format!(
-            "Could not remove legacy Modkist folder {}: {error}",
+            "Did not remove legacy Modkist folder {}: {error}",
             modkist_dir.display()
         )
     })?;
@@ -584,7 +584,7 @@ fn remove_profile_archive_dirs_at(
     if app_data_archive.is_dir() {
         fs::remove_dir_all(app_data_archive).map_err(|error| {
             format!(
-                "Could not remove profile archive {}: {error}",
+                "Did not remove profile archive {}: {error}",
                 app_data_archive.display()
             )
         })?;
@@ -595,7 +595,7 @@ fn remove_profile_archive_dirs_at(
         if legacy_archive.is_dir() {
             fs::remove_dir_all(legacy_archive).map_err(|error| {
                 format!(
-                    "Could not remove legacy profile archive {}: {error}",
+                    "Did not remove legacy profile archive {}: {error}",
                     legacy_archive.display()
                 )
             })?;
@@ -956,7 +956,7 @@ pub fn delete_profile(
         .ok_or_else(|| format!("Profile {profile_id} does not exist."))?;
 
     if profile.kind != ProfileKind::Custom {
-        return Err("Built-in profiles cannot be deleted.".into());
+        return Err("Built-in profiles must not be deleted.".into());
     }
 
     if data.active_profile_id == profile_id {
@@ -995,7 +995,7 @@ pub fn rename_profile(
         .ok_or_else(|| format!("Profile {profile_id} does not exist."))?;
 
     if profile.kind != ProfileKind::Custom {
-        return Err("Built-in profiles cannot be renamed.".into());
+        return Err("Built-in profiles must not be renamed.".into());
     }
 
     if data

@@ -8,7 +8,7 @@ use std::path::Path;
 pub fn symlink_file(source: &Path, dest: &Path) -> Result<(), String> {
     let absolute_source = fs::canonicalize(source).map_err(|e| {
         format!(
-            "Could not resolve source path {}: {e}",
+            "Did not resolve source path {}: {e}",
             source.display()
         )
     })?;
@@ -17,7 +17,7 @@ pub fn symlink_file(source: &Path, dest: &Path) -> Result<(), String> {
     {
         std::os::unix::fs::symlink(&absolute_source, dest).map_err(|e| {
             format!(
-                "Could not link {} to {}: {e}",
+                "Did not link {} to {}: {e}",
                 absolute_source.display(),
                 dest.display()
             )
@@ -28,7 +28,7 @@ pub fn symlink_file(source: &Path, dest: &Path) -> Result<(), String> {
     {
         std::os::windows::fs::symlink_file(&absolute_source, dest).map_err(|e| {
             format!(
-                "Could not link {} to {}: {e}",
+                "Did not link {} to {}: {e}",
                 absolute_source.display(),
                 dest.display()
             )

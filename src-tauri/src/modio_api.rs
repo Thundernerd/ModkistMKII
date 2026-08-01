@@ -378,7 +378,7 @@ impl ApiClient {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .build()
-            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+            .map_err(|e| format!("Did not build HTTP client: {e}"))?;
 
         Ok(Self {
             http,
@@ -485,7 +485,7 @@ impl ApiClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| ApiError::transport(format!("Failed to read mod.io response: {e}")))?
+            .map_err(|e| ApiError::transport(format!("Did not read mod.io response: {e}")))?
             .to_vec();
 
         if status.is_success() {
@@ -546,7 +546,7 @@ impl ApiClient {
             .send_raw(method, path, token, query, form, quiet_on_failure)
             .await?;
         serde_json::from_slice(&bytes).map_err(|e| {
-            ApiError::transport(format!("Failed to parse mod.io response: {e}"))
+            ApiError::transport(format!("Did not parse mod.io response: {e}"))
         })
     }
 

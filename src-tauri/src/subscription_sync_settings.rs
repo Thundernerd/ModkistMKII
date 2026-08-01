@@ -45,7 +45,7 @@ fn clear_persisted_failed_sync_records(app: &AppHandle) {
     let _ = store.delete(FAILED_SYNC_MODS_KEY);
     let _ = store.delete(LEGACY_FAILED_SYNC_MODS_KEY);
     if let Err(error) = store.save() {
-        log::warn!("Could not remove persisted sync failures from settings: {error}");
+        log::warn!("Did not remove persisted sync failures from settings: {error}");
     } else {
         log::info!("Removed persisted sync failures from settings store");
     }
@@ -123,7 +123,7 @@ fn dependency_failure_detail(message: &str) -> Option<String> {
     let lower = message.to_ascii_lowercase();
     if lower.contains("rate limit") {
         return Some(
-            "Could not fetch required dependencies due to mod.io rate limiting.".to_string(),
+            "Did not fetch required dependencies due to mod.io rate limiting.".to_string(),
         );
     }
     if lower.contains("no longer available") {
@@ -137,7 +137,7 @@ fn dependency_failure_detail(message: &str) -> Option<String> {
         || lower.contains("authentication")
     {
         return Some(
-            "A required dependency is private or could not be loaded on mod.io.".to_string(),
+            "A required dependency is private or did not load on mod.io.".to_string(),
         );
     }
     truncate_error_detail(message)
@@ -165,9 +165,9 @@ fn merge_dependency_failure_details(
     if let Some(existing) = existing {
         if let Some(id) = extract_dependency_mod_id(existing) {
             mod_ids.insert(id);
-        } else if existing.starts_with("Required dependencies could not be installed (mods ") {
+        } else if existing.starts_with("Required dependencies did not install (mods ") {
             let ids = existing
-                .trim_start_matches("Required dependencies could not be installed (mods ")
+                .trim_start_matches("Required dependencies did not install (mods ")
                 .trim_end_matches(").");
             for id in ids.split(", ") {
                 if let Ok(parsed) = id.parse::<u64>() {
@@ -189,7 +189,7 @@ fn merge_dependency_failure_details(
     (
         error_type,
         Some(format!(
-            "Required dependencies could not be installed (mods {ids})."
+            "Required dependencies did not install (mods {ids})."
         )),
     )
 }
@@ -220,7 +220,7 @@ fn refine_sync_failure(category: &str, message: &str) -> (String, Option<String>
     if lower.contains("zeepkist is running") {
         return ("game_running".to_string(), detail);
     }
-    if lower.contains("vanilla profile") || lower.contains("installing mods is disabled") {
+    if lower.contains("vanilla profile") || lower.contains("mod install is disabled") {
         return ("profile_blocked".to_string(), detail);
     }
 
@@ -480,21 +480,21 @@ mod tests {
         assert_eq!(error_type, "dependency");
         assert_eq!(
             detail.as_deref(),
-            Some("A required dependency is private or could not be loaded on mod.io.")
+            Some("A required dependency is private or did not load on mod.io.")
         );
     }
 
     #[test]
     fn merge_dependency_failure_details_accumulates_mod_ids() {
         let (error_type, detail) = merge_dependency_failure_details(
-            Some("Required dependencies could not be installed (mods 3108325)."),
+            Some("Required dependencies did not install (mods 3108325)."),
             "dependency",
             "Required dependency (mod 2518400): download failed",
         );
         assert_eq!(error_type, "dependency");
         assert_eq!(
             detail.as_deref(),
-            Some("Required dependencies could not be installed (mods 2518400, 3108325).")
+            Some("Required dependencies did not install (mods 2518400, 3108325).")
         );
     }
 }

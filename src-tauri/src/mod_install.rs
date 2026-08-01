@@ -222,11 +222,11 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
     }
 
     let mut records = Vec::new();
-    for entry in fs::read_dir(kind_dir).map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))? {
-        let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+    for entry in fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))? {
+        let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?;
+            .map_err(|e| format!("Did not read entry type: {e}"))?;
         if !file_type.is_dir() {
             continue;
         }
@@ -265,7 +265,7 @@ fn remove_installed_record_folder(game_dir: &Path, record: &InstalledModRecord) 
     let path = kind_root_dir(game_dir, record.kind).join(&record.folder_name);
     if path.is_dir() {
         fs::remove_dir_all(&path).map_err(|e| {
-            format!("Could not remove installed mod folder {}: {e}", path.display())
+            format!("Did not remove installed mod folder {}: {e}", path.display())
         })?;
     }
     Ok(())
@@ -278,8 +278,8 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
             continue;
         }
 
-        for entry in fs::read_dir(&kind_dir).map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))? {
-            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        for entry in fs::read_dir(&kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))? {
+            let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
             let Some((entry_mod_id, _)) = parse_install_folder_name(&name) else {
@@ -292,7 +292,7 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
             let path = entry.path();
             if path.is_dir() {
                 fs::remove_dir_all(&path).map_err(|e| {
-                    format!("Could not remove installed mod folder {}: {e}", path.display())
+                    format!("Did not remove installed mod folder {}: {e}", path.display())
                 })?;
             }
         }
@@ -312,14 +312,14 @@ async fn normalize_legacy_install_folder_names(
         }
 
         let entries = fs::read_dir(&kind_dir)
-            .map_err(|e| format!("Could not read {}: {e}", kind_dir.display()))?
+            .map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Could not read directory entry: {e}"))?;
+            .map_err(|e| format!("Did not read directory entry: {e}"))?;
 
         for entry in entries {
             if !entry
                 .file_type()
-                .map_err(|e| format!("Could not read entry type: {e}"))?
+                .map_err(|e| format!("Did not read entry type: {e}"))?
                 .is_dir()
             {
                 continue;
@@ -548,8 +548,8 @@ async fn uninstall_blockers_for(
 fn format_uninstall_blocked_error(blockers: &[UninstallBlocker]) -> String {
     let names: Vec<&str> = blockers.iter().map(|blocker| blocker.name.as_str()).collect();
     match names.as_slice() {
-        [name] => format!("Cannot uninstall: required by {name}."),
-        _ => format!("Cannot uninstall: required by {}.", names.join(", ")),
+        [name] => format!("Uninstall blocked: required by {name}."),
+        _ => format!("Uninstall blocked: required by {}.", names.join(", ")),
     }
 }
 
@@ -692,13 +692,13 @@ async fn install_single_mod(
         .join(install_folder_name(mod_id, file_id, &mod_.name));
     fs::create_dir_all(&target_dir).map_err(|e| {
         format!(
-            "Could not create mod install directory {}: {e}",
+            "Did not create mod install directory {}: {e}",
             target_dir.display()
         )
     })?;
 
     let temp_dir = std::env::temp_dir().join("modkist-mod-install");
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Could not create temp directory: {e}"))?;
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
     let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
 
     download_modfile(
@@ -1034,7 +1034,7 @@ async fn install_mod_internal(
         Ok(order) => order,
         Err(message) => {
             log::warn!(
-                "Could not resolve dependencies for mod {mod_id}, installing mod only: {message}"
+                "Did not resolve dependencies for mod {mod_id}, installing mod only: {message}"
             );
             let _ = record_failed_sync_mod(app, mod_id, "install_order", &message);
             vec![mod_id]
@@ -1119,7 +1119,7 @@ async fn sync_subscribed_mods_inner(
     }
 
     if active_profile_install_blocked(app, state)? {
-        return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
+        return Err("Mod install is disabled for the Vanilla profile. Switch to another profile.".into());
     }
 
     ensure_game_not_running()?;
@@ -1339,7 +1339,7 @@ pub async fn install_mod(
     log::info!("install_mod command: mod {mod_id}");
     if active_profile_install_blocked(&app, &state)? {
         log::warn!("install_mod blocked: vanilla profile active");
-        return Err("Installing mods is disabled for the Vanilla profile. Switch to another profile.".into());
+        return Err("Mod install is disabled for the Vanilla profile. Switch to another profile.".into());
     }
 
     ensure_game_not_running()?;

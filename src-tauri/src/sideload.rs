@@ -209,7 +209,7 @@ fn folder_name_from_source(source_path: &Path) -> Result<String, String> {
         .and_then(|name| name.to_str())
         .map(sanitize_mod_name)
         .filter(|name| !name.is_empty())
-        .ok_or_else(|| "Could not derive a folder name from the selected file.".to_string())?;
+        .ok_or_else(|| "Did not derive a folder name from the selected file.".to_string())?;
 
     Ok(stem)
 }
@@ -359,12 +359,12 @@ fn scan_archive_contents(dir: &Path) -> Result<ArchiveContentKind, String> {
         has_non_zeeplevel: &mut bool,
         file_count: &mut usize,
     ) -> Result<(), String> {
-        for entry in fs::read_dir(dir).map_err(|e| format!("Could not read {}: {e}", dir.display()))? {
-            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        for entry in fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))? {
+            let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|e| format!("Could not read entry type: {e}"))?;
+                .map_err(|e| format!("Did not read entry type: {e}"))?;
 
             if file_type.is_dir() {
                 walk(&path, has_zeeplevel, has_non_zeeplevel, file_count)?;
@@ -418,12 +418,12 @@ fn detect_source_type(entry_dir: &Path) -> Result<SideloadSourceType, String> {
         zeeplevel_count: &mut usize,
         other_count: &mut usize,
     ) -> Result<(), String> {
-        for entry in fs::read_dir(dir).map_err(|e| format!("Could not read {}: {e}", dir.display()))? {
-            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        for entry in fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))? {
+            let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|e| format!("Could not read entry type: {e}"))?;
+                .map_err(|e| format!("Did not read entry type: {e}"))?;
 
             if file_type.is_dir() {
                 walk(&path, dll_count, zeeplevel_count, other_count)?;
@@ -530,12 +530,12 @@ fn scan_kind_entries(
 
     let mut entries = Vec::new();
     for entry in fs::read_dir(&kind_root)
-        .map_err(|e| format!("Could not read {}: {e}", kind_root.display()))?
+        .map_err(|e| format!("Did not read {}: {e}", kind_root.display()))?
     {
-        let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?;
+            .map_err(|e| format!("Did not read entry type: {e}"))?;
         let path = entry.path();
 
         if file_type.is_dir() {
@@ -573,12 +573,12 @@ fn infer_legacy_target_kind(entry_dir: &Path) -> Result<SideloadTargetKind, Stri
     let mut has_dll = false;
 
     fn walk(dir: &Path, has_zeeplevel: &mut bool, has_dll: &mut bool) -> Result<(), String> {
-        for entry in fs::read_dir(dir).map_err(|e| format!("Could not read {}: {e}", dir.display()))? {
-            let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+        for entry in fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))? {
+            let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|e| format!("Could not read entry type: {e}"))?;
+                .map_err(|e| format!("Did not read entry type: {e}"))?;
 
             if file_type.is_dir() {
                 walk(&path, has_zeeplevel, has_dll)?;
@@ -613,11 +613,11 @@ fn scan_legacy_entries(root: &Path) -> Result<Vec<SideloadedEntry>, String> {
     }
 
     let mut entries = Vec::new();
-    for entry in fs::read_dir(root).map_err(|e| format!("Could not read {}: {e}", root.display()))? {
-        let entry = entry.map_err(|e| format!("Could not read directory entry: {e}"))?;
+    for entry in fs::read_dir(root).map_err(|e| format!("Did not read {}: {e}", root.display()))? {
+        let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("Could not read entry type: {e}"))?;
+            .map_err(|e| format!("Did not read entry type: {e}"))?;
         let path = entry.path();
 
         if file_type.is_dir() {
@@ -677,7 +677,7 @@ fn place_file(source_path: &Path, dest_path: &Path, use_symlinks: bool) -> Resul
     } else {
         fs::copy(source_path, dest_path).map_err(|e| {
             format!(
-                "Could not copy file to {}: {e}",
+                "Did not copy file to {}: {e}",
                 dest_path.display()
             )
         })?;
@@ -695,7 +695,7 @@ fn install_single_file(
 ) -> Result<SideloadedEntry, String> {
     fs::create_dir_all(kind_root).map_err(|e| {
         format!(
-            "Could not create sideload directory {}: {e}",
+            "Did not create sideload directory {}: {e}",
             kind_root.display()
         )
     })?;
@@ -704,7 +704,7 @@ fn install_single_file(
     let destination = kind_root.join(&folder_name);
     fs::create_dir_all(&destination).map_err(|e| {
         format!(
-            "Could not create sideload entry directory {}: {e}",
+            "Did not create sideload entry directory {}: {e}",
             destination.display()
         )
     })?;
@@ -735,7 +735,7 @@ fn install_extracted_archive(
 ) -> Result<SideloadedEntry, String> {
     fs::create_dir_all(kind_root).map_err(|e| {
         format!(
-            "Could not create sideload directory {}: {e}",
+            "Did not create sideload directory {}: {e}",
             kind_root.display()
         )
     })?;
@@ -745,7 +745,7 @@ fn install_extracted_archive(
     if destination.exists() {
         fs::remove_dir_all(&destination).map_err(|e| {
             format!(
-                "Could not replace existing sideload entry {}: {e}",
+                "Did not replace existing sideload entry {}: {e}",
                 destination.display()
             )
         })?;
@@ -770,7 +770,7 @@ fn install_loose_files(
 ) -> Result<SideloadedEntry, String> {
     fs::create_dir_all(kind_root).map_err(|e| {
         format!(
-            "Could not create sideload directory {}: {e}",
+            "Did not create sideload directory {}: {e}",
             kind_root.display()
         )
     })?;
@@ -779,7 +779,7 @@ fn install_loose_files(
     let destination = kind_root.join(&folder_name);
     fs::create_dir_all(&destination).map_err(|e| {
         format!(
-            "Could not create sideload entry directory {}: {e}",
+            "Did not create sideload entry directory {}: {e}",
             destination.display()
         )
     })?;
@@ -887,7 +887,7 @@ fn add_single_linked_mod(
 ) -> Result<AddSideloadedModResult, String> {
     if is_zip_path(source_path) {
         return Err(
-            "Zip archives cannot be linked. Use Choose files to copy and extract archives.".into(),
+            "Zip archives must not be linked. Use Choose files to copy and extract archives.".into(),
         );
     }
 
@@ -957,7 +957,7 @@ fn add_multi_sideloaded_mod(
         if use_symlinks {
             if is_zip_path(path) {
                 return Err(
-                    "Zip archives cannot be linked. Use Choose files to copy and extract archives.".into(),
+                    "Zip archives must not be linked. Use Choose files to copy and extract archives.".into(),
                 );
             }
             continue;
@@ -1015,14 +1015,14 @@ where
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir).map_err(|e| {
             format!(
-                "Could not clear temp directory {}: {e}",
+                "Did not clear temp directory {}: {e}",
                 temp_dir.display()
             )
         })?;
     }
     fs::create_dir_all(&temp_dir).map_err(|e| {
         format!(
-            "Could not create temp directory {}: {e}",
+            "Did not create temp directory {}: {e}",
             temp_dir.display()
         )
     })?;
@@ -1059,7 +1059,7 @@ pub fn add_sideloaded_mod(
     let root = ensure_sideload_ready(&app)?;
     fs::create_dir_all(&root).map_err(|e| {
         format!(
-            "Could not create sideload directory {}: {e}",
+            "Did not create sideload directory {}: {e}",
             root.display()
         )
     })?;
@@ -1087,14 +1087,14 @@ pub fn remove_sideloaded_mod(
     if entry_path.is_file() {
         fs::remove_file(&entry_path).map_err(|e| {
             format!(
-                "Could not remove sideload entry {}: {e}",
+                "Did not remove sideload entry {}: {e}",
                 entry_path.display()
             )
         })?;
     } else if entry_path.is_dir() {
         fs::remove_dir_all(&entry_path).map_err(|e| {
             format!(
-                "Could not remove sideload entry {}: {e}",
+                "Did not remove sideload entry {}: {e}",
                 entry_path.display()
             )
         })?;
@@ -1455,7 +1455,7 @@ mod tests {
 
         let error = add_single_sideloaded_mod(&root, &zip_source, None, true).unwrap_err();
         assert!(
-            error.contains("Zip archives cannot be linked"),
+            error.contains("Zip archives must not be linked"),
             "unexpected error: {error}"
         );
 

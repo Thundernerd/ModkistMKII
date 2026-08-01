@@ -84,7 +84,7 @@ pub fn rename_install_folder(parent_dir: &Path, from_name: &str, to_name: &str) 
     if to.exists() {
         fs::remove_dir_all(&to).map_err(|e| {
             format!(
-                "Could not replace existing mod folder {}: {e}",
+                "Did not replace existing mod folder {}: {e}",
                 to.display()
             )
         })?;
@@ -92,7 +92,7 @@ pub fn rename_install_folder(parent_dir: &Path, from_name: &str, to_name: &str) 
 
     fs::rename(&from, &to).map_err(|e| {
         format!(
-            "Could not rename mod folder {} to {}: {e}",
+            "Did not rename mod folder {} to {}: {e}",
             from.display(),
             to.display()
         )

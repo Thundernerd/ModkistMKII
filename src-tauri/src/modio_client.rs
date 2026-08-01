@@ -273,7 +273,7 @@ impl ModioState {
         let _ = store.delete(LEGACY_CACHE_PERSIST_KEY);
         let _ = store.delete(LEGACY_CACHE_SAVED_AT_KEY);
         if let Err(error) = store.save() {
-            log::warn!("Could not remove legacy mod.io cache from disk: {error}");
+            log::warn!("Did not remove legacy mod.io cache from disk: {error}");
         } else {
             log::info!("Removed legacy mod.io cache from disk");
         }
@@ -441,7 +441,7 @@ pub fn format_api_error_logged_in(error: ApiError, logged_in: bool) -> String {
     if error.is_auth() {
         if logged_in {
             return format!(
-                "{}. This mod may be private or you may not be subscribed to it on mod.io.",
+                "{}. This mod can be private, or you are not subscribed to it on mod.io.",
                 error.message
             );
         }
@@ -474,7 +474,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
     }
     if state.cached_dependency_fetch_failed(mod_id) {
         return Err(format!(
-            "Dependencies for mod {mod_id} could not be loaded (cached failure)"
+            "Dependencies for mod {mod_id} did not load (cached failure)"
         ));
     }
 
@@ -1273,7 +1273,7 @@ pub async fn list_mod_dependencies(
             )),
             ModFetchOutcome::Failed(message) => {
                 log::warn!(
-                    "Could not load dependency {dependency_id} for mod {mod_id}: {message}"
+                    "Did not load dependency {dependency_id} for mod {mod_id}: {message}"
                 );
                 mods.push(unavailable_dependency(dependency_id, message));
             }
@@ -1353,7 +1353,8 @@ mod format_api_error_tests {
     #[test]
     fn logged_in_auth_error_explains_private_or_unsubscribed() {
         let message = format_api_error_logged_in(auth_error(), true);
-        assert!(message.contains("private or you may not be subscribed"));
+        assert!(message.contains("private"));
+        assert!(message.contains("not subscribed"));
         assert!(!message.contains("Sign in to mod.io"));
     }
 }

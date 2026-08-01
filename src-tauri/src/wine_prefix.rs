@@ -106,7 +106,7 @@ pub fn configure_winhttp_override(game_dir: &Path) -> WineWinhttpStatus {
         Ok(content) => content,
         Err(error) => {
             return WineWinhttpStatus::failed(format!(
-                "Could not read {}: {error}",
+                "Did not read {}: {error}",
                 user_reg.display()
             ));
         }
@@ -186,7 +186,7 @@ fn wine_prefix(
 }
 
 fn canonicalize_path(path: &Path) -> Result<PathBuf, String> {
-    fs::canonicalize(path).map_err(|error| format!("Could not resolve {}: {error}", path.display()))
+    fs::canonicalize(path).map_err(|error| format!("Did not resolve {}: {error}", path.display()))
 }
 
 fn find_prefix_via_drive_c(game_dir: &Path) -> Option<WinePrefix> {
@@ -654,14 +654,14 @@ fn apply_via_user_reg(user_reg: &Path, content: &str) -> Result<(), String> {
     let backup = user_reg.with_extension("reg.bak");
     fs::copy(user_reg, &backup).map_err(|error| {
         format!(
-            "Could not back up {} to {}: {error}",
+            "Did not back up {} to {}: {error}",
             user_reg.display(),
             backup.display()
         )
     })?;
 
     fs::write(user_reg, merged).map_err(|error| {
-        format!("Could not write {}: {error}", user_reg.display())
+        format!("Did not write {}: {error}", user_reg.display())
     })
 }
 
@@ -687,7 +687,7 @@ fn apply_via_wine_reg(prefix: &Path, preferred_wine: Option<&Path>) -> Result<()
                 "/f",
             ])
             .output()
-            .map_err(|error| format!("Could not run {}: {error}", wine.display()))?;
+            .map_err(|error| format!("Did not run {}: {error}", wine.display()))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

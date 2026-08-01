@@ -54,7 +54,7 @@ impl LogWriter for SentryLogWriter {
 fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resolve(LOG_SUBDIR, BaseDirectory::AppData)
-        .map_err(|error| format!("Could not resolve app log directory: {error}"))
+        .map_err(|error| format!("Did not resolve app log directory: {error}"))
 }
 
 /// Initialize Rust logging to a rotating file under `{app_data_dir}/logs`, next to
@@ -64,7 +64,7 @@ fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
     let log_dir = log_directory(app)?;
     std::fs::create_dir_all(&log_dir)
-        .map_err(|error| format!("Could not create log directory {}: {error}", log_dir.display()))?;
+        .map_err(|error| format!("Did not create log directory {}: {error}", log_dir.display()))?;
 
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
 
@@ -91,7 +91,7 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
         .format_for_files(flexi_logger::detailed_format)
         .format_for_writer(flexi_logger::colored_default_format)
         .start()
-        .map_err(|error| format!("Could not start logger: {error}"))?;
+        .map_err(|error| format!("Did not start logger: {error}"))?;
 
     Ok(log_dir)
 }

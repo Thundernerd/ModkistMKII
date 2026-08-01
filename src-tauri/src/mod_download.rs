@@ -86,7 +86,7 @@ async fn write_download_response(
 
     if bytes.is_empty() {
         return Err(
-            "Downloaded mod file is empty. Sign in to mod.io if this mod requires authentication."
+            "The downloaded mod file is empty. Sign in to mod.io. Then try again."
                 .into(),
         );
     }
@@ -94,7 +94,7 @@ async fn write_download_response(
     if let Some(expected) = expected_size {
         if expected > 0 && bytes.len() as u64 != expected {
             return Err(format!(
-                "Download incomplete: received {} bytes, expected {expected}. Sign in to mod.io and try again.",
+                "Download incomplete: received {} bytes, expected {expected}. Sign in to mod.io. Then try again.",
                 bytes.len()
             ));
         }
@@ -102,7 +102,7 @@ async fn write_download_response(
 
     std::fs::write(destination, &bytes).map_err(|e| {
         format!(
-            "Could not write downloaded mod file to {}: {e}",
+            "Did not write downloaded mod file to {}: {e}",
             destination.display()
         )
     })?;

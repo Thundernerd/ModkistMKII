@@ -70,7 +70,7 @@ impl BepInExStatus {
                 state: "wrongVersion".into(),
                 found_version: found_version.clone(),
                 message: Some(format!(
-                    "Found BepInEx {}. Modkist requires {MINIMUM_VERSION} or newer. You can continue, but some mods may not work.",
+                    "Found BepInEx {}. Modkist requires {MINIMUM_VERSION} or newer. You can continue. Some mods can fail.",
                     found_version.unwrap_or_else(|| "an unknown version".into())
                 )),
                 can_continue: true,
@@ -87,10 +87,10 @@ pub(crate) fn has_bepinex_structure(game_dir: &Path) -> bool {
 }
 
 fn read_pe_version(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let bytes = fs::read(path).map_err(|e| format!("Did not read {}: {e}", path.display()))?;
     read_pe_version_bytes(&bytes).ok_or_else(|| {
         format!(
-            "Could not read version info from {}",
+            "Did not read version info from {}",
             path.file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("PE file")
@@ -214,9 +214,9 @@ async fn download_archive(destination: &Path) -> Result<(), String> {
         .map_err(|e| format!("Download failed: {e}"))?;
 
     let mut file = File::create(destination)
-        .map_err(|e| format!("Could not create temp file: {e}"))?;
+        .map_err(|e| format!("Did not create temp file: {e}"))?;
     file.write_all(&bytes)
-        .map_err(|e| format!("Could not write temp file: {e}"))?;
+        .map_err(|e| format!("Did not write temp file: {e}"))?;
 
     Ok(())
 }
@@ -285,7 +285,7 @@ async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
     log::info!("Downloading and extracting BepInEx to {}", game_dir.display());
     let temp_dir = std::env::temp_dir().join("modkist-bepinex");
     fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Could not create temp directory: {e}"))?;
+        .map_err(|e| format!("Did not create temp directory: {e}"))?;
     let archive_path = temp_dir.join(ARCHIVE_NAME);
 
     download_archive(&archive_path).await?;
@@ -295,7 +295,7 @@ async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
     let status = status_for_game_dir(game_dir);
     if status.state != "installed" {
         return Err(
-            "BepInEx was extracted but verification failed. Check your game directory and try again."
+            "BepInEx extraction is complete, but the install check failed. Make sure that the game directory is correct. Then try again."
                 .into(),
         );
     }
@@ -308,7 +308,7 @@ fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
     if bepinex_dir.exists() {
         fs::remove_dir_all(&bepinex_dir).map_err(|e| {
             format!(
-                "Could not remove BepInEx directory {}: {e}",
+                "Did not remove BepInEx directory {}: {e}",
                 bepinex_dir.display()
             )
         })?;
@@ -318,7 +318,7 @@ fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
         let path = game_dir.join(file_name);
         if path.is_file() {
             fs::remove_file(&path).map_err(|e| {
-                format!("Could not remove {}: {e}", path.display())
+                format!("Did not remove {}: {e}", path.display())
             })?;
         }
     }

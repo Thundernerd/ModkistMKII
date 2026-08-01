@@ -43,7 +43,7 @@ pub(crate) fn validate_directory(path: &Path) -> Result<(), String> {
 
     if game_executable_in_dir(path).is_none() {
         return Err(format!(
-            "Could not find {GAME_EXECUTABLE} in this directory."
+            "Did not find {GAME_EXECUTABLE} in this directory."
         ));
     }
 

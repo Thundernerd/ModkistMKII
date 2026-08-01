@@ -19,7 +19,7 @@ fn spawn_detached(command: &mut Command) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("Could not start the game: {error}"))
+        .map_err(|error| format!("Did not start the game: {error}"))
 }
 
 #[cfg(windows)]
@@ -27,7 +27,7 @@ fn launch_direct_exe(game_dir: &Path) -> Result<(), String> {
     let executable = game_dir.join(GAME_EXECUTABLE);
     if !executable.is_file() {
         return Err(format!(
-            "Could not find {GAME_EXECUTABLE} in {}",
+            "Did not find {GAME_EXECUTABLE} in {}",
             game_dir.display()
         ));
     }
@@ -39,7 +39,7 @@ fn launch_direct_exe(game_dir: &Path) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("Could not start the game: {error}"))
+        .map_err(|error| format!("Did not start the game: {error}"))
 }
 
 #[cfg(any(windows, target_os = "linux"))]
@@ -72,7 +72,7 @@ fn find_steam_executable() -> Result<PathBuf, String> {
             }
         }
 
-        return Err("Could not find Steam. Install Steam or launch Zeepkist manually.".into());
+        return Err("Did not find Steam. Install Steam or launch Zeepkist manually.".into());
     }
 
     #[cfg(target_os = "linux")]
@@ -94,7 +94,7 @@ fn find_steam_executable() -> Result<PathBuf, String> {
             }
         }
 
-        Err("Could not find Steam. Install Steam or launch Zeepkist manually.".into())
+        Err("Did not find Steam. Install Steam or launch Zeepkist manually.".into())
     }
 }
 
@@ -116,7 +116,7 @@ fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
     let executable = game_dir.join(GAME_EXECUTABLE);
     if !executable.is_file() {
         return Err(format!(
-            "Could not find {GAME_EXECUTABLE} in {}",
+            "Did not find {GAME_EXECUTABLE} in {}",
             game_dir.display()
         ));
     }
