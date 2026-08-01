@@ -158,7 +158,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             log_directory_path,
             modio_status,
             get_mod_tag_options,
