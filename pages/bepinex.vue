@@ -15,14 +15,22 @@ const {
   refreshBepInExStatus,
   installBepInEx,
 } = useBepInEx();
+const {
+  wineFeedback: sharedWineFeedback,
+  wineChecking,
+  syncWineStatus,
+  configureWineWinhttp,
+} = useWineWinhttp();
 
 const redirect = computed(() => readRedirectParam(route.query.redirect));
 const phase = ref<"checking" | "installing" | "wineWarning" | "error">(
   "checking",
 );
 
-const wineFeedback = computed(() =>
-  wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
+const wineFeedback = computed(
+  () =>
+    sharedWineFeedback.value ||
+    wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
 );
 
 async function runInstall() {
@@ -31,6 +39,7 @@ async function runInstall() {
 
   try {
     await installBepInEx();
+    syncWineStatus(bepinexStatus.value.wineWinhttp);
     const feedback = wineWinhttpFeedback(bepinexStatus.value.wineWinhttp);
     if (feedback && feedback.tone !== "success") {
       phase.value = "wineWarning";
@@ -55,6 +64,18 @@ async function handleStatus() {
 
 async function continueAfterWineWarning() {
   await navigateToApp(redirect.value);
+}
+
+async function retryWineSetup() {
+  try {
+    const status = await configureWineWinhttp();
+    const feedback = wineWinhttpFeedback(status);
+    if (!feedback || feedback.tone === "success") {
+      await navigateToApp(redirect.value);
+    }
+  } catch {
+    // Stay on wineWarning; shared wineError / status covers feedback.
+  }
 }
 
 async function retry() {
@@ -103,8 +124,9 @@ onMounted(async () => {
 
         <div v-else-if="phase === 'wineWarning'" class="warning">
           <p class="warning-text">
-            BepInEx is installed, but Modkist did not fully configure your
-            Wine prefix for mod loading.
+            BepInEx is installed. Modkist did not find a Wine prefix for mod
+            loading. Launch Zeepkist one time with Steam, Proton, or CrossOver.
+            Then the prefix exists. Then retry here.
           </p>
           <p
             v-if="wineFeedback"
@@ -112,9 +134,24 @@ onMounted(async () => {
           >
             {{ wineFeedback.text }}
           </p>
-          <button type="button" class="continue-button" @click="continueAfterWineWarning">
-            Continue anyway
-          </button>
+          <div class="warning-actions">
+            <button
+              type="button"
+              class="retry-button"
+              :disabled="wineChecking"
+              @click="retryWineSetup"
+            >
+              {{ wineChecking ? "Wait…" : "Retry" }}
+            </button>
+            <button
+              type="button"
+              class="continue-button btn-secondary"
+              :disabled="wineChecking"
+              @click="continueAfterWineWarning"
+            >
+              Continue anyway
+            </button>
+          </div>
         </div>
 
         <div v-else class="error-state">
@@ -225,6 +262,12 @@ onMounted(async () => {
   margin-top: 0.2rem;
   flex-shrink: 0;
   accent-color: var(--modio-accent);
+}
+
+.warning-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
 }
 
 .continue-button,
