@@ -24,13 +24,28 @@ const {
   refreshAppSettings,
   setAutoUpdateMods,
 } = useAppSettings();
+const {
+  wineStatus,
+  wineChecking,
+  wineFeedback: sharedWineFeedback,
+  syncWineStatus,
+  configureWineWinhttp,
+} = useWineWinhttp();
 
 const verifyMessage = ref("");
 const verifyTone = ref<"info" | "success" | "error" | "warn">("info");
+const wineSetupMessage = ref("");
+const wineSetupTone = ref<"info" | "success" | "error" | "warn">("info");
 const appVersion = ref("");
 
-const wineFeedback = computed(() =>
-  wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
+const wineFeedback = computed(
+  () =>
+    sharedWineFeedback.value ||
+    wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
+);
+
+const showWineSetup = computed(
+  () => wineStatus.value?.state !== "notApplicable",
 );
 
 const statusLabel = computed(() => {
@@ -75,6 +90,7 @@ async function verifyBepInExInstall() {
   try {
     await verifyBepInEx();
     const status = bepinexStatus.value;
+    syncWineStatus(status.wineWinhttp);
 
     if (status.state === "installed") {
       const feedback = wineWinhttpFeedback(status.wineWinhttp);
@@ -132,8 +148,9 @@ async function reinstallBepInExInstall() {
   verifyMessage.value = "";
   error.value = "";
 
-    try {
+  try {
     await reinstallBepInEx();
+    syncWineStatus(bepinexStatus.value.wineWinhttp);
     const feedback = wineWinhttpFeedback(bepinexStatus.value.wineWinhttp);
     if (feedback && feedback.tone !== "success") {
       setVerifyResult(feedback.tone === "warn" ? "warn" : "error", feedback.text);
@@ -147,6 +164,37 @@ async function reinstallBepInExInstall() {
     );
   } catch (err) {
     setVerifyResult("error", String(err));
+  }
+}
+
+async function setupWinePrefix() {
+  wineSetupMessage.value = "";
+
+  try {
+    const status = await configureWineWinhttp();
+    if (status.state === "notApplicable") {
+      wineSetupTone.value = "info";
+      wineSetupMessage.value = "This platform does not need a Wine prefix.";
+      return;
+    }
+
+    const feedback = wineWinhttpFeedback(status);
+    if (!feedback) {
+      wineSetupTone.value = "info";
+      wineSetupMessage.value = "This platform does not need a Wine prefix.";
+      return;
+    }
+
+    wineSetupTone.value =
+      feedback.tone === "success"
+        ? "success"
+        : feedback.tone === "warn"
+          ? "warn"
+          : "error";
+    wineSetupMessage.value = feedback.text;
+  } catch (err) {
+    wineSetupTone.value = "error";
+    wineSetupMessage.value = String(err);
   }
 }
 
@@ -403,7 +451,7 @@ function profileKindLabel(kind: string) {
         <button
           type="button"
           class="btn-secondary"
-          :disabled="loading || installing"
+          :disabled="loading || installing || wineChecking"
           @click="verifyBepInExInstall"
         >
           {{ loading ? "Installation check…" : "Check installation" }}
@@ -411,7 +459,7 @@ function profileKindLabel(kind: string) {
         <button
           type="button"
           class="btn-danger"
-          :disabled="loading || installing"
+          :disabled="loading || installing || wineChecking"
           @click="reinstallBepInExInstall"
         >
           {{ installing ? "Reinstalling…" : "Reinstall" }}
@@ -433,6 +481,32 @@ function profileKindLabel(kind: string) {
         {{ wineFeedback.text }}
       </p>
       <p v-else-if="error" class="error feedback">{{ error }}</p>
+
+      <template v-if="showWineSetup">
+        <h3 class="panel-subtitle">Wine prefix</h3>
+        <p class="hint panel-desc">
+          On Linux and macOS, Modkist uses the Wine or Proton prefix of the
+          game to configure winhttp for BepInEx. If the prefix is missing,
+          launch Zeepkist one time. Then configure the prefix here.
+        </p>
+        <div class="action-row">
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="loading || installing || wineChecking"
+            @click="setupWinePrefix"
+          >
+            {{ wineChecking ? "Wait…" : "Configure Wine prefix" }}
+          </button>
+        </div>
+        <p
+          v-if="wineSetupMessage"
+          :class="wineSetupTone === 'success' ? 'info' : wineSetupTone === 'warn' ? 'warn' : wineSetupTone === 'info' ? 'info' : 'error'"
+          class="feedback"
+        >
+          {{ wineSetupMessage }}
+        </p>
+      </template>
     </section>
 
     <p v-if="appVersion" class="app-version">Modkist v{{ appVersion }}</p>
@@ -493,6 +567,12 @@ function profileKindLabel(kind: string) {
   margin: 0 0 0.35rem;
   font-size: 1rem;
   font-weight: 600;
+}
+
+.panel-subtitle {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 650;
 }
 
 .panel-desc {
