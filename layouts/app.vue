@@ -4,6 +4,7 @@ import { runStartupLaunchArgs } from "~/composables/useStartupLaunchArgs";
 
 const ready = ref(false);
 const { startGameProcessPolling, stopGameProcessPolling } = useGameProcess();
+const { configureWineWinhttp } = useWineWinhttp();
 
 onMounted(async () => {
   if (!(await ensureGamePath())) {
@@ -13,6 +14,7 @@ onMounted(async () => {
   ready.value = await ensureBepInEx();
   if (ready.value) {
     startGameProcessPolling();
+    configureWineWinhttp().catch(() => {});
     await runStartupLaunchArgs();
   }
 });
@@ -28,6 +30,7 @@ onUnmounted(() => {
     <div class="app-main">
       <ProfileSwitchOverlay />
       <AppNotifications />
+      <WinePrefixBanner />
       <slot />
     </div>
   </div>
