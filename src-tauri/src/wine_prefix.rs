@@ -24,13 +24,10 @@ impl WineWinhttpStatus {
         Self {
             state: "notFound".into(),
             message: Some(
-                "Could not find a Wine prefix for your game directory. Configure winhttp \
-                 manually in Wine Configuration (Libraries → winhttp → native, builtin), \
-                 or launch Zeepkist from CrossOver/GameHub after installing BepInEx."
                 "Did not find a Wine prefix for your game directory. Launch Zeepkist \
-                 one time with Steam, Proton, or CrossOver. Then the prefix exists. \
-                 Then retry in Modkist. You can also configure winhttp manually in \
-                 Wine Configuration (Libraries → winhttp → native, builtin)."
+                 one time with Steam, Proton, CrossOver, or GameHub. Then the prefix \
+                 exists. Then retry in Modkist. You can also configure winhttp manually \
+                 in Wine Configuration (Libraries → winhttp → native, builtin)."
                     .into(),
             ),
             prefix_label: None,

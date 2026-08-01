@@ -109,7 +109,8 @@ fn launch_via_steam() -> Result<(), String> {
 #[cfg(unix)]
 fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
     let info = crate::wine_prefix::wine_launch_info(game_dir).ok_or_else(|| {
-        "Could not find a Wine prefix for your game directory. Launch Zeepkist from Steam, CrossOver, or GameHub."
+        "Did not find a Wine prefix for your game directory. Launch Zeepkist \
+         one time with Steam, CrossOver, or GameHub."
             .to_string()
     })?;
 

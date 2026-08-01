@@ -34,8 +34,7 @@ export function wineWinhttpFeedback(
       tone: "warn",
       text:
         status.message ||
-        "Could not find a Wine prefix for your game. Add a winhttp override manually in Wine Configuration (Libraries → winhttp → native, builtin). On Linux with Proton you can also add WINEDLLOVERRIDES=\"winhttp=n,b\" %command% to Steam launch options. On Mac with GameHub, launch Zeepkist from GameHub after installing BepInEx.",
-        'Did not find a Wine prefix for your game. Launch Zeepkist one time with Steam, Proton, or CrossOver. Then the prefix exists. Then retry in Modkist. You can also add a winhttp override manually in Wine Configuration (Libraries → winhttp → native, builtin). On Linux with Proton, add WINEDLLOVERRIDES="winhttp=n,b" %command% to the Steam launch options.',
+        'Did not find a Wine prefix for your game. Launch Zeepkist one time with Steam, Proton, CrossOver, or GameHub. Then the prefix exists. Then retry in Modkist. You can also add a winhttp override manually in Wine Configuration (Libraries → winhttp → native, builtin). On Linux with Proton, add WINEDLLOVERRIDES="winhttp=n,b" %command% to the Steam launch options.',
     };
   }
 
