@@ -57,7 +57,9 @@ use app_settings::{
     set_ignore_bepinex_version_warning,
 };
 use auth::{auth_status, logout, request_email_code, verify_email_code};
-use bepinex::{bepinex_status, install_bepinex, reinstall_bepinex, verify_bepinex};
+use bepinex::{
+    bepinex_status, configure_wine_winhttp, install_bepinex, reinstall_bepinex, verify_bepinex,
+};
 use game_detect::detect_game_paths_command;
 use game_launch::launch_game;
 use game_path::{game_path_status, set_game_path};
@@ -185,6 +187,7 @@ pub fn run() {
             launch_game,
             bepinex_status,
             verify_bepinex,
+            configure_wine_winhttp,
             install_bepinex,
             reinstall_bepinex,
             list_installed_mods,

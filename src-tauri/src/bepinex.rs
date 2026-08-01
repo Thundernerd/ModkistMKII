@@ -262,6 +262,12 @@ pub fn verify_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
 }
 
 #[tauri::command]
+pub fn configure_wine_winhttp(app: AppHandle) -> Result<WineWinhttpStatus, String> {
+    let game_dir = game_directory(&app)?;
+    Ok(wine_prefix::configure_winhttp_override(&game_dir))
+}
+
+#[tauri::command]
 pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
     log::info!("Installing BepInEx");
     let game_dir = game_directory(&app)?;
