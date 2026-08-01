@@ -90,7 +90,7 @@ function subscriptionSyncFailureToast(message: string): {
     return {
       title: "mod.io rate limit",
       message:
-        "Couldn't sync your subscribed mods. Try again in about a minute.",
+        "Did not sync your subscribed mods. Try again in about a minute.",
     };
   }
 
@@ -114,6 +114,7 @@ function subscriptionSyncFailureToast(message: string): {
 
   if (
     lower.includes("vanilla profile") ||
+    lower.includes("mod install is disabled") ||
     lower.includes("installing mods is disabled")
   ) {
     return {
@@ -125,14 +126,14 @@ function subscriptionSyncFailureToast(message: string): {
   const trimmed = message.trim();
   if (isReadableToastDetail(trimmed)) {
     return {
-      title: "Couldn't sync subscribed mods",
-      message: `Couldn't sync your subscribed mods. ${trimmed}`,
+      title: "Did not sync subscribed mods",
+      message: `Did not sync your subscribed mods. ${trimmed}`,
     };
   }
 
   return {
-    title: "Couldn't sync subscribed mods",
-    message: "Your mod list may be incomplete. Try again in a moment.",
+    title: "Did not sync subscribed mods",
+    message: "Your mod list can be incomplete. Try again in a moment.",
   };
 }
 
@@ -164,7 +165,7 @@ function notifySubscriptionSyncComplete(
     if (installedCount > 0) {
       pushNotification({
         title: "Subscriptions synced with warnings",
-        message: `Installed ${formatCountLabel(installedCount, "subscribed mod", "subscribed mods")}, but some dependencies could not be installed.`,
+        message: `Installed ${formatCountLabel(installedCount, "subscribed mod", "subscribed mods")}, but some dependencies did not install.`,
         tone: "warning",
         durationMs: WARNING_TOAST_DURATION_MS,
       });
@@ -175,7 +176,7 @@ function notifySubscriptionSyncComplete(
       pushNotification({
         title: "Subscriptions synced with warnings",
         message:
-          "All subscribed mods are already up to date, but some dependencies could not be installed.",
+          "All subscribed mods are already up to date, but some dependencies did not install.",
         tone: "warning",
         durationMs: WARNING_TOAST_DURATION_MS,
       });
@@ -185,7 +186,7 @@ function notifySubscriptionSyncComplete(
     pushNotification({
       title: "Subscriptions synced with warnings",
       message:
-        "Some dependencies could not be installed. See Settings → Sync failures.",
+        "Some dependencies did not install. See Settings → Sync failures.",
       tone: "warning",
       durationMs: WARNING_TOAST_DURATION_MS,
     });
@@ -234,7 +235,7 @@ function notifyInstallSuccess(
   if (failedDeps.length > 0) {
     pushNotification({
       title: wasUpdate ? "Mod updated with warnings" : "Mod installed with warnings",
-      message: `${verb} ${name}${versionSuffix}, but ${formatCountLabel(failedDeps.length, "dependency", "dependencies")} could not be installed. See Settings → Sync failures.`,
+      message: `${verb} ${name}${versionSuffix}, but ${formatCountLabel(failedDeps.length, "dependency", "dependencies")} did not install. See Settings → Sync failures.`,
       tone: "warning",
       durationMs: WARNING_TOAST_DURATION_MS,
     });
@@ -285,8 +286,8 @@ function notifyBulkUpdateResult(
 
   if (failed.length > 0) {
     pushNotification({
-      title: "Could not update mods",
-      message: "Check the errors below and try again.",
+      title: "Did not update mods",
+      message: "Read the errors below. Then try again.",
       tone: "error",
       durationMs: 10_000,
     });
@@ -433,7 +434,7 @@ async function seedInstalledFromDisk() {
     installStates.value = next;
     installReady.value = true;
   } catch (error) {
-    logger.debug("Could not seed installed mods from disk", error);
+    logger.debug("Did not seed installed mods from disk", error);
   }
 }
 
@@ -614,7 +615,7 @@ export function useModInstall() {
       const activeProfile = await invoke<ActiveProfileInfo>("get_active_profile");
       if (activeProfile.installBlocked) {
         throw new Error(
-          "Installing mods is disabled on the Vanilla profile. Switch to your account profile in the sidebar.",
+          "Mod install is disabled for the Vanilla profile. Switch to your account profile in the sidebar.",
         );
       }
 

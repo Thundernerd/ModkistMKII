@@ -85,7 +85,7 @@ export function useMods() {
     } catch (err) {
       const message = String(err);
       pushNotification({
-        title: append ? "Could not load more mods" : "Could not load mods",
+        title: append ? "Did not load more mods" : "Did not load mods",
         message,
         tone: "error",
         durationMs: 10_000,

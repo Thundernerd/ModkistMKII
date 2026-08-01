@@ -42,6 +42,6 @@ export function wineWinhttpFeedback(
     tone: "error",
     text:
       status.message ||
-      "Could not configure the Wine winhttp override automatically. Add it manually in Wine Configuration (Libraries → winhttp → native, builtin).",
+      "Did not configure the Wine winhttp override automatically. Add it manually in Wine Configuration (Libraries → winhttp → native, builtin).",
   };
 }

@@ -27,7 +27,7 @@ export function useModioAuth() {
     resetSessionSync();
     await refreshAuthStatus();
     await refreshProfiles().catch((err) => {
-      logger.debug("Could not refresh profiles after logout", err);
+      logger.debug("Did not refresh profiles after logout", err);
     });
   }
 
