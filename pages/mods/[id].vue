@@ -340,7 +340,7 @@ function dependencyMeta(dep: ModDependency) {
               class="dependencies-status-loading"
             >
               <span class="spinner" aria-hidden="true" />
-              Checking dependencies…
+              Dependency check in progress…
             </div>
 
             <template v-else>
@@ -355,7 +355,7 @@ function dependencyMeta(dep: ModDependency) {
                 {{ unavailableDependencyCount }} dependenc{{
                   unavailableDependencyCount === 1 ? "y" : "ies"
                 }}
-                could not be loaded. They may be private or you may need a
+                did not load. These mods can be private, or you need a
                 separate mod.io subscription.
               </p>
 

@@ -180,7 +180,7 @@ onMounted(async () => {
 
         <div class="actions">
           <button type="button" :disabled="loading" @click="verifyCode">
-            {{ loading ? "Verifying…" : "Verify" }}
+            {{ loading ? "Submitting…" : "Submit code" }}
           </button>
           <button
             type="button"

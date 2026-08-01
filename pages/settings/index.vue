@@ -121,7 +121,7 @@ async function verifyBepInExInstall() {
 
 async function reinstallBepInExInstall() {
   const confirmed = await confirm(
-    `This will remove the entire BepInEx installation from your game folder, including all mods in BepInEx/plugins. Any custom plugins and/or blueprints not managed through Modkist will be lost forever and cannot be recovered. A fresh BepInEx ${BEPINEX_REQUIRED_VERSION} (x64) will then be installed.`,
+    `CAUTION: Reinstall removes BepInEx from your game folder. This also removes all mods in BepInEx/plugins. Custom plugins or blueprints that Modkist does not manage are deleted permanently. Then Modkist installs a fresh BepInEx ${BEPINEX_REQUIRED_VERSION} (x64).`,
     { title: "Reinstall BepInEx?", kind: "warning" },
   );
 
@@ -305,7 +305,7 @@ function profileKindLabel(kind: string) {
           <div class="setting-copy">
             <span class="setting-label">Sync failures</span>
             <span class="setting-hint">
-              Subscribed mods that could not be fully synced. You can ignore
+              Subscribed mods that did not fully sync. You can ignore
               them or unsubscribe on mod.io.
             </span>
           </div>
@@ -406,7 +406,7 @@ function profileKindLabel(kind: string) {
           :disabled="loading || installing"
           @click="verifyBepInExInstall"
         >
-          {{ loading ? "Verifying…" : "Verify installation" }}
+          {{ loading ? "Installation check…" : "Check installation" }}
         </button>
         <button
           type="button"

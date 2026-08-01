@@ -264,15 +264,15 @@ onUnmounted(() => {
     <section class="panel">
       <h2 class="panel-title">Add mod</h2>
       <p class="hint panel-desc">
-        DLLs go into <code>Sideloaded/Plugins</code>, blueprint files into
-        <code>Sideloaded/Blueprints</code>, each in its own subfolder. Zip
-        archives are classified automatically, or you can choose when they
-        contain both types. Multiple loose files are installed as one entry.
-        Link files creates symlinks in Sideloaded for any files you select so
-        your originals stay where they are — useful while developing mods. You
-        may be asked to choose Plugins or Blueprints for non-mod files. Zip
-        archives must still be copied. Close Zeepkist before adding or removing
-        sideloaded mods.
+        DLLs go into <code>Sideloaded/Plugins</code>. Blueprint files go into
+        <code>Sideloaded/Blueprints</code>. Each file uses its own subfolder.
+        Zip archives are classified automatically. If an archive contains both
+        types, you can choose the target. Multiple loose files install as one
+        entry. Link files creates symlinks in Sideloaded for the files that you
+        select. Your originals stay in place. This is useful for mod development.
+        If a file is not a mod file, choose Plugins or Blueprints. Zip archives
+        must still be copied. If Zeepkist is open, close it before you add or
+        remove sideloaded mods.
       </p>
 
       <p v-if="gameRunning" class="hint install-hint">

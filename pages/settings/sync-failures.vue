@@ -75,9 +75,9 @@ async function handleUnsubscribe(modId: number) {
 }
 
 const FAILED_SYNC_ERROR_LABELS: Record<string, string> = {
-  install_order: "Could not resolve dependencies",
-  dependency: "Dependency could not be installed",
-  install_state: "Could not check mod status",
+  install_order: "Did not resolve dependencies",
+  dependency: "Dependency did not install",
+  install_state: "Did not read mod status",
   install: "Install failed",
   rate_limit: "Rate limited",
   auth: "Private or not accessible",
@@ -105,7 +105,7 @@ onMounted(refreshFailedSyncMods);
       <NuxtLink to="/settings" class="back-link">← Settings</NuxtLink>
       <h1>Sync failures</h1>
       <p class="hint page-desc">
-        Subscribed mods that could not be fully synced. Ignored mods are
+        Subscribed mods that did not fully sync. Ignored mods are
         skipped on future syncs.
       </p>
     </header>

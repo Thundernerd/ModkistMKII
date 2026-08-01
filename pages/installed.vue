@@ -69,7 +69,7 @@ onMounted(loadInstalled);
 
     <p v-if="installEnvironmentError" class="hint install-hint">
       {{ installEnvironmentError }}
-      <NuxtLink to="/settings">Check Settings</NuxtLink>
+      <NuxtLink to="/settings">Open Settings</NuxtLink>
     </p>
 
     <p v-else-if="gameRunning" class="hint install-hint">

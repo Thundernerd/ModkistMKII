@@ -85,7 +85,7 @@ onMounted(loadUpdates);
 
     <p v-if="installEnvironmentError" class="hint install-hint">
       {{ installEnvironmentError }}
-      <NuxtLink to="/settings">Check Settings</NuxtLink>
+      <NuxtLink to="/settings">Open Settings</NuxtLink>
     </p>
 
     <p v-else-if="profileInstallBlocked" class="hint install-hint">
@@ -101,7 +101,7 @@ onMounted(loadUpdates);
 
     <div v-if="loading || checkingUpdates" class="state">
       <span class="spinner" aria-hidden="true" />
-      Checking for updates…
+      Update check in progress…
     </div>
 
     <div

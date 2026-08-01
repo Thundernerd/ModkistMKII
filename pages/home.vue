@@ -104,7 +104,7 @@ onMounted(async () => {
 
       <p v-if="installEnvironmentError" class="hint install-hint">
         Installs are unavailable: {{ installEnvironmentError }}
-        <NuxtLink to="/settings">Check Settings</NuxtLink>
+        <NuxtLink to="/settings">Open Settings</NuxtLink>
       </p>
 
       <p v-else-if="profileInstallBlocked" class="hint install-hint">
@@ -118,7 +118,7 @@ onMounted(async () => {
 
       <p v-else-if="checkingUpdates" class="hint updates-check-hint">
         <span class="spinner" aria-hidden="true" />
-        Checking installed mods for updates…
+        Update check in progress…
       </p>
 
       <p v-else-if="syncingSubscriptions" class="hint updates-check-hint">

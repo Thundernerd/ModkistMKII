@@ -96,7 +96,7 @@ onMounted(async () => {
           <div>
             <h2 class="profile-name">{{ authStatus.username ?? "Account" }}</h2>
             <p v-if="error" class="hint profile-warning">
-              Profile details could not be loaded right now.
+              Profile details did not load.
             </p>
           </div>
         </div>
@@ -120,7 +120,7 @@ onMounted(async () => {
         </div>
 
         <p v-else-if="userMods.mods.length === 0" class="hint empty-state">
-          You haven't submitted any mods for this game.
+          You have not submitted any mods for this game.
         </p>
 
         <ul v-else class="mod-grid">
@@ -135,7 +135,7 @@ onMounted(async () => {
       :open="profilePickerOpen"
       :profiles="logoutPickerProfiles()"
       title="Switch profile before logging out"
-      description="Choose which profile should be active after you sign out."
+      description="Choose which profile is active after you sign out."
       @close="profilePickerOpen = false"
       @select="handleLogoutProfileSelect"
     />

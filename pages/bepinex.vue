@@ -93,7 +93,7 @@ onMounted(async () => {
       <section class="panel">
         <div v-if="phase === 'checking' || loading" class="state">
           <span class="spinner" aria-hidden="true" />
-          Checking BepInEx installation…
+          BepInEx check in progress…
         </div>
 
         <div v-else-if="phase === 'installing' || installing" class="state">
@@ -103,7 +103,7 @@ onMounted(async () => {
 
         <div v-else-if="phase === 'wineWarning'" class="warning">
           <p class="warning-text">
-            BepInEx was installed, but Modkist could not fully configure your
+            BepInEx is installed, but Modkist did not fully configure your
             Wine prefix for mod loading.
           </p>
           <p
@@ -118,7 +118,7 @@ onMounted(async () => {
         </div>
 
         <div v-else class="error-state">
-          <p class="error">{{ error || "Could not verify BepInEx." }}</p>
+          <p class="error">{{ error || "The BepInEx check failed." }}</p>
           <button type="button" class="retry-button" @click="retry">
             Try again
           </button>
