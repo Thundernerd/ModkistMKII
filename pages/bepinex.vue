@@ -125,8 +125,8 @@ onMounted(async () => {
         <div v-else-if="phase === 'wineWarning'" class="warning">
           <p class="warning-text">
             BepInEx is installed. Modkist did not find a Wine prefix for mod
-            loading. Launch Zeepkist one time with Steam, Proton, or CrossOver.
-            Then the prefix exists. Then retry here.
+            loading. Launch Zeepkist one time with Steam, Proton, CrossOver, or
+            GameHub. Then the prefix exists. Then retry here.
           </p>
           <p
             v-if="wineFeedback"

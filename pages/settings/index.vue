@@ -485,9 +485,10 @@ function profileKindLabel(kind: string) {
       <template v-if="showWineSetup">
         <h3 class="panel-subtitle">Wine prefix</h3>
         <p class="hint panel-desc">
-          On Linux and macOS, Modkist uses the Wine or Proton prefix of the
-          game to configure winhttp for BepInEx. If the prefix is missing,
-          launch Zeepkist one time. Then configure the prefix here.
+          On Linux and macOS, Modkist uses the Wine, Proton, or GameHub
+          prefix of the game to configure winhttp for BepInEx. If the
+          prefix is missing, launch Zeepkist one time. Then configure the
+          prefix here.
         </p>
         <div class="action-row">
           <button
