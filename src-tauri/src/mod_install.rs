@@ -15,7 +15,13 @@ use crate::mod_folder::{
     rename_install_folder,
 };
 use crate::modio_api::ModObject;
-use crate::profiles::{active_profile_install_blocked, active_profile_is_user, profile_archives_root};
+use crate::profiles::{
+    active_profile_info, active_profile_install_blocked, active_profile_is_custom,
+    active_profile_is_user, directory_has_any_file, profile_archives_root,
+    read_active_profile_mods_manifest, remove_active_profile_manifest_mod,
+    sync_active_profile_manifest_from_live, upsert_active_profile_manifest_entries,
+    ManifestModEntry, ProfileKind,
+};
 use crate::subscription_sync_settings::{
     clear_failed_sync_mod, count_dependency_sync_failures, is_dependency_sync_failure,
     list_failed_sync_mods, read_failed_sync_mod_ids, read_ignored_sync_mod_ids,
@@ -236,6 +242,16 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
         let Some((mod_id, file_id)) = parse_install_folder_name(&name) else {
             continue;
         };
+
+        let path = entry.path();
+        if !directory_has_any_file(&path) {
+            log::warn!(
+                "Removing empty install folder that looked installed: {}",
+                path.display()
+            );
+            let _ = fs::remove_dir_all(&path);
+            continue;
+        }
 
         records.push(InstalledModRecord {
             mod_id,
@@ -701,16 +717,26 @@ async fn install_single_mod(
     fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
     let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
 
-    download_modfile(
-        state,
-        &download_url,
-        &download_path,
-        Some(expected_size),
-    )
-    .await?;
+    let install_result = async {
+        download_modfile(
+            state,
+            &download_url,
+            &download_path,
+            Some(expected_size),
+        )
+        .await?;
+        install_downloaded_mod(&download_path, &target_dir, &filename)?;
+        Ok::<(), String>(())
+    }
+    .await;
 
-    install_downloaded_mod(&download_path, &target_dir, &filename)?;
     let _ = fs::remove_file(&download_path);
+
+    if let Err(message) = install_result {
+        let _ = fs::remove_dir_all(&target_dir);
+        return Err(message);
+    }
+
     state.invalidate_mod_cache(mod_id);
 
     Ok(())
@@ -1082,6 +1108,9 @@ async fn install_mod_internal(
     )
     .await?;
     result.dependency_failure_count = result.failed_dependencies.len() as u32;
+    if !result.installed.is_empty() {
+        let _ = sync_active_profile_manifest_from_live(app, state, game_dir);
+    }
     Ok(result)
 }
 
@@ -1224,9 +1253,127 @@ async fn sync_subscribed_mods_inner(
         Ok(mut summary) => {
             summary.dependency_failure_count = count_dependency_sync_failures(app)
                 .max(summary.failed_dependencies.len() as u32);
+            if !summary.installed.is_empty() {
+                let _ = sync_active_profile_manifest_from_live(app, state, &game_dir);
+            }
             Ok(summary)
         }
         Err(message) => Err(message),
+    }
+}
+
+async fn reconcile_custom_profile_mods_inner(
+    app: &AppHandle,
+    state: &ModioState,
+) -> Result<InstallModResult, String> {
+    log::info!("Starting custom profile mod reconcile");
+    if !active_profile_is_custom(app, state)? {
+        return Ok(InstallModResult {
+            installed: Vec::new(),
+            skipped: Vec::new(),
+            dependency_failure_count: 0,
+            failed_dependencies: Vec::new(),
+        });
+    }
+
+    if active_profile_install_blocked(app, state)? {
+        return Err("Mod install is disabled for the Vanilla profile. Switch to another profile.".into());
+    }
+
+    ensure_game_not_running()?;
+    let game_dir = game_directory(app)?;
+    ensure_install_prerequisites(&game_dir)?;
+
+    let manifest = read_active_profile_mods_manifest(app, state)?;
+    let records = scan_installed_mods(&game_dir)?;
+    let mut installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
+
+    let mut installed = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failed_dependencies = Vec::new();
+
+    for entry in &manifest.mods {
+        if installed_ids.contains(&entry.mod_id) {
+            skipped.push(entry.mod_id);
+            continue;
+        }
+
+        log::info!(
+            "Reinstalling missing custom-profile mod {} (file {})",
+            entry.mod_id,
+            entry.file_id
+        );
+        match install_mod_internal(app, state, &game_dir, entry.mod_id, Some(entry.file_id)).await
+        {
+            Ok(result) => {
+                installed.extend(result.installed.iter().copied());
+                skipped.extend(result.skipped.iter().copied());
+                failed_dependencies.extend(result.failed_dependencies.iter().copied());
+                for mod_id in result.installed {
+                    installed_ids.insert(mod_id);
+                }
+            }
+            Err(message) => {
+                log::warn!(
+                    "Did not reinstall custom-profile mod {}: {message}",
+                    entry.mod_id
+                );
+                failed_dependencies.push(entry.mod_id);
+            }
+        }
+    }
+
+    // Refresh manifest from disk, then keep pinned entries that still failed to install.
+    let _ = sync_active_profile_manifest_from_live(app, state, &game_dir);
+    let records_after = scan_installed_mods(&game_dir).unwrap_or_default();
+    let present_after: HashSet<u64> = records_after.iter().map(|record| record.mod_id).collect();
+    let still_missing: Vec<ManifestModEntry> = manifest
+        .mods
+        .iter()
+        .filter(|entry| !present_after.contains(&entry.mod_id))
+        .cloned()
+        .collect();
+    let _ = upsert_active_profile_manifest_entries(app, state, &still_missing);
+
+    installed.sort_unstable();
+    installed.dedup();
+    skipped.sort_unstable();
+    skipped.dedup();
+    failed_dependencies.sort_unstable();
+    failed_dependencies.dedup();
+
+    log::info!(
+        "Custom profile reconcile complete: {} installed, {} skipped, {} failed",
+        installed.len(),
+        skipped.len(),
+        failed_dependencies.len()
+    );
+
+    Ok(InstallModResult {
+        installed,
+        skipped,
+        dependency_failure_count: failed_dependencies.len() as u32,
+        failed_dependencies,
+    })
+}
+
+/// Ensures the active profile's managed mods are present on disk.
+/// Account profile → subscription sync. Custom profile → manifest reconcile.
+#[tauri::command]
+pub async fn ensure_active_profile_mods(
+    app: AppHandle,
+    state: State<'_, ModioState>,
+) -> Result<InstallModResult, String> {
+    let info = active_profile_info(&app, &state)?;
+    match info.kind {
+        ProfileKind::Vanilla => Ok(InstallModResult {
+            installed: Vec::new(),
+            skipped: Vec::new(),
+            dependency_failure_count: 0,
+            failed_dependencies: Vec::new(),
+        }),
+        ProfileKind::User => sync_subscribed_mods_inner(&app, &state).await,
+        ProfileKind::Custom => reconcile_custom_profile_mods_inner(&app, &state).await,
     }
 }
 
@@ -1445,6 +1592,7 @@ pub async fn uninstall_mod(
     }
 
     remove_installed_mod_folders(&game_dir, mod_id)?;
+    let _ = remove_active_profile_manifest_mod(&app, &state, mod_id);
     log::info!("Uninstalled mod {mod_id}");
     Ok(())
 }
@@ -1505,7 +1653,9 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let game_dir = root.join("game");
         let mods_dir = kind_root_dir(&game_dir, InstalledModKind::Plugin);
-        fs::create_dir_all(mods_dir.join("12345_67890_Cool Mod")).unwrap();
+        let folder = mods_dir.join("12345_67890_Cool Mod");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("mod.dll"), b"test").unwrap();
 
         let records = scan_installed_mods(&game_dir).unwrap();
 
@@ -1521,7 +1671,9 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let game_dir = root.join("game");
         let mods_dir = kind_root_dir(&game_dir, InstalledModKind::Plugin);
-        fs::create_dir_all(mods_dir.join("12345_67890")).unwrap();
+        let managed = mods_dir.join("12345_67890");
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(managed.join("mod.dll"), b"test").unwrap();
         fs::create_dir_all(mods_dir.join("MyManualMod")).unwrap();
         fs::write(mods_dir.join("loose.dll"), b"test").unwrap();
 
@@ -1536,12 +1688,30 @@ mod tests {
     }
 
     #[test]
+    fn scan_installed_mods_ignores_empty_named_folders() {
+        let root = std::env::temp_dir().join("modkist-mod-install-empty");
+        let _ = fs::remove_dir_all(&root);
+        let game_dir = root.join("game");
+        let mods_dir = kind_root_dir(&game_dir, InstalledModKind::Plugin);
+        let empty = mods_dir.join("12345_67890_Empty");
+        fs::create_dir_all(&empty).unwrap();
+
+        let records = scan_installed_mods(&game_dir).unwrap();
+
+        assert!(records.is_empty());
+        assert!(!empty.exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn removes_installed_record_folder_by_name() {
         let root = std::env::temp_dir().join("modkist-mod-install-cleanup");
         let _ = fs::remove_dir_all(&root);
         let game_dir = root.join("game");
         let folder = kind_root_dir(&game_dir, InstalledModKind::Plugin).join("12345_67890");
         fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("mod.dll"), b"test").unwrap();
 
         let record = InstalledModRecord {
             mod_id: 12345,

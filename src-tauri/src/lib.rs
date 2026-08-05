@@ -67,9 +67,9 @@ use game_process::game_running_status;
 use launch_options::{get_startup_launch_options, LaunchOptions};
 use logging::log_directory_path;
 use mod_install::{
-    cancel_subscription_sync, get_mod_install_state, install_mod, list_installed_mod_records,
-    list_installed_mods, refresh_installed_mods, sync_subscribed_mods, uninstall_mod,
-    unsubscribe_failed_sync_mod,
+    cancel_subscription_sync, ensure_active_profile_mods, get_mod_install_state, install_mod,
+    list_installed_mod_records, list_installed_mods, refresh_installed_mods, sync_subscribed_mods,
+    uninstall_mod, unsubscribe_failed_sync_mod,
 };
 use profiles::{
     create_profile, delete_profile, get_active_profile, list_profiles,
@@ -197,6 +197,7 @@ pub fn run() {
             install_mod,
             cancel_subscription_sync,
             sync_subscribed_mods,
+            ensure_active_profile_mods,
             uninstall_mod,
             list_profiles,
             get_active_profile,
