@@ -2,7 +2,7 @@
 import type { InstallUiStatus } from "~/composables/useModInstall";
 import type { ModSummary } from "~/composables/useMods";
 
-defineProps<{
+const props = defineProps<{
   mod: ModSummary;
   installStatus?: InstallUiStatus;
   canUninstall?: boolean;
@@ -15,6 +15,11 @@ const emit = defineEmits<{
   uninstall: [];
 }>();
 
+const isBlueprint = computed(
+  () =>
+    props.mod.tags.includes("Blueprint") && !props.mod.tags.includes("Plugin"),
+);
+
 function formatDate(iso: string) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString();
@@ -26,7 +31,7 @@ function formatCount(value: number) {
 </script>
 
 <template>
-  <article class="mod-card">
+  <article class="mod-card" :class="{ 'mod-card--blueprint': isBlueprint }">
     <NuxtLink :to="`/mods/${mod.id}`" class="mod-card-link">
       <div class="mod-thumb">
         <img
@@ -96,6 +101,14 @@ function formatCount(value: number) {
   transform: translateY(-2px);
   border-color: rgba(var(--modio-accent-rgb), 0.45);
   box-shadow: var(--modio-shadow);
+}
+
+.mod-card--blueprint {
+  border-color: rgba(var(--modio-blueprint-rgb), 0.55);
+}
+
+.mod-card--blueprint:hover {
+  border-color: rgba(var(--modio-blueprint-rgb), 0.85);
 }
 
 .mod-card-link {

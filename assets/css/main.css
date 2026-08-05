@@ -13,6 +13,8 @@
   --modio-text-subtle: rgba(244, 244, 245, 0.55);
   --modio-danger: #f87171;
   --modio-success: #4ade80;
+  --modio-blueprint: #38bdf8;
+  --modio-blueprint-rgb: 56, 189, 248;
   --modio-radius: 0.5rem;
   --modio-radius-sm: 0.375rem;
   --modio-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
