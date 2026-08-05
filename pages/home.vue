@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useModFilters } from "~/composables/useModFilters";
+import { invoke } from "~/utils/tauri";
 
 definePageMeta({ layout: "app" });
 
@@ -41,6 +42,8 @@ const {
   profileInstallBlocked,
   gameRunning,
   gameRunningMessage,
+  refreshInstalled,
+  resetSessionSync,
   syncSubscribedModsIfNeeded,
 } = useModInstall();
 
@@ -50,6 +53,8 @@ const {
   modioStatusChecked,
   refreshModioStatus,
 } = useModioStatus();
+
+const refreshing = ref(false);
 
 async function handleInstall(modId: number) {
   await installMod(modId);
@@ -64,6 +69,27 @@ async function handleUninstall(modId: number, modName: string) {
   await uninstallMod(modId);
 }
 
+async function refreshMods() {
+  if (!modioConfigured.value || refreshing.value) return;
+  refreshing.value = true;
+  try {
+    await invoke("clear_mod_api_cache");
+    checkingUpdates.value = true;
+    try {
+      await Promise.all([
+        initialize(),
+        refreshInstalled({ force: true }),
+      ]);
+    } finally {
+      checkingUpdates.value = false;
+    }
+    resetSessionSync();
+    await syncSubscribedModsIfNeeded();
+  } finally {
+    refreshing.value = false;
+  }
+}
+
 onMounted(async () => {
   await refreshModioStatus();
   if (modioConfigured.value) {
@@ -76,7 +102,27 @@ onMounted(async () => {
 <template>
   <div class="mods-page">
     <header class="page-header">
-      <h1>Mods</h1>
+      <div class="page-header-row">
+        <h1>Mods</h1>
+        <button
+          type="button"
+          class="btn-secondary page-header-action"
+          :disabled="
+            !modioConfigured ||
+            refreshing ||
+            loading ||
+            checkingUpdates ||
+            syncingSubscriptions
+          "
+          @click="refreshMods"
+        >
+          {{
+            refreshing || loading || checkingUpdates || syncingSubscriptions
+              ? "Refreshing…"
+              : "Refresh"
+          }}
+        </button>
+      </div>
     </header>
 
     <div v-if="!modioStatusChecked" class="state mods-loading">
@@ -184,6 +230,17 @@ onMounted(async () => {
 <style scoped>
 .page-header {
   margin-bottom: 1.25rem;
+}
+
+.page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-header-action {
+  flex-shrink: 0;
 }
 
 .page-header h1 {
