@@ -403,6 +403,7 @@ function profileKindLabel(kind: string) {
           v-for="profile in profiles"
           :key="profile.id"
           class="profile-list-item"
+          :class="{ 'profile-list-item--active': profile.isActive }"
         >
           <div class="profile-list-main">
             <span class="profile-list-name">{{ profile.name }}</span>
@@ -659,6 +660,11 @@ function profileKindLabel(kind: string) {
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--modio-border);
   border-radius: var(--modio-radius-sm);
+}
+
+.profile-list-item--active {
+  border-color: var(--modio-accent);
+  background: rgba(var(--modio-accent-rgb), 0.08);
 }
 
 .profile-list-main {
