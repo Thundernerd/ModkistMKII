@@ -1,5 +1,9 @@
 import { invoke } from "~/utils/tauri";
 import { logger } from "~/utils/logger";
+import {
+  useInstallHistory,
+  type InstallHistoryAction,
+} from "~/composables/useInstallHistory";
 import { useNotifications } from "~/composables/useNotifications";
 
 export type InstallUiStatus =
@@ -139,6 +143,20 @@ function subscriptionSyncFailureToast(message: string): {
 
 function installedModName(modId: number) {
   return installedMods.value.find((mod) => mod.modId === modId)?.name ?? `Mod ${modId}`;
+}
+
+function installedModLogo(modId: number) {
+  return installedMods.value.find((mod) => mod.modId === modId)?.logoUrl ?? "";
+}
+
+function installedModFileId(modId: number) {
+  return installedMods.value.find((mod) => mod.modId === modId)?.fileId ?? null;
+}
+
+function historyActionFromPriorStatus(
+  status: ModInstallState["status"] | undefined,
+): InstallHistoryAction {
+  return status === "updateAvailable" ? "updated" : "installed";
 }
 
 function formatCountLabel(count: number, singular: string, plural?: string) {
@@ -475,12 +493,65 @@ async function seedInstalledFromDisk() {
 
 export function useModInstall() {
   const { pushNotification } = useNotifications();
+  const { recordInstall } = useInstallHistory();
   const {
     installBlocked: profileInstallBlocked,
     refreshProfiles,
     switching: profileSwitching,
   } = useProfiles();
   const { gameRunning, gameRunningMessage } = useGameProcess();
+
+  function recordHistoryEntry(options: {
+    modId: number;
+    action: InstallHistoryAction;
+    fileId?: number | null;
+    versionLabel?: string;
+    dependencyCount?: number;
+  }) {
+    recordInstall({
+      modId: options.modId,
+      name: installedModName(options.modId),
+      logoUrl: installedModLogo(options.modId),
+      action: options.action,
+      fileId: options.fileId ?? installedModFileId(options.modId),
+      versionLabel: options.versionLabel,
+      dependencyCount: options.dependencyCount ?? 0,
+    });
+  }
+
+  function recordInstallResultHistory(
+    modId: number,
+    result: InstallModResult,
+    wasUpdate: boolean,
+    options?: { fileId?: number; versionLabel?: string },
+  ) {
+    const dependencyIds = result.installed.filter((id) => id !== modId);
+    for (const dependencyId of dependencyIds) {
+      recordHistoryEntry({
+        modId: dependencyId,
+        action: "installed",
+      });
+    }
+    recordHistoryEntry({
+      modId,
+      action: wasUpdate ? "updated" : "installed",
+      fileId: options?.fileId,
+      versionLabel: options?.versionLabel,
+      dependencyCount: dependencyIds.length,
+    });
+  }
+
+  function recordSyncResultHistory(
+    result: InstallModResult,
+    priorStatuses: Record<number, ModInstallState["status"]>,
+  ) {
+    for (const modId of result.installed) {
+      recordHistoryEntry({
+        modId,
+        action: historyActionFromPriorStatus(priorStatuses[modId]),
+      });
+    }
+  }
 
   async function refreshInstalled(options?: { force?: boolean }) {
     const force = options?.force ?? false;
@@ -581,6 +652,10 @@ export function useModInstall() {
       const generation = subscriptionSyncGeneration;
       syncingSubscriptions.value = true;
       const isCustom = activeProfile.kind === "custom";
+      const priorStatuses: Record<number, ModInstallState["status"]> = {};
+      for (const [id, state] of Object.entries(installStates.value)) {
+        priorStatuses[Number(id)] = state.status;
+      }
       logger.info(
         isCustom
           ? "Starting custom profile mod reconcile"
@@ -599,6 +674,7 @@ export function useModInstall() {
           result,
         );
         await refreshInstalled({ force: true });
+        recordSyncResultHistory(result, priorStatuses);
         if (isCustom) {
           notifyProfileReconcileComplete(pushNotification, result);
         } else {
@@ -718,6 +794,10 @@ export function useModInstall() {
       await refreshInstalled({ force: true });
       installEnvironmentError.value = "";
       logger.info(`Install finished for mod ${modId}`, result);
+      recordInstallResultHistory(modId, result, wasUpdate, {
+        fileId,
+        versionLabel: options?.versionLabel,
+      });
       if (!options?.suppressSuccessToast) {
         notifyInstallSuccess(
           pushNotification,
