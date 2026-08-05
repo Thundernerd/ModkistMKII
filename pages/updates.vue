@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { formatRelativeAgo } from "~/utils/formatRelative";
+import type { InstallHistoryEntry } from "~/composables/useInstallHistory";
 
 definePageMeta({ layout: "app" });
 
@@ -19,6 +21,8 @@ const {
   gameRunning,
   gameRunningMessage,
 } = useModInstall();
+
+const { history } = useInstallHistory();
 
 const loading = ref(!installReady.value);
 const pageError = ref("");
@@ -56,6 +60,30 @@ async function handleUpdateAll() {
   await updateAllMods();
 }
 
+function actionLabel(action: InstallHistoryEntry["action"]) {
+  return action === "updated" ? "Updated" : "Installed";
+}
+
+function historyMeta(entry: InstallHistoryEntry) {
+  const parts: string[] = [
+    formatRelativeAgo(new Date(entry.occurredAt).toISOString()),
+  ];
+
+  if (entry.versionLabel) {
+    parts.push(entry.versionLabel);
+  } else if (entry.fileId != null) {
+    parts.push(`file ${entry.fileId}`);
+  }
+
+  if (entry.dependencyCount > 0) {
+    parts.push(
+      `+${entry.dependencyCount} dependenc${entry.dependencyCount === 1 ? "y" : "ies"}`,
+    );
+  }
+
+  return parts.filter(Boolean).join(" · ");
+}
+
 onMounted(loadUpdates);
 </script>
 
@@ -66,7 +94,7 @@ onMounted(loadUpdates);
         <div>
           <h1>Updates</h1>
           <p class="page-subtitle">
-            Installed mods with a newer version on mod.io.
+            Pending updates and recent installs from this session.
           </p>
         </div>
 
@@ -104,54 +132,106 @@ onMounted(loadUpdates);
       Update check in progress…
     </div>
 
-    <div
-      v-else-if="!installEnvironmentError && updateCount === 0"
-      class="hint empty-state"
+    <template v-else>
+      <section class="pending-section" aria-label="Pending updates">
+        <div
+          v-if="!installEnvironmentError && updateCount === 0"
+          class="hint empty-state"
+        >
+          All installed mods are up to date.
+          <NuxtLink to="/installed">View installed mods</NuxtLink>
+        </div>
+
+        <ul v-else-if="modsWithUpdates.length" class="updates-list">
+          <li
+            v-for="mod in modsWithUpdates"
+            :key="`${mod.modId}-${mod.fileId}`"
+          >
+            <article class="updates-card">
+              <NuxtLink :to="`/mods/${mod.modId}`" class="updates-card-link">
+                <div class="updates-thumb">
+                  <img
+                    v-if="mod.logoUrl"
+                    :src="mod.logoUrl"
+                    :alt="`${mod.name} logo`"
+                    loading="lazy"
+                  />
+                  <div v-else class="updates-thumb-fallback" />
+                </div>
+
+                <div class="updates-info">
+                  <h2>{{ mod.name }}</h2>
+                  <p class="updates-summary">{{ mod.summary }}</p>
+                  <p class="updates-meta">
+                    Installed file {{ mod.fileId }}
+                    <span v-if="mod.latestFileId">
+                      · Latest {{ mod.latestFileId }}
+                    </span>
+                  </p>
+                </div>
+              </NuxtLink>
+
+              <div class="updates-actions">
+                <ModInstallButton
+                  :mod-id="mod.modId"
+                  :status="getUiStatus(mod.modId)"
+                  :error="getInstallError(mod.modId)"
+                  @install="handleInstall(mod.modId)"
+                />
+              </div>
+            </article>
+          </li>
+        </ul>
+      </section>
+    </template>
+
+    <section
+      v-if="!loading"
+      class="history-section"
+      aria-label="Recent activity"
     >
-      All installed mods are up to date.
-      <NuxtLink to="/installed">View installed mods</NuxtLink>
-    </div>
+      <header class="history-header">
+        <h2>Recent activity</h2>
+        <p class="history-subtitle">
+          Session only — cleared when Modkist quits.
+        </p>
+      </header>
 
-    <ul v-else-if="modsWithUpdates.length" class="updates-list">
-      <li
-        v-for="mod in modsWithUpdates"
-        :key="`${mod.modId}-${mod.fileId}`"
-      >
-        <article class="updates-card">
-          <NuxtLink :to="`/mods/${mod.modId}`" class="updates-card-link">
-            <div class="updates-thumb">
-              <img
-                v-if="mod.logoUrl"
-                :src="mod.logoUrl"
-                :alt="`${mod.name} logo`"
-                loading="lazy"
-              />
-              <div v-else class="updates-thumb-fallback" />
-            </div>
+      <div v-if="history.length === 0" class="hint empty-state">
+        No installs or updates yet this session.
+      </div>
 
-            <div class="updates-info">
-              <h2>{{ mod.name }}</h2>
-              <p class="updates-summary">{{ mod.summary }}</p>
-              <p class="updates-meta">
-                Installed file {{ mod.fileId }}
-                <span v-if="mod.latestFileId">
-                  · Latest {{ mod.latestFileId }}
-                </span>
-              </p>
-            </div>
-          </NuxtLink>
+      <ul v-else class="updates-list">
+        <li v-for="entry in history" :key="entry.id">
+          <article class="history-card">
+            <NuxtLink :to="`/mods/${entry.modId}`" class="updates-card-link">
+              <div class="updates-thumb">
+                <img
+                  v-if="entry.logoUrl"
+                  :src="entry.logoUrl"
+                  :alt="`${entry.name} logo`"
+                  loading="lazy"
+                />
+                <div v-else class="updates-thumb-fallback" />
+              </div>
 
-          <div class="updates-actions">
-            <ModInstallButton
-              :mod-id="mod.modId"
-              :status="getUiStatus(mod.modId)"
-              :error="getInstallError(mod.modId)"
-              @install="handleInstall(mod.modId)"
-            />
-          </div>
-        </article>
-      </li>
-    </ul>
+              <div class="updates-info">
+                <div class="history-title-row">
+                  <h3>{{ entry.name }}</h3>
+                  <span
+                    class="history-badge"
+                    :data-action="entry.action"
+                  >
+                    {{ actionLabel(entry.action) }}
+                  </span>
+                </div>
+                <p class="updates-meta">{{ historyMeta(entry) }}</p>
+              </div>
+            </NuxtLink>
+          </article>
+        </li>
+      </ul>
+    </section>
   </div>
 </template>
 
@@ -220,6 +300,33 @@ onMounted(loadUpdates);
   }
 }
 
+.pending-section {
+  margin-bottom: 0.25rem;
+}
+
+.history-section {
+  margin-top: 1.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--modio-border);
+}
+
+.history-header {
+  margin-bottom: 1rem;
+}
+
+.history-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.history-subtitle {
+  margin: 0.3rem 0 0;
+  color: var(--modio-text-muted);
+  font-size: 0.85rem;
+}
+
 .updates-list {
   list-style: none;
   margin: 0;
@@ -229,15 +336,24 @@ onMounted(loadUpdates);
   gap: 0.85rem;
 }
 
-.updates-card {
+.updates-card,
+.history-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 1rem;
   align-items: center;
   padding: 0.9rem 1rem;
   border-radius: var(--modio-radius);
-  border: 1px solid rgba(var(--modio-accent-rgb), 0.28);
   background: var(--modio-surface);
+}
+
+.updates-card {
+  border: 1px solid rgba(var(--modio-accent-rgb), 0.28);
+}
+
+.history-card {
+  grid-template-columns: minmax(0, 1fr);
+  border: 1px solid var(--modio-border);
 }
 
 .updates-card-link {
@@ -273,10 +389,37 @@ onMounted(loadUpdates);
   );
 }
 
-.updates-info h2 {
+.updates-info h2,
+.updates-info h3 {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
+}
+
+.history-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.history-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: var(--modio-radius-sm);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: var(--modio-surface-raised);
+  color: var(--modio-text-muted);
+  border: 1px solid var(--modio-border);
+}
+
+.history-badge[data-action="updated"] {
+  color: var(--modio-accent);
+  border-color: rgba(var(--modio-accent-rgb), 0.35);
+  background: rgba(var(--modio-accent-rgb), 0.1);
 }
 
 .updates-summary {
