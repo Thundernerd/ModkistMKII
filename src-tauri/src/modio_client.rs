@@ -1098,10 +1098,8 @@ fn mod_matches_game(mod_: &ModObject, game_id: u64) -> bool {
 fn append_mod_list_page(
     state: &ModioState,
     game_id: u64,
-    public_page_ids: &HashSet<u64>,
     seen: &mut HashSet<u64>,
     mods: &mut Vec<ModSummary>,
-    page_extras: &mut u32,
     list: ListResponse<ModObject>,
 ) {
     for mod_ in list.data {
@@ -1109,14 +1107,13 @@ fn append_mod_list_page(
             continue;
         }
         seed_mod_cache(state, &mod_);
-        if !public_page_ids.contains(&mod_.id) {
-            *page_extras = page_extras.saturating_add(1);
-        }
         mods.push(mod_to_summary(mod_));
     }
 }
 
 /// Merges a public browse page with authenticated `/me/mods` and `/me/subscribed` pages.
+/// OAuth lists are only passed on the first browse page (`offset == 0`); later pages are public-only.
+/// `total` is always the public catalog size so pagination is not inflated by first-page extras.
 fn merge_mod_list_results(
     state: &ModioState,
     game_id: u64,
@@ -1124,47 +1121,20 @@ fn merge_mod_list_results(
     user_mods: Option<ListResponse<ModObject>>,
     subscriptions: Option<ListResponse<ModObject>>,
 ) -> ModListResult {
-    let public_total = public.result_total;
-    let public_page_ids: HashSet<u64> = public.data.iter().map(|mod_| mod_.id).collect();
+    let total = public.result_total;
     let mut seen = HashSet::new();
     let mut mods = Vec::new();
-    let mut page_extras = 0u32;
 
-    append_mod_list_page(
-        state,
-        game_id,
-        &public_page_ids,
-        &mut seen,
-        &mut mods,
-        &mut page_extras,
-        public,
-    );
+    append_mod_list_page(state, game_id, &mut seen, &mut mods, public);
 
     if let Some(list) = user_mods {
-        append_mod_list_page(
-            state,
-            game_id,
-            &public_page_ids,
-            &mut seen,
-            &mut mods,
-            &mut page_extras,
-            list,
-        );
+        append_mod_list_page(state, game_id, &mut seen, &mut mods, list);
     }
 
     if let Some(list) = subscriptions {
-        append_mod_list_page(
-            state,
-            game_id,
-            &public_page_ids,
-            &mut seen,
-            &mut mods,
-            &mut page_extras,
-            list,
-        );
+        append_mod_list_page(state, game_id, &mut seen, &mut mods, list);
     }
 
-    let total = public_total.saturating_add(page_extras);
     ModListResult { mods, total }
 }
 
@@ -1182,27 +1152,34 @@ pub async fn list_mods(
         .await
         .map_err(format_api_error)?;
 
-    let (user_list, subscriptions) = if state.session_token().is_some() {
-        let token = state.require_token()?;
-        log::debug!("Listing mods: merging public browse with /me/mods and /me/subscribed");
-        let user_list = state
-            .with_oauth_request("get_user_mods", || async {
-                api.get_user_mods(&token, game_id, &query)
-                    .await
-                    .map_err(format_api_error)
-            })
-            .await?;
-        let subscriptions = state
-            .with_oauth_request("get_user_subscriptions", || async {
-                api.get_user_subscriptions(&token, game_id, &query)
-                    .await
-                    .map_err(format_api_error)
-            })
-            .await?;
-        (Some(user_list), Some(subscriptions))
-    } else {
-        (None, None)
-    };
+    // Inject owned/subscribed extras only on the first page so later public pages
+    // cannot reintroduce the same IDs as "extras" under a fresh per-request seen set.
+    let (user_list, subscriptions) =
+        if params.offset == 0 && state.session_token().is_some() {
+            let token = state.require_token()?;
+            let mut oauth_query = query.clone();
+            oauth_query.offset = 0;
+            log::debug!(
+                "Listing mods: merging first public page with /me/mods and /me/subscribed"
+            );
+            let user_list = state
+                .with_oauth_request("get_user_mods", || async {
+                    api.get_user_mods(&token, game_id, &oauth_query)
+                        .await
+                        .map_err(format_api_error)
+                })
+                .await?;
+            let subscriptions = state
+                .with_oauth_request("get_user_subscriptions", || async {
+                    api.get_user_subscriptions(&token, game_id, &oauth_query)
+                        .await
+                        .map_err(format_api_error)
+                })
+                .await?;
+            (Some(user_list), Some(subscriptions))
+        } else {
+            (None, None)
+        };
 
     Ok(merge_mod_list_results(
         &state,
