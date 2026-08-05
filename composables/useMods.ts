@@ -60,8 +60,10 @@ export function useMods() {
   const offset = ref(0);
 
   let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+  let fetchGeneration = 0;
 
   async function fetchMods(append = false) {
+    const generation = ++fetchGeneration;
     loading.value = true;
 
     try {
@@ -84,13 +86,24 @@ export function useMods() {
         },
       });
 
+      if (generation !== fetchGeneration) {
+        return;
+      }
+
       if (append) {
-        mods.value = [...mods.value, ...result.mods];
+        const seen = new Set(mods.value.map((mod) => mod.id));
+        mods.value = [
+          ...mods.value,
+          ...result.mods.filter((mod) => !seen.has(mod.id)),
+        ];
       } else {
         mods.value = result.mods;
       }
       total.value = result.total;
     } catch (err) {
+      if (generation !== fetchGeneration) {
+        return;
+      }
       const message = String(err);
       pushNotification({
         title: append ? "Did not load more mods" : "Did not load mods",
@@ -103,7 +116,9 @@ export function useMods() {
         total.value = 0;
       }
     } finally {
-      loading.value = false;
+      if (generation === fetchGeneration) {
+        loading.value = false;
+      }
     }
   }
 
@@ -122,12 +137,12 @@ export function useMods() {
   }
 
   function loadMore() {
-    if (loading.value || mods.value.length >= total.value) return;
+    if (loading.value || offset.value + DEFAULT_LIMIT >= total.value) return;
     offset.value += DEFAULT_LIMIT;
     return fetchMods(true);
   }
 
-  const hasMore = computed(() => mods.value.length < total.value);
+  const hasMore = computed(() => offset.value + DEFAULT_LIMIT < total.value);
 
   watch(sort, () => resetAndFetch());
   watch(sortDir, () => resetAndFetch());
