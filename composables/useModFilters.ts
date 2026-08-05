@@ -2,6 +2,8 @@ import type { ModSort, ModTypeFilter } from "~/composables/useMods";
 import { useMods } from "~/composables/useMods";
 import { useModTagOptions } from "~/composables/useModTagOptions";
 
+export type CategoryTagState = "off" | "in" | "not-in";
+
 export const MOD_TYPE_OPTIONS: { value: ModTypeFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "plugin", label: "Plugin" },
@@ -25,7 +27,8 @@ export function useModFilters() {
     loading,
     search,
     modType,
-    categoryTags,
+    categoryTagsIn,
+    categoryTagsNotIn,
     sort,
     sortDir,
     hasMore,
@@ -48,34 +51,55 @@ export function useModFilters() {
     return [];
   });
 
+  const hasCategoryTagFilters = computed(
+    () =>
+      categoryTagsIn.value.length > 0 || categoryTagsNotIn.value.length > 0,
+  );
+
   const hasActiveFilters = computed(
     () =>
       Boolean(search.value.trim()) ||
       modType.value !== "all" ||
-      categoryTags.value.length > 0,
+      hasCategoryTagFilters.value,
   );
 
-  function isCategoryTagSelected(tag: string) {
-    return categoryTags.value.includes(tag);
+  function categoryTagState(tag: string): CategoryTagState {
+    if (categoryTagsIn.value.includes(tag)) return "in";
+    if (categoryTagsNotIn.value.includes(tag)) return "not-in";
+    return "off";
   }
 
   function toggleCategoryTag(tag: string) {
-    if (isCategoryTagSelected(tag)) {
-      categoryTags.value = categoryTags.value.filter((value) => value !== tag);
+    const state = categoryTagState(tag);
+
+    if (state === "off") {
+      categoryTagsIn.value = [...categoryTagsIn.value, tag];
       return;
     }
 
-    categoryTags.value = [...categoryTags.value, tag];
+    if (state === "in") {
+      categoryTagsIn.value = categoryTagsIn.value.filter(
+        (value) => value !== tag,
+      );
+      categoryTagsNotIn.value = [...categoryTagsNotIn.value, tag];
+      return;
+    }
+
+    categoryTagsNotIn.value = categoryTagsNotIn.value.filter(
+      (value) => value !== tag,
+    );
   }
 
   function clearCategoryTags() {
-    categoryTags.value = [];
+    categoryTagsIn.value = [];
+    categoryTagsNotIn.value = [];
   }
 
   function clearFilters() {
     search.value = "";
     modType.value = "all";
-    categoryTags.value = [];
+    categoryTagsIn.value = [];
+    categoryTagsNotIn.value = [];
   }
 
   async function initialize() {
@@ -88,7 +112,8 @@ export function useModFilters() {
     loading,
     search,
     modType,
-    categoryTags,
+    categoryTagsIn,
+    categoryTagsNotIn,
     sort,
     sortDir,
     hasMore,
@@ -96,7 +121,8 @@ export function useModFilters() {
     activeCategoryLabel,
     activeCategoryOptions,
     hasActiveFilters,
-    isCategoryTagSelected,
+    hasCategoryTagFilters,
+    categoryTagState,
     toggleCategoryTag,
     clearCategoryTags,
     clearFilters,

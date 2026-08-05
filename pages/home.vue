@@ -11,7 +11,6 @@ const {
   loading,
   search,
   modType,
-  categoryTags,
   sort,
   sortDir,
   hasMore,
@@ -19,6 +18,8 @@ const {
   activeCategoryLabel,
   activeCategoryOptions,
   hasActiveFilters,
+  hasCategoryTagFilters,
+  categoryTagState,
   toggleCategoryTag,
   clearCategoryTags,
   clearFilters,
@@ -96,7 +97,8 @@ onMounted(async () => {
         :category-options="activeCategoryOptions"
         :category-label="activeCategoryLabel"
         :has-active-filters="hasActiveFilters"
-        :selected-category-tags="categoryTags"
+        :has-category-tag-filters="hasCategoryTagFilters"
+        :category-tag-state="categoryTagState"
         @toggle-category-tag="toggleCategoryTag"
         @clear-category-tags="clearCategoryTags"
         @clear-filters="clearFilters"

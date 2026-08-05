@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import type { ModSort, ModTypeFilter } from "~/composables/useMods";
-import { MOD_TYPE_OPTIONS } from "~/composables/useModFilters";
+import {
+  MOD_TYPE_OPTIONS,
+  type CategoryTagState,
+} from "~/composables/useModFilters";
 
 const search = defineModel<string>("search", { required: true });
 const modType = defineModel<ModTypeFilter>("modType", { required: true });
 const sort = defineModel<ModSort>("sort", { required: true });
 const sortDir = defineModel<"asc" | "desc">("sortDir", { required: true });
 
-defineProps<{
+const props = defineProps<{
   categoryOptions: string[];
   categoryLabel: string;
   hasActiveFilters: boolean;
-  selectedCategoryTags: string[];
+  hasCategoryTagFilters: boolean;
+  categoryTagState: (tag: string) => CategoryTagState;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +23,21 @@ const emit = defineEmits<{
   clearCategoryTags: [];
   clearFilters: [];
 }>();
+
+function categoryTagClass(tag: string) {
+  const state = props.categoryTagState(tag);
+  return {
+    active: state === "in",
+    excluded: state === "not-in",
+  };
+}
+
+function categoryTagAriaLabel(tag: string) {
+  const state = props.categoryTagState(tag);
+  if (state === "in") return `${tag}, include`;
+  if (state === "not-in") return `${tag}, exclude`;
+  return tag;
+}
 </script>
 
 <template>
@@ -68,7 +87,7 @@ const emit = defineEmits<{
       <div class="mod-filters-categories-header">
         <span class="mod-filters-label">{{ categoryLabel }}</span>
         <button
-          v-if="selectedCategoryTags.length"
+          v-if="hasCategoryTagFilters"
           type="button"
           class="link-button"
           @click="emit('clearCategoryTags')"
@@ -82,8 +101,8 @@ const emit = defineEmits<{
           :key="tag"
           type="button"
           class="category-tag"
-          :class="{ active: selectedCategoryTags.includes(tag) }"
-          :aria-pressed="selectedCategoryTags.includes(tag)"
+          :class="categoryTagClass(tag)"
+          :aria-label="categoryTagAriaLabel(tag)"
           @click="emit('toggleCategoryTag', tag)"
         >
           {{ tag }}
@@ -234,6 +253,19 @@ const emit = defineEmits<{
   border-color: rgba(var(--modio-accent-rgb), 0.55);
   background: rgba(var(--modio-accent-rgb), 0.12);
   color: var(--modio-accent);
+}
+
+.category-tag.excluded {
+  border-color: color-mix(in srgb, var(--modio-danger) 55%, transparent);
+  background: color-mix(in srgb, var(--modio-danger) 12%, transparent);
+  color: var(--modio-danger);
+  text-decoration: line-through;
+}
+
+.category-tag.excluded:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--modio-danger) 70%, transparent);
+  background: color-mix(in srgb, var(--modio-danger) 18%, transparent);
+  color: var(--modio-danger);
 }
 
 @media (max-width: 640px) {
