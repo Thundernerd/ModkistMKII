@@ -127,7 +127,7 @@ function profileKindMeta(kind?: ProfileKind) {
     case "vanilla":
       return { label: "No mods", tone: "muted" as const };
     case "user":
-      return { label: "Account", tone: "accent" as const };
+      return { label: "Mod.io Account", tone: "accent" as const };
     case "custom":
       return { label: "Custom", tone: "neutral" as const };
     default:

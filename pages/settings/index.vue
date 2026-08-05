@@ -306,7 +306,7 @@ async function handleDeleteProfile(profileId: string, profileName: string) {
 
 function profileKindLabel(kind: string) {
   if (kind === "vanilla") return "Built-in";
-  if (kind === "user") return "Built-in";
+  if (kind === "user") return "Mod.io Account";
   return "Custom";
 }
 </script>
