@@ -66,8 +66,8 @@ const footerNav = computed(() => [
 
 const installBusy = computed(
   () =>
-    installingIds.value.size > 0 ||
-    uninstallingIds.value.size > 0 ||
+    installingIds.size > 0 ||
+    uninstallingIds.size > 0 ||
     syncingSubscriptions.value ||
     bulkUpdating.value ||
     checkingUpdates.value,

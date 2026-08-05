@@ -87,7 +87,7 @@ const copiedId = ref(false);
 const versionsOpen = ref(false);
 
 const installedFileId = computed(
-  () => installStates.value[modId.value]?.installedFileId ?? null,
+  () => installStates.get(modId.value)?.installedFileId ?? null,
 );
 
 const versionsInstallBlocked = computed(

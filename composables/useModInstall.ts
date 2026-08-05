@@ -354,11 +354,11 @@ interface ActiveProfileInfo {
   installBlocked: boolean;
 }
 
-const installStates = ref<Record<number, ModInstallState>>({});
+const installStates = reactive(new Map<number, ModInstallState>());
 const installedMods = ref<InstalledModEntry[]>([]);
-const installingIds = ref<Set<number>>(new Set());
-const uninstallingIds = ref<Set<number>>(new Set());
-const installErrors = ref<Record<number, string>>({});
+const installingIds = reactive(new Set<number>());
+const uninstallingIds = reactive(new Set<number>());
+const installErrors = reactive(new Map<number, string>());
 const installReady = ref(false);
 const installEnvironmentError = ref("");
 const checkingUpdates = ref(false);
@@ -375,29 +375,23 @@ const modsWithUpdates = computed(() =>
 const updateCount = computed(() => modsWithUpdates.value.length);
 
 function setUninstalling(modId: number, uninstalling: boolean) {
-  const next = new Set(uninstallingIds.value);
   if (uninstalling) {
-    next.add(modId);
+    uninstallingIds.add(modId);
   } else {
-    next.delete(modId);
+    uninstallingIds.delete(modId);
   }
-  uninstallingIds.value = next;
 }
 
 function setInstalling(modId: number, installing: boolean) {
-  const next = new Set(installingIds.value);
   if (installing) {
-    next.add(modId);
+    installingIds.add(modId);
   } else {
-    next.delete(modId);
+    installingIds.delete(modId);
   }
-  installingIds.value = next;
 }
 
 function clearInstallError(modId: number) {
-  if (!installErrors.value[modId]) return;
-  const { [modId]: _removed, ...rest } = installErrors.value;
-  installErrors.value = rest;
+  installErrors.delete(modId);
 }
 
 function mapInstallState(state: ModInstallState): ModInstallState {
@@ -424,11 +418,10 @@ function installStateFromEntry(entry: InstalledModEntry): ModInstallState {
 
 function applyInstalledList(entries: InstalledModEntry[]) {
   installedMods.value = entries;
-  const nextStates: Record<number, ModInstallState> = {};
+  installStates.clear();
   for (const mod of entries) {
-    nextStates[mod.modId] = installStateFromEntry(mod);
+    installStates.set(mod.modId, installStateFromEntry(mod));
   }
-  installStates.value = nextStates;
   installReady.value = true;
   installedModsLoaded.value = true;
 }
@@ -458,7 +451,7 @@ function resetStartupUpdateCheck() {
 function invalidateInstalledModsCache() {
   installedModsLoaded.value = false;
   installedMods.value = [];
-  installStates.value = {};
+  installStates.clear();
   installReady.value = false;
 }
 
@@ -472,19 +465,17 @@ async function listInstalledMods(): Promise<InstalledModEntry[]> {
 async function seedInstalledFromDisk() {
   try {
     const records = await invoke<InstalledModRecord[]>("list_installed_mod_records");
-    const next = { ...installStates.value };
     for (const record of records) {
-      if (next[record.modId]) continue;
-      next[record.modId] = {
+      if (installStates.has(record.modId)) continue;
+      installStates.set(record.modId, {
         status: "upToDate",
         installedFileId: record.fileId,
         latestFileId: record.fileId,
         kind: record.kind,
         canUninstall: false,
         uninstallBlockedBy: [],
-      };
+      });
     }
-    installStates.value = next;
     installReady.value = true;
   } catch (error) {
     logger.debug("Did not seed installed mods from disk", error);
@@ -582,7 +573,7 @@ export function useModInstall() {
         installEnvironmentError.value =
           error instanceof Error ? error.message : String(error);
         installedMods.value = [];
-        installStates.value = {};
+        installStates.clear();
       }
     })();
 
@@ -653,8 +644,8 @@ export function useModInstall() {
       syncingSubscriptions.value = true;
       const isCustom = activeProfile.kind === "custom";
       const priorStatuses: Record<number, ModInstallState["status"]> = {};
-      for (const [id, state] of Object.entries(installStates.value)) {
-        priorStatuses[Number(id)] = state.status;
+      for (const [id, state] of installStates) {
+        priorStatuses[id] = state.status;
       }
       logger.info(
         isCustom
@@ -721,7 +712,7 @@ export function useModInstall() {
   async function refreshInstallState(modId: number, options?: { force?: boolean }) {
     const force = options?.force ?? false;
     if (!force && installedModsLoaded.value) {
-      const existing = installStates.value[modId];
+      const existing = installStates.get(modId);
       if (existing) {
         return existing;
       }
@@ -729,7 +720,7 @@ export function useModInstall() {
       const entry = installedMods.value.find((mod) => mod.modId === modId);
       if (entry) {
         const state = installStateFromEntry(entry);
-        installStates.value = { ...installStates.value, [modId]: state };
+        installStates.set(modId, state);
         return state;
       }
 
@@ -742,7 +733,7 @@ export function useModInstall() {
           modId,
         }),
       );
-      installStates.value = { ...installStates.value, [modId]: state };
+      installStates.set(modId, state);
       installEnvironmentError.value = "";
       installReady.value = true;
       return state;
@@ -759,7 +750,7 @@ export function useModInstall() {
     options?: InstallModOptions,
   ) {
     clearInstallError(modId);
-    const wasUpdate = installStates.value[modId]?.status === "updateAvailable";
+    const wasUpdate = installStates.get(modId)?.status === "updateAvailable";
     setInstalling(modId, true);
     logger.info(`Installing mod ${modId}`, fileId ? { fileId } : undefined);
     try {
@@ -812,7 +803,7 @@ export function useModInstall() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`Install failed for mod ${modId}`, message);
-      installErrors.value = { ...installErrors.value, [modId]: message };
+      installErrors.set(modId, message);
       throw error;
     } finally {
       setInstalling(modId, false);
@@ -837,7 +828,7 @@ export function useModInstall() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(`Uninstall failed for mod ${modId}`, message);
-      installErrors.value = { ...installErrors.value, [modId]: message };
+      installErrors.set(modId, message);
       throw error;
     } finally {
       setUninstalling(modId, false);
@@ -848,10 +839,10 @@ export function useModInstall() {
     if (!installReady.value && installEnvironmentError.value) {
       return "unavailable";
     }
-    if (uninstallingIds.value.has(modId) || installingIds.value.has(modId)) {
+    if (uninstallingIds.has(modId) || installingIds.has(modId)) {
       return "installing";
     }
-    const state = installStates.value[modId];
+    const state = installStates.get(modId);
     if (profileSwitching.value) {
       if (state?.status === "upToDate") {
         return "upToDate";
@@ -877,15 +868,15 @@ export function useModInstall() {
     if (gameRunning.value) {
       return false;
     }
-    return installStates.value[modId]?.canUninstall ?? false;
+    return installStates.get(modId)?.canUninstall ?? false;
   }
 
   function getInstallError(modId: number) {
-    return installErrors.value[modId] ?? "";
+    return installErrors.get(modId) ?? "";
   }
 
   function isUninstalling(modId: number) {
-    return uninstallingIds.value.has(modId);
+    return uninstallingIds.has(modId);
   }
 
   async function checkForUpdatesOnStartup() {
