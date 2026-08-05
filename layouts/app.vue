@@ -33,6 +33,7 @@ onUnmounted(() => {
       <WinePrefixBanner />
       <slot />
     </div>
+    <GameLaunchOverlay />
   </div>
   <div v-else class="app-loading" aria-live="polite" aria-busy="true">
     <span class="app-loading-spinner" aria-hidden="true" />
