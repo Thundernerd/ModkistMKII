@@ -1,19 +1,31 @@
 <script setup lang="ts">
-import type { InstallUiStatus } from "~/composables/useModInstall";
 import type { ModSummary } from "~/composables/useMods";
 
 const props = defineProps<{
   mod: ModSummary;
-  installStatus?: InstallUiStatus;
-  canUninstall?: boolean;
-  isUninstalling?: boolean;
-  installError?: string;
+  showInstall?: boolean;
 }>();
 
 const emit = defineEmits<{
   install: [];
   uninstall: [];
 }>();
+
+const { getUiStatus, getCanUninstall, getInstallError, isUninstalling } =
+  useModInstall();
+
+const installStatus = computed(() =>
+  props.showInstall ? getUiStatus(props.mod.id) : undefined,
+);
+const canUninstall = computed(() =>
+  props.showInstall ? getCanUninstall(props.mod.id) : false,
+);
+const installError = computed(() =>
+  props.showInstall ? getInstallError(props.mod.id) : "",
+);
+const uninstalling = computed(() =>
+  props.showInstall ? isUninstalling(props.mod.id) : false,
+);
 
 const isBlueprint = computed(
   () =>
@@ -67,12 +79,12 @@ function formatCount(value: number) {
       </div>
     </NuxtLink>
 
-    <div v-if="installStatus" class="mod-card-footer">
+    <div v-if="showInstall && installStatus" class="mod-card-footer">
       <ModInstallButton
         :mod-id="mod.id"
         :status="installStatus"
         :can-uninstall="canUninstall"
-        :is-uninstalling="isUninstalling"
+        :is-uninstalling="uninstalling"
         :error="installError"
         compact
         @install="emit('install')"
