@@ -9,7 +9,9 @@ use tauri_plugin_store::StoreExt;
 
 use crate::fs_move::move_dir;
 use crate::game_path::game_directory;
-use crate::mod_folder::{is_valid_install_folder_name, sanitize_mod_name};
+use crate::mod_folder::{
+    is_valid_install_folder_name, parse_install_folder_name, sanitize_mod_name,
+};
 use crate::modio_client::ModioState;
 
 pub const PROFILES_STORE_PATH: &str = "modkist-profiles.json";
@@ -25,6 +27,7 @@ const BEPINEX_PLUGINS: &str = "BepInEx/plugins";
 const PROFILE_ARCHIVES_DIR: &str = "profiles";
 const MODS_DIR: &str = "Mods";
 const BLUEPRINTS_DIR: &str = "Blueprints";
+const MODS_MANIFEST_FILE: &str = "mods-manifest.json";
 const IMPORTED_PROFILE_NAME: &str = "Imported mods";
 const DEFAULT_FIRST_RUN_PROFILE_NAME: &str = "My mods";
 
@@ -78,6 +81,27 @@ pub struct ActiveProfileInfo {
     pub name: String,
     pub kind: ProfileKind,
     pub install_blocked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManifestModKind {
+    Plugin,
+    Blueprint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestModEntry {
+    pub mod_id: u64,
+    pub file_id: u64,
+    pub kind: ManifestModKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileModsManifest {
+    pub mods: Vec<ManifestModEntry>,
 }
 
 fn is_valid_mod_folder_name(name: &str) -> bool {
@@ -153,6 +177,286 @@ fn resolve_profile_archive_root_at(
 
 fn archive_kind_dir_at_root(archive_root: &Path, kind_dir_name: &str) -> PathBuf {
     archive_root.join(kind_dir_name)
+}
+
+fn profile_manifest_path(archive_root: &Path) -> PathBuf {
+    archive_root.join(MODS_MANIFEST_FILE)
+}
+
+pub fn directory_has_any_file(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() {
+            return true;
+        }
+        if file_type.is_dir() && directory_has_any_file(&path) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn scan_managed_mods_in_kind_dir(
+    kind_dir: &Path,
+    kind: ManifestModKind,
+) -> Result<Vec<ManifestModEntry>, String> {
+    if !kind_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))? {
+        let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Did not read entry type: {e}"))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some((mod_id, file_id)) = parse_install_folder_name(&name) else {
+            continue;
+        };
+
+        let path = entry.path();
+        if !directory_has_any_file(&path) {
+            let _ = fs::remove_dir_all(&path);
+            continue;
+        }
+
+        entries.push(ManifestModEntry {
+            mod_id,
+            file_id,
+            kind,
+        });
+    }
+
+    Ok(entries)
+}
+
+fn scan_managed_mods_in_roots(
+    mods_dir: &Path,
+    blueprints_dir: &Path,
+) -> Result<Vec<ManifestModEntry>, String> {
+    let mut mods = scan_managed_mods_in_kind_dir(mods_dir, ManifestModKind::Plugin)?;
+    mods.extend(scan_managed_mods_in_kind_dir(
+        blueprints_dir,
+        ManifestModKind::Blueprint,
+    )?);
+    mods.sort_by_key(|entry| (entry.mod_id, entry.file_id));
+    Ok(mods)
+}
+
+fn scan_managed_mods_at_archive_root(archive_root: &Path) -> Result<Vec<ManifestModEntry>, String> {
+    scan_managed_mods_in_roots(
+        &archive_kind_dir_at_root(archive_root, MODS_DIR),
+        &archive_kind_dir_at_root(archive_root, BLUEPRINTS_DIR),
+    )
+}
+
+fn scan_managed_mods_at_live(game_dir: &Path) -> Result<Vec<ManifestModEntry>, String> {
+    scan_managed_mods_in_roots(
+        &live_kind_dir(game_dir, MODS_DIR),
+        &live_kind_dir(game_dir, BLUEPRINTS_DIR),
+    )
+}
+
+pub fn read_profile_mods_manifest(archive_root: &Path) -> Result<ProfileModsManifest, String> {
+    let path = profile_manifest_path(archive_root);
+    if !path.is_file() {
+        return Ok(ProfileModsManifest::default());
+    }
+
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("Did not read profile mods manifest {}: {e}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| format!("Did not parse profile mods manifest {}: {e}", path.display()))
+}
+
+pub fn write_profile_mods_manifest(
+    archive_root: &Path,
+    manifest: &ProfileModsManifest,
+) -> Result<(), String> {
+    fs::create_dir_all(archive_root).map_err(|e| {
+        format!(
+            "Did not create profile archive {}: {e}",
+            archive_root.display()
+        )
+    })?;
+    let path = profile_manifest_path(archive_root);
+    let raw = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("Did not serialize profile mods manifest: {e}"))?;
+    fs::write(&path, raw)
+        .map_err(|e| format!("Did not write profile mods manifest {}: {e}", path.display()))
+}
+
+fn resolve_profile_archive_root_for(
+    app: &AppHandle,
+    profile: &StoredProfile,
+) -> Result<PathBuf, String> {
+    let archives_root = profile_archives_root(app)?;
+    Ok(resolve_profile_archive_root_at(
+        &archives_root,
+        &profile.id,
+        &profile.name,
+    ))
+}
+
+pub fn active_profile_archive_root(
+    app: &AppHandle,
+    modio_state: &ModioState,
+) -> Result<PathBuf, String> {
+    let data = prepare_store(app, modio_state)?;
+    let profile = profile_by_id(&data, &data.active_profile_id).ok_or_else(|| {
+        format!(
+            "Active profile {} is not configured.",
+            data.active_profile_id
+        )
+    })?;
+    resolve_profile_archive_root_for(app, profile)
+}
+
+pub fn read_active_profile_mods_manifest(
+    app: &AppHandle,
+    modio_state: &ModioState,
+) -> Result<ProfileModsManifest, String> {
+    let archive_root = active_profile_archive_root(app, modio_state)?;
+    ensure_profile_archive_dirs_at(&archive_root)?;
+    read_profile_mods_manifest(&archive_root)
+}
+
+pub fn write_active_profile_mods_manifest(
+    app: &AppHandle,
+    modio_state: &ModioState,
+    manifest: &ProfileModsManifest,
+) -> Result<(), String> {
+    let archive_root = active_profile_archive_root(app, modio_state)?;
+    write_profile_mods_manifest(&archive_root, manifest)
+}
+
+pub fn upsert_active_profile_manifest_entries(
+    app: &AppHandle,
+    modio_state: &ModioState,
+    entries: &[ManifestModEntry],
+) -> Result<(), String> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let info = active_profile_info(app, modio_state)?;
+    if info.kind == ProfileKind::Vanilla {
+        return Ok(());
+    }
+
+    let mut manifest = read_active_profile_mods_manifest(app, modio_state)?;
+    for entry in entries {
+        if let Some(existing) = manifest
+            .mods
+            .iter_mut()
+            .find(|mod_entry| mod_entry.mod_id == entry.mod_id)
+        {
+            *existing = entry.clone();
+        } else {
+            manifest.mods.push(entry.clone());
+        }
+    }
+    manifest
+        .mods
+        .sort_by_key(|entry| (entry.mod_id, entry.file_id));
+    write_active_profile_mods_manifest(app, modio_state, &manifest)
+}
+
+pub fn remove_active_profile_manifest_mod(
+    app: &AppHandle,
+    modio_state: &ModioState,
+    mod_id: u64,
+) -> Result<(), String> {
+    let info = active_profile_info(app, modio_state)?;
+    if info.kind == ProfileKind::Vanilla {
+        return Ok(());
+    }
+
+    let mut manifest = read_active_profile_mods_manifest(app, modio_state)?;
+    let before = manifest.mods.len();
+    manifest.mods.retain(|entry| entry.mod_id != mod_id);
+    if manifest.mods.len() == before {
+        return Ok(());
+    }
+    write_active_profile_mods_manifest(app, modio_state, &manifest)
+}
+
+pub fn sync_active_profile_manifest_from_live(
+    app: &AppHandle,
+    modio_state: &ModioState,
+    game_dir: &Path,
+) -> Result<(), String> {
+    let info = active_profile_info(app, modio_state)?;
+    if info.kind == ProfileKind::Vanilla {
+        return Ok(());
+    }
+
+    let archive_root = active_profile_archive_root(app, modio_state)?;
+    let mods = scan_managed_mods_at_live(game_dir)?;
+    write_profile_mods_manifest(&archive_root, &ProfileModsManifest { mods })?;
+    Ok(())
+}
+
+fn seed_profile_manifest_if_missing(
+    app: &AppHandle,
+    profile: &StoredProfile,
+    game_dir: Option<&Path>,
+    active_profile_id: &str,
+) -> Result<(), String> {
+    if profile.kind == ProfileKind::Vanilla {
+        return Ok(());
+    }
+
+    let archive_root = resolve_profile_archive_root_for(app, profile)?;
+    ensure_profile_archive_dirs_at(&archive_root)?;
+    let manifest_path = profile_manifest_path(&archive_root);
+    if manifest_path.is_file() {
+        return Ok(());
+    }
+
+    let mods = if profile.id == active_profile_id {
+        if let Some(game_dir) = game_dir {
+            scan_managed_mods_at_live(game_dir)?
+        } else {
+            scan_managed_mods_at_archive_root(&archive_root)?
+        }
+    } else {
+        scan_managed_mods_at_archive_root(&archive_root)?
+    };
+
+    write_profile_mods_manifest(&archive_root, &ProfileModsManifest { mods })?;
+    log::info!(
+        "Seeded mods manifest for profile '{}' ({})",
+        profile.name,
+        profile.id
+    );
+    Ok(())
+}
+
+fn seed_missing_profile_manifests(app: &AppHandle, data: &ProfileStoreData) -> Result<(), String> {
+    let game_dir = game_directory(app).ok();
+    for profile in &data.profiles {
+        seed_profile_manifest_if_missing(
+            app,
+            profile,
+            game_dir.as_deref(),
+            &data.active_profile_id,
+        )?;
+    }
+    Ok(())
 }
 
 fn load_store_data(app: &AppHandle) -> Result<ProfileStoreData, String> {
@@ -413,7 +717,12 @@ fn save_active_profile(
     let archives_root = profile_archives_root(app)?;
     let archive_root =
         resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
-    save_active_profile_at(game_dir, &archive_root)
+    save_active_profile_at(game_dir, &archive_root)?;
+    if profile.kind != ProfileKind::Vanilla {
+        let mods = scan_managed_mods_at_archive_root(&archive_root)?;
+        write_profile_mods_manifest(&archive_root, &ProfileModsManifest { mods })?;
+    }
+    Ok(())
 }
 
 fn restore_profile_at(game_dir: &Path, archive_root: &Path) -> Result<(), String> {
@@ -438,7 +747,16 @@ fn restore_profile(
     let archives_root = profile_archives_root(app)?;
     let archive_root =
         resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
-    restore_profile_at(game_dir, &archive_root)
+    restore_profile_at(game_dir, &archive_root)?;
+    if profile.kind != ProfileKind::Vanilla {
+        // Prefer existing manifest; if missing, seed from restored live folders.
+        let manifest_path = profile_manifest_path(&archive_root);
+        if !manifest_path.is_file() {
+            let mods = scan_managed_mods_at_live(game_dir)?;
+            write_profile_mods_manifest(&archive_root, &ProfileModsManifest { mods })?;
+        }
+    }
+    Ok(())
 }
 
 fn new_custom_profile_id() -> Result<String, String> {
@@ -463,7 +781,12 @@ fn adopt_live_mods_into_profile_at(
         let archive_dir = archive_kind_dir_at_root(&archive_root, kind_dir_name);
         move_valid_folders(&live_dir, &archive_dir)?;
     }
-    restore_profile_at(game_dir, &archive_root)
+    restore_profile_at(game_dir, &archive_root)?;
+    if profile.kind != ProfileKind::Vanilla {
+        let mods = scan_managed_mods_at_live(game_dir)?;
+        write_profile_mods_manifest(&archive_root, &ProfileModsManifest { mods })?;
+    }
+    Ok(())
 }
 
 fn ensure_profile_archive_dirs_at(archive_root: &Path) -> Result<(), String> {
@@ -772,6 +1095,7 @@ fn prepare_store(app: &AppHandle, modio_state: &ModioState) -> Result<ProfileSto
         remove_legacy_modkist_folder(&game_dir)?;
     }
     sync_profile_archive_dir_names(app, &data)?;
+    seed_missing_profile_manifests(app, &data)?;
     save_store_data(app, &data)?;
     Ok(data)
 }
@@ -802,6 +1126,10 @@ pub fn active_profile_install_blocked(
 
 pub fn active_profile_is_user(app: &AppHandle, modio_state: &ModioState) -> Result<bool, String> {
     Ok(active_profile_info(app, modio_state)?.kind == ProfileKind::User)
+}
+
+pub fn active_profile_is_custom(app: &AppHandle, modio_state: &ModioState) -> Result<bool, String> {
+    Ok(active_profile_info(app, modio_state)?.kind == ProfileKind::Custom)
 }
 
 pub fn logout_requires_profile_selection(
@@ -938,6 +1266,9 @@ pub fn create_profile(
 
     if let Ok(archives_root) = profile_archives_root(&app) {
         ensure_profile_archive_dirs(&archives_root, &id, trimmed)?;
+        let archive_root =
+            resolve_profile_archive_root_at(&archives_root, &id, trimmed);
+        let _ = write_profile_mods_manifest(&archive_root, &ProfileModsManifest::default());
     }
 
     let logged_in = modio_state.auth_status().logged_in;
@@ -1052,6 +1383,43 @@ mod tests {
             .join(folder_name);
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("mod.dll"), b"test").unwrap();
+    }
+
+    #[test]
+    fn profile_mods_manifest_round_trip() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archive_root = temp.path().join("profile");
+        let manifest = ProfileModsManifest {
+            mods: vec![
+                ManifestModEntry {
+                    mod_id: 10,
+                    file_id: 20,
+                    kind: ManifestModKind::Plugin,
+                },
+                ManifestModEntry {
+                    mod_id: 30,
+                    file_id: 40,
+                    kind: ManifestModKind::Blueprint,
+                },
+            ],
+        };
+
+        write_profile_mods_manifest(&archive_root, &manifest).unwrap();
+        let loaded = read_profile_mods_manifest(&archive_root).unwrap();
+        assert_eq!(loaded.mods, manifest.mods);
+    }
+
+    #[test]
+    fn scan_managed_mods_skips_empty_folders() {
+        let (_temp, game_dir, _archives_root) = temp_game_and_archives();
+        let empty = live_kind_dir(&game_dir, MODS_DIR).join("10_20");
+        fs::create_dir_all(&empty).unwrap();
+        write_mod_folder(&game_dir, MODS_DIR, "30_40");
+
+        let mods = scan_managed_mods_at_live(&game_dir).unwrap();
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].mod_id, 30);
+        assert!(!empty.exists());
     }
 
     #[test]
