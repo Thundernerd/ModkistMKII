@@ -910,11 +910,7 @@ fn build_mod_query(params: &ListModsParams) -> ModQuery {
     }
 
     if !params.category_tags.is_empty() {
-        if params.category_tags.len() == 1 {
-            query.tags.push(params.category_tags[0].clone());
-        } else {
-            query.tags_in = params.category_tags.clone();
-        }
+        query.tags_in = params.category_tags.clone();
     }
 
     query
@@ -1356,5 +1352,47 @@ mod format_api_error_tests {
         assert!(message.contains("private"));
         assert!(message.contains("not subscribed"));
         assert!(!message.contains("Sign in to mod.io"));
+    }
+}
+
+#[cfg(test)]
+mod build_mod_query_tests {
+    use super::*;
+
+    fn base_params() -> ListModsParams {
+        ListModsParams {
+            search: None,
+            mod_type: ModTypeFilter::Plugin,
+            category_tags: vec![],
+            sort: ModSort::default(),
+            sort_dir: SortDir::default(),
+            limit: default_mod_limit(),
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn single_category_tag_uses_tags_in() {
+        let mut params = base_params();
+        params.category_tags = vec!["Controls".to_string()];
+
+        let query = build_mod_query(&params);
+
+        assert_eq!(query.tags, vec!["Plugin".to_string()]);
+        assert_eq!(query.tags_in, vec!["Controls".to_string()]);
+    }
+
+    #[test]
+    fn multiple_category_tags_use_tags_in() {
+        let mut params = base_params();
+        params.category_tags = vec!["Controls".to_string(), "UI".to_string()];
+
+        let query = build_mod_query(&params);
+
+        assert_eq!(query.tags, vec!["Plugin".to_string()]);
+        assert_eq!(
+            query.tags_in,
+            vec!["Controls".to_string(), "UI".to_string()]
+        );
     }
 }
