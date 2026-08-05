@@ -80,8 +80,8 @@ use subscription_sync_settings::{
     list_failed_sync_mods_command, set_failed_sync_mod_ignored, FailedSyncState,
 };
 use modio_client::{
-    get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies, list_mod_files,
-    list_mods, list_user_mods, modio_status, ModioState,
+    clear_mod_api_cache, get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies,
+    list_mod_files, list_mods, list_user_mods, modio_status, ModioState,
 };
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
@@ -162,6 +162,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             log_directory_path,
             modio_status,
+            clear_mod_api_cache,
             get_mod_tag_options,
             list_mods,
             get_mod,

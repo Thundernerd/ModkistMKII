@@ -1063,6 +1063,11 @@ pub fn modio_status(state: State<'_, ModioState>) -> ModioStatus {
 }
 
 #[tauri::command]
+pub fn clear_mod_api_cache(state: State<'_, ModioState>) {
+    state.clear_api_cache();
+}
+
+#[tauri::command]
 pub async fn get_mod_tag_options(state: State<'_, ModioState>) -> Result<ModTagOptions, String> {
     let game_id = state.game_id()?;
     let api = state.api()?;
