@@ -123,11 +123,7 @@ onMounted(async () => {
           You have not submitted any mods for this game.
         </p>
 
-        <ul v-else class="mod-grid">
-          <li v-for="mod in userMods.mods" :key="mod.id">
-            <ModCard :mod="mod" />
-          </li>
-        </ul>
+        <ModVirtualGrid v-else :mods="userMods.mods" />
       </section>
     </template>
 
@@ -212,15 +208,6 @@ onMounted(async () => {
 
 .mods-count {
   margin: 0 0 1rem;
-}
-
-.mod-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
-  gap: 1rem;
 }
 
 .state {

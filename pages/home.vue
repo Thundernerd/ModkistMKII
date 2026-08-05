@@ -31,10 +31,6 @@ const {
   checkForUpdatesOnStartup,
   installMod,
   uninstallMod,
-  getUiStatus,
-  getCanUninstall,
-  getInstallError,
-  isUninstalling,
   installEnvironmentError,
   updateCount,
   checkingUpdates,
@@ -200,19 +196,13 @@ onMounted(async () => {
       No mods found.
     </div>
 
-    <ul v-else-if="mods.length" class="mod-grid">
-      <li v-for="mod in mods" :key="mod.id">
-        <ModCard
-          :mod="mod"
-          :install-status="getUiStatus(mod.id)"
-          :can-uninstall="getCanUninstall(mod.id)"
-          :is-uninstalling="isUninstalling(mod.id)"
-          :install-error="getInstallError(mod.id)"
-          @install="handleInstall(mod.id)"
-          @uninstall="handleUninstall(mod.id, mod.name)"
-        />
-      </li>
-    </ul>
+    <ModVirtualGrid
+      v-else-if="mods.length"
+      :mods="mods"
+      show-install
+      @install="handleInstall"
+      @uninstall="handleUninstall"
+    />
 
     <footer v-if="hasMore" class="mods-footer">
       <button
@@ -309,15 +299,6 @@ onMounted(async () => {
   to {
     transform: rotate(360deg);
   }
-}
-
-.mod-grid {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
-  gap: 1rem;
 }
 
 .mods-footer {
