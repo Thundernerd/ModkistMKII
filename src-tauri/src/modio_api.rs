@@ -315,6 +315,8 @@ pub struct ModQuery {
     pub tags: Vec<String>,
     /// OR-combined tag filter (`tags-in=a,b`).
     pub tags_in: Vec<String>,
+    /// Exclude mods that have any of these tags (`tags-not-in=a,b`).
+    pub tags_not_in: Vec<String>,
     pub sort_field: Option<&'static str>,
     pub sort_desc: bool,
     pub limit: u32,
@@ -332,6 +334,9 @@ impl ModQuery {
         }
         if !self.tags_in.is_empty() {
             params.push(("tags-in".to_string(), self.tags_in.join(",")));
+        }
+        if !self.tags_not_in.is_empty() {
+            params.push(("tags-not-in".to_string(), self.tags_not_in.join(",")));
         }
         if let Some(field) = self.sort_field {
             let value = if self.sort_desc {
@@ -861,6 +866,7 @@ mod tests {
             search: Some("rogue".to_string()),
             tags: vec!["Plugin".to_string()],
             tags_in: vec!["A".to_string(), "B".to_string()],
+            tags_not_in: vec!["C".to_string(), "D".to_string()],
             sort_field: Some("downloads_total"),
             sort_desc: true,
             limit: 20,
@@ -872,6 +878,7 @@ mod tests {
                 ("_q".to_string(), "rogue".to_string()),
                 ("tags".to_string(), "Plugin".to_string()),
                 ("tags-in".to_string(), "A,B".to_string()),
+                ("tags-not-in".to_string(), "C,D".to_string()),
                 ("_sort".to_string(), "-downloads_total".to_string()),
                 ("_limit".to_string(), "20".to_string()),
                 ("_offset".to_string(), "40".to_string()),

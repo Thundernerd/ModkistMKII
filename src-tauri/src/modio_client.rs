@@ -821,7 +821,9 @@ pub struct ListModsParams {
     #[serde(default)]
     pub mod_type: ModTypeFilter,
     #[serde(default)]
-    pub category_tags: Vec<String>,
+    pub category_tags_in: Vec<String>,
+    #[serde(default)]
+    pub category_tags_not_in: Vec<String>,
     #[serde(default)]
     pub sort: ModSort,
     #[serde(default)]
@@ -909,8 +911,12 @@ fn build_mod_query(params: &ListModsParams) -> ModQuery {
         query.tags.push(tag.to_string());
     }
 
-    if !params.category_tags.is_empty() {
-        query.tags_in = params.category_tags.clone();
+    if !params.category_tags_in.is_empty() {
+        query.tags_in = params.category_tags_in.clone();
+    }
+
+    if !params.category_tags_not_in.is_empty() {
+        query.tags_not_in = params.category_tags_not_in.clone();
     }
 
     query
@@ -1363,7 +1369,8 @@ mod build_mod_query_tests {
         ListModsParams {
             search: None,
             mod_type: ModTypeFilter::Plugin,
-            category_tags: vec![],
+            category_tags_in: vec![],
+            category_tags_not_in: vec![],
             sort: ModSort::default(),
             sort_dir: SortDir::default(),
             limit: default_mod_limit(),
@@ -1374,18 +1381,19 @@ mod build_mod_query_tests {
     #[test]
     fn single_category_tag_uses_tags_in() {
         let mut params = base_params();
-        params.category_tags = vec!["Controls".to_string()];
+        params.category_tags_in = vec!["Controls".to_string()];
 
         let query = build_mod_query(&params);
 
         assert_eq!(query.tags, vec!["Plugin".to_string()]);
         assert_eq!(query.tags_in, vec!["Controls".to_string()]);
+        assert!(query.tags_not_in.is_empty());
     }
 
     #[test]
     fn multiple_category_tags_use_tags_in() {
         let mut params = base_params();
-        params.category_tags = vec!["Controls".to_string(), "UI".to_string()];
+        params.category_tags_in = vec!["Controls".to_string(), "UI".to_string()];
 
         let query = build_mod_query(&params);
 
@@ -1393,6 +1401,35 @@ mod build_mod_query_tests {
         assert_eq!(
             query.tags_in,
             vec!["Controls".to_string(), "UI".to_string()]
+        );
+        assert!(query.tags_not_in.is_empty());
+    }
+
+    #[test]
+    fn category_tags_not_in_uses_tags_not_in() {
+        let mut params = base_params();
+        params.category_tags_not_in = vec!["Gameplay".to_string()];
+
+        let query = build_mod_query(&params);
+
+        assert_eq!(query.tags, vec!["Plugin".to_string()]);
+        assert!(query.tags_in.is_empty());
+        assert_eq!(query.tags_not_in, vec!["Gameplay".to_string()]);
+    }
+
+    #[test]
+    fn category_tags_in_and_not_in_combine() {
+        let mut params = base_params();
+        params.category_tags_in = vec!["Controls".to_string()];
+        params.category_tags_not_in = vec!["UI".to_string(), "Audio".to_string()];
+
+        let query = build_mod_query(&params);
+
+        assert_eq!(query.tags, vec!["Plugin".to_string()]);
+        assert_eq!(query.tags_in, vec!["Controls".to_string()]);
+        assert_eq!(
+            query.tags_not_in,
+            vec!["UI".to_string(), "Audio".to_string()]
         );
     }
 }
