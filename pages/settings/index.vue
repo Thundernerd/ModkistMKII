@@ -162,6 +162,13 @@ async function reinstallBepInExInstall() {
         ? `Reinstalled BepInEx ${bepinexStatus.value.foundVersion}.`
         : `Reinstalled BepInEx ${BEPINEX_REQUIRED_VERSION} (x64).`,
     );
+
+    invalidateInstalledModsCache();
+    resetSessionSync();
+    await refreshInstalled({ force: true }).catch(() => {});
+    if (activeProfile.value?.kind === "user" || activeProfile.value?.kind === "custom") {
+      await syncSubscribedModsIfNeeded();
+    }
   } catch (err) {
     setVerifyResult("error", String(err));
   }
@@ -214,13 +221,19 @@ onMounted(async () => {
 
 const {
   profiles,
+  activeProfile,
   loading: profilesLoading,
   error: profilesError,
   refreshProfiles,
   createProfile,
   deleteProfile,
 } = useProfiles();
-const { invalidateInstalledModsCache, refreshInstalled } = useModInstall();
+const {
+  invalidateInstalledModsCache,
+  refreshInstalled,
+  resetSessionSync,
+  syncSubscribedModsIfNeeded,
+} = useModInstall();
 
 const savingAutoUpdate = ref(false);
 const autoUpdateError = ref("");

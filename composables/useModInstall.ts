@@ -160,6 +160,7 @@ function notifySubscriptionSyncComplete(
 ) {
   const dependencyFailures = syncHasDependencyIssues(result);
   const installedCount = result.installed.length;
+  const skippedCount = result.skipped.length;
 
   if (dependencyFailures) {
     if (installedCount > 0) {
@@ -172,7 +173,7 @@ function notifySubscriptionSyncComplete(
       return;
     }
 
-    if (updateCount === 0) {
+    if (skippedCount > 0 && updateCount === 0) {
       pushNotification({
         title: "Subscriptions synced with warnings",
         message:
@@ -203,10 +204,44 @@ function notifySubscriptionSyncComplete(
     return;
   }
 
-  if (updateCount === 0) {
+  if (skippedCount > 0 && updateCount === 0) {
     pushNotification({
       title: "Subscriptions synced",
       message: "All subscribed mods are already up to date.",
+      tone: "success",
+      durationMs: SUCCESS_TOAST_DURATION_MS,
+    });
+  }
+}
+
+function notifyProfileReconcileComplete(
+  pushNotification: ReturnType<typeof useNotifications>["pushNotification"],
+  result: InstallModResult,
+) {
+  const installedCount = result.installed.length;
+  const failedCount =
+    result.failedDependencies?.length ?? result.dependencyFailureCount ?? 0;
+
+  if (failedCount > 0) {
+    pushNotification({
+      title:
+        installedCount > 0
+          ? "Profile mods restored with warnings"
+          : "Did not restore some profile mods",
+      message:
+        installedCount > 0
+          ? `Reinstalled ${formatCountLabel(installedCount, "mod", "mods")}, but ${formatCountLabel(failedCount, "mod", "mods")} could not be restored.`
+          : `${formatCountLabel(failedCount, "mod", "mods")} from this profile could not be restored. Sign in if they are private.`,
+      tone: "warning",
+      durationMs: WARNING_TOAST_DURATION_MS,
+    });
+    return;
+  }
+
+  if (installedCount > 0) {
+    pushNotification({
+      title: "Profile mods restored",
+      message: `Reinstalled ${formatCountLabel(installedCount, "mod", "mods")} for this profile.`,
       tone: "success",
       durationMs: SUCCESS_TOAST_DURATION_MS,
     });
@@ -505,44 +540,90 @@ export function useModInstall() {
         return;
       }
 
-      const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
-      if (!authStatus.loggedIn) {
+      let activeProfile: ActiveProfileInfo | null;
+      try {
+        activeProfile = await invoke<ActiveProfileInfo>("get_active_profile");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error("Did not read active profile for mod reconcile", message);
+        pushNotification({
+          title: "Could not check profile mods",
+          message,
+          tone: "error",
+          durationMs: ERROR_TOAST_DURATION_MS,
+        });
         return;
       }
 
-      const activeProfile = await invoke<ActiveProfileInfo>("get_active_profile").catch(
-        () => null,
-      );
-      if (activeProfile?.kind !== "user") {
+      if (activeProfile.kind === "vanilla" || activeProfile.installBlocked) {
         return;
+      }
+
+      if (activeProfile.kind === "user") {
+        const authStatus = await invoke<{ loggedIn: boolean }>("auth_status");
+        if (!authStatus.loggedIn) {
+          const records = await invoke<InstalledModRecord[]>(
+            "list_installed_mod_records",
+          ).catch(() => [] as InstalledModRecord[]);
+          if (records.length === 0) {
+            pushNotification({
+              title: "Sign in to restore mods",
+              message:
+                "Your mod folders are empty. Sign in and use your account profile to re-download subscribed mods.",
+              tone: "warning",
+              durationMs: WARNING_TOAST_DURATION_MS,
+            });
+          }
+          return;
+        }
       }
 
       const generation = subscriptionSyncGeneration;
       syncingSubscriptions.value = true;
-      logger.info("Starting subscription sync");
+      const isCustom = activeProfile.kind === "custom";
+      logger.info(
+        isCustom
+          ? "Starting custom profile mod reconcile"
+          : "Starting subscription sync",
+      );
 
       try {
-        const result = await invoke<InstallModResult>("sync_subscribed_mods");
+        const result = await invoke<InstallModResult>("ensure_active_profile_mods");
         if (generation !== subscriptionSyncGeneration) {
-          logger.debug("Subscription sync result ignored (cancelled)");
+          logger.debug("Profile mod ensure result ignored (cancelled)");
           return;
         }
         sessionSyncDone.value = true;
-        logger.info("Subscription sync complete", result);
+        logger.info(
+          isCustom ? "Custom profile reconcile complete" : "Subscription sync complete",
+          result,
+        );
         await refreshInstalled({ force: true });
-        notifySubscriptionSyncComplete(pushNotification, result, updateCount.value);
+        if (isCustom) {
+          notifyProfileReconcileComplete(pushNotification, result);
+        } else {
+          notifySubscriptionSyncComplete(pushNotification, result, updateCount.value);
+        }
       } catch (error) {
         if (generation !== subscriptionSyncGeneration) {
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
         if (message === SUBSCRIPTION_SYNC_CANCELLED) {
-          logger.debug("Subscription sync cancelled");
+          logger.debug("Profile mod ensure cancelled");
           return;
         }
-        logger.error("Subscription sync failed", message);
+        logger.error(
+          isCustom ? "Custom profile reconcile failed" : "Subscription sync failed",
+          message,
+        );
         pushNotification({
-          ...subscriptionSyncFailureToast(message),
+          ...(isCustom
+            ? {
+                title: "Did not restore profile mods",
+                message,
+              }
+            : subscriptionSyncFailureToast(message)),
           tone: "error",
           durationMs: ERROR_TOAST_DURATION_MS,
         });

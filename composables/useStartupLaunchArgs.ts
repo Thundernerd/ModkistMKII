@@ -68,7 +68,10 @@ export async function runStartupLaunchArgs() {
       }
     } else if (options.launchGame) {
       await refreshInstalled({ force: true });
-      if (activeProfile.value?.kind === "user") {
+      if (
+        activeProfile.value?.kind === "user" ||
+        activeProfile.value?.kind === "custom"
+      ) {
         resetSessionSync();
         await syncSubscribedModsIfNeeded();
       }

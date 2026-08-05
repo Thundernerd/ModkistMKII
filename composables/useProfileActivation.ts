@@ -26,9 +26,13 @@ export function useProfileActivation() {
       invalidateInstalledModsCache();
       setProfileSwitchMessage("Loading installed mods…");
       await refreshInstalled({ force: true });
-      if (profile.kind === "user") {
+      if (profile.kind === "user" || profile.kind === "custom") {
         resetSessionSync();
-        setProfileSwitchMessage("Syncing subscribed mods…");
+        setProfileSwitchMessage(
+          profile.kind === "user"
+            ? "Syncing subscribed mods…"
+            : "Restoring profile mods…",
+        );
         await syncSubscribedModsIfNeeded();
       }
     } finally {
@@ -38,7 +42,7 @@ export function useProfileActivation() {
 
   async function refreshActiveProfileMods(profile: ProfileSummary) {
     await refreshInstalled({ force: true });
-    if (profile.kind === "user") {
+    if (profile.kind === "user" || profile.kind === "custom") {
       resetSessionSync();
       await syncSubscribedModsIfNeeded();
     }
