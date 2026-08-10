@@ -148,6 +148,10 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: npm run tauri build -- ${{ matrix.tauri_args }}
 
+      - name: Patch AppImage for host Wayland (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: bash .github/scripts/patch-appimage-wayland.sh
+
       - name: Upload bundles
         uses: actions/upload-artifact@v7.0.1
         with:
