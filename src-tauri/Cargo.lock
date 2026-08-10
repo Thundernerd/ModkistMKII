@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "modkistmkii"
-version = "1.0.0-rc.5"
+version = "1.0.0-rc.6"
 dependencies = [
  "dotenvy",
  "flexi_logger",
