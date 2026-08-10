@@ -6,6 +6,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 appimage_dir="${repo_root}/src-tauri/target/release/bundle/appimage"
+hook_name="00-wayland-compat.sh"
 
 if [[ ! -d "$appimage_dir" ]]; then
   echo "::error::AppImage bundle directory not found: ${appimage_dir}"
@@ -14,7 +15,12 @@ fi
 
 shopt -s nullglob
 appdirs=("${appimage_dir}"/*.AppDir)
-appimages=("${appimage_dir}"/*.AppImage)
+# Prefer Tauri's versioned AppImage name (Product_version_arch.AppImage), not
+# linuxdeploy's default Product-arch.AppImage leftover from a prior run.
+appimages=("${appimage_dir}"/*_*_*.AppImage)
+if [[ ${#appimages[@]} -eq 0 ]]; then
+  appimages=("${appimage_dir}"/*.AppImage)
+fi
 shopt -u nullglob
 
 if [[ ${#appdirs[@]} -eq 0 ]]; then
@@ -27,16 +33,19 @@ if [[ ${#appimages[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ ${#appdirs[@]} -gt 1 ]]; then
-  echo "::warning::Multiple AppDirs found; patching all of them"
+if [[ ${#appdirs[@]} -ne 1 ]]; then
+  echo "::warning::Expected one AppDir, found ${#appdirs[@]} — using the first"
+fi
+if [[ ${#appimages[@]} -ne 1 ]]; then
+  echo "::warning::Expected one versioned AppImage, found ${#appimages[@]} — using the first"
 fi
 
-hook_name="00-wayland-compat.sh"
+appdir="${appdirs[0]}"
+appimage="${appimages[0]}"
+hooks_dir="${appdir}/apprun-hooks"
 
-for appdir in "${appdirs[@]}"; do
-  hooks_dir="${appdir}/apprun-hooks"
-  mkdir -p "$hooks_dir"
-  cat >"${hooks_dir}/${hook_name}" <<'EOF'
+mkdir -p "$hooks_dir"
+cat >"${hooks_dir}/${hook_name}" <<'EOF'
 # Force host libwayland-client to avoid EGL_BAD_PARAMETER on Fedora/others
 if [ -z "${LD_PRELOAD:-}" ]; then
   for lib in \
@@ -53,52 +62,79 @@ if [ -z "${LD_PRELOAD:-}" ]; then
 fi
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 EOF
-  chmod +x "${hooks_dir}/${hook_name}"
-  echo "Installed AppRun hook: ${hooks_dir}/${hook_name}"
-done
+chmod +x "${hooks_dir}/${hook_name}"
+echo "Installed AppRun hook: ${hooks_dir}/${hook_name}"
 
+find_tool() {
+  local name="$1"
+  local candidate
+  for candidate in \
+    "${HOME}/.cache/tauri/${name}" \
+    "${XDG_CACHE_HOME:-}/tauri/${name}"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+plugin=""
 linuxdeploy=""
-for candidate in \
-  "${HOME}/.cache/tauri/linuxdeploy-x86_64.AppImage" \
-  "${HOME}/.cache/tauri/linuxdeploy-aarch64.AppImage" \
-  "${XDG_CACHE_HOME:-}/tauri/linuxdeploy-x86_64.AppImage" \
-  "${XDG_CACHE_HOME:-}/tauri/linuxdeploy-aarch64.AppImage"; do
-  if [[ -n "$candidate" && -f "$candidate" ]]; then
-    linuxdeploy="$candidate"
-    break
-  fi
-done
-
-if [[ -z "$linuxdeploy" ]]; then
-  echo "::error::linuxdeploy AppImage not found in ~/.cache/tauri (run tauri build first)"
-  exit 1
-fi
-
-chmod +x "$linuxdeploy"
-echo "Repacking AppImage(s) with ${linuxdeploy}"
-
-for appdir in "${appdirs[@]}"; do
-  "$linuxdeploy" --appimage-extract-and-run --appdir "$appdir" --output appimage
-done
-
-verify_failed=0
-for appimage in "${appimages[@]}"; do
-  extract_dir="$(mktemp -d)"
+if plugin="$(find_tool linuxdeploy-plugin-appimage-x86_64.AppImage)" \
+  || plugin="$(find_tool linuxdeploy-plugin-appimage-aarch64.AppImage)"; then
+  chmod +x "$plugin"
+  echo "Repacking $(basename "$appimage") with ${plugin}"
   (
-    cd "$extract_dir"
-    "$appimage" --appimage-extract >/dev/null
+    cd "$appimage_dir"
+    # Pack only — do not re-run linuxdeploy dependency deployment.
+    # LDAI_OUTPUT must overwrite Tauri's versioned AppImage, not create
+    # Modkist-x86_64.AppImage in an unrelated cwd.
+    LDAI_OUTPUT="$(basename "$appimage")" \
+      "$plugin" --appimage-extract-and-run --appdir "$(basename "$appdir")"
   )
-  if [[ ! -f "${extract_dir}/squashfs-root/apprun-hooks/${hook_name}" ]]; then
-    echo "::error::Hook missing from repacked AppImage: ${appimage}"
-    verify_failed=1
-  else
-    echo "Verified hook in ${appimage}"
-  fi
-  rm -rf "$extract_dir"
-done
-
-if [[ "$verify_failed" -ne 0 ]]; then
+elif linuxdeploy="$(find_tool linuxdeploy-x86_64.AppImage)" \
+  || linuxdeploy="$(find_tool linuxdeploy-aarch64.AppImage)"; then
+  chmod +x "$linuxdeploy"
+  echo "Repacking $(basename "$appimage") with ${linuxdeploy}"
+  (
+    cd "$appimage_dir"
+    LDAI_OUTPUT="$(basename "$appimage")" \
+      "$linuxdeploy" --appimage-extract-and-run \
+      --appdir "$(basename "$appdir")" \
+      --output appimage
+  )
+else
+  echo "::error::Neither linuxdeploy-plugin-appimage nor linuxdeploy found in ~/.cache/tauri"
   exit 1
 fi
+
+if [[ ! -f "${hooks_dir}/${hook_name}" ]]; then
+  echo "::error::Hook was removed from AppDir during repack: ${hooks_dir}/${hook_name}"
+  exit 1
+fi
+
+extract_dir="$(mktemp -d)"
+cleanup() { rm -rf "$extract_dir"; }
+trap cleanup EXIT
+(
+  cd "$extract_dir"
+  "$appimage" --appimage-extract >/dev/null
+)
+if [[ ! -f "${extract_dir}/squashfs-root/apprun-hooks/${hook_name}" ]]; then
+  echo "::error::Hook missing from repacked AppImage: ${appimage}"
+  exit 1
+fi
+echo "Verified hook in ${appimage}"
+
+# Remove linuxdeploy's default-named leftover if present (e.g. Modkist-x86_64.AppImage).
+shopt -s nullglob
+for leftover in "${appimage_dir}"/*-x86_64.AppImage "${appimage_dir}"/*-aarch64.AppImage; do
+  if [[ "$(basename "$leftover")" != "$(basename "$appimage")" ]]; then
+    echo "Removing leftover AppImage: ${leftover}"
+    rm -f "$leftover"
+  fi
+done
+shopt -u nullglob
 
 echo "AppImage Wayland compatibility patch complete"
