@@ -69,6 +69,13 @@ impl ApiError {
         self.error_ref == Some(15005)
     }
 
+    /// True when the user already submitted this exact rating (error_ref 15028)
+    /// or tried to retract a rating that does not exist (error_ref 15043).
+    /// Both mean the desired rating state is already reached.
+    pub fn is_rating_already_applied(&self) -> bool {
+        matches!(self.error_ref, Some(15028 | 15043))
+    }
+
     fn log(&self, context: &str) {
         log::error!(
             "mod.io API error [{context}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
@@ -305,6 +312,14 @@ pub struct AccessToken {
 pub struct Message {
     #[serde(default)]
     pub message: String,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct RatingObject {
+    #[serde(default)]
+    pub mod_id: u64,
+    #[serde(default)]
+    pub rating: i8,
 }
 
 /// Builder for the `GET /games/{id}/mods` query string.
@@ -744,6 +759,60 @@ impl ApiClient {
         let path = format!("/games/{game_id}/mods/{mod_id}/subscribe");
         self.send_empty(reqwest::Method::DELETE, &path, Some(token))
             .await
+    }
+
+    /// Submit or clear a rating for a mod (`1` positive, `-1` negative, `0` retract).
+    /// Treats "already applied" / "nothing to retract" as success.
+    pub async fn add_mod_rating(
+        &self,
+        token: &str,
+        game_id: u64,
+        mod_id: u64,
+        rating: i8,
+    ) -> Result<Message, ApiError> {
+        let path = format!("/games/{game_id}/mods/{mod_id}/ratings");
+        let rating_value = rating.to_string();
+        let form = [("rating", rating_value.as_str())];
+        match self
+            .send::<Message>(
+                reqwest::Method::POST,
+                &path,
+                Some(token),
+                &[],
+                Some(&form),
+            )
+            .await
+        {
+            Ok(message) => Ok(message),
+            Err(error) if error.is_rating_already_applied() => Ok(Message {
+                message: error.message,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Returns the authenticated user's rating for a mod, if any.
+    pub async fn get_my_rating(
+        &self,
+        token: &str,
+        game_id: u64,
+        mod_id: u64,
+    ) -> Result<Option<i8>, ApiError> {
+        let params = [
+            ("game_id".to_string(), game_id.to_string()),
+            ("mod_id".to_string(), mod_id.to_string()),
+            ("_limit".to_string(), "1".to_string()),
+        ];
+        let list = self
+            .send::<ListResponse<RatingObject>>(
+                reqwest::Method::GET,
+                "/me/ratings",
+                Some(token),
+                &params,
+                None,
+            )
+            .await?;
+        Ok(list.data.first().map(|entry| entry.rating))
     }
 
     pub async fn request_email_code(&self, email: &str) -> Result<Message, ApiError> {

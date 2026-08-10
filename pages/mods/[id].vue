@@ -17,9 +17,14 @@ const {
   dependenciesLoading,
   error,
   dependenciesError,
+  ratingError,
+  ratingBusy,
   fetchMod,
   fetchDependencies,
+  rateMod,
 } = useModDetail();
+
+const { authStatus, refreshAuthStatus } = useModioAuth();
 
 const {
   installMod,
@@ -77,6 +82,7 @@ onMounted(() => {
       ? window.history.state.back
       : undefined;
   backLabel.value = resolveBackLabel(previousPath);
+  void refreshAuthStatus();
 });
 
 type TabId = "description" | "dependencies";
@@ -191,6 +197,16 @@ watch(mediaImages, () => {
 
 function formatCount(value: number) {
   return value.toLocaleString();
+}
+
+async function onVote(value: 1 | -1) {
+  if (!authStatus.value.loggedIn || !mod.value || ratingBusy.value) return;
+  const next = mod.value.userRating === value ? 0 : value;
+  try {
+    await rateMod(modId.value, next);
+  } catch {
+    // ratingError is set in the composable for display
+  }
 }
 
 function formatLiveDate(iso: string) {
@@ -554,35 +570,77 @@ function dependencyMeta(dep: ModDependency) {
             View on mod.io
           </a>
 
-          <section
-            v-if="mod.ratingsDisplayText || mod.ratingsPercentagePositive"
-            class="sidebar-section ratings-section"
-          >
+          <section class="sidebar-section ratings-section">
             <div class="ratings-header">
-              <span class="ratings-label">{{ mod.ratingsDisplayText }}</span>
+              <span class="ratings-label">{{
+                mod.ratingsDisplayText || "No ratings yet"
+              }}</span>
               <span
-                v-if="mod.ratingsPercentagePositive"
+                v-if="mod.ratingsPositive + mod.ratingsNegative > 0"
                 class="ratings-percent"
               >
                 {{ mod.ratingsPercentagePositive }}%
               </span>
             </div>
-            <div class="ratings-bar" aria-hidden="true">
+            <div
+              v-if="mod.ratingsPositive + mod.ratingsNegative > 0"
+              class="ratings-bar"
+              aria-hidden="true"
+            >
               <div
                 class="ratings-bar-fill"
                 :style="{ width: `${mod.ratingsPercentagePositive}%` }"
               />
             </div>
             <div class="ratings-votes">
-              <span class="vote vote-like">
+              <button
+                type="button"
+                class="vote vote-like"
+                :class="{ 'is-selected': mod.userRating === 1 }"
+                :disabled="!authStatus.loggedIn || ratingBusy"
+                :aria-pressed="mod.userRating === 1"
+                :title="
+                  authStatus.loggedIn
+                    ? mod.userRating === 1
+                      ? 'Remove upvote'
+                      : 'Upvote'
+                    : 'Sign in to vote'
+                "
+                @click="onVote(1)"
+              >
                 <span class="vote-icon" aria-hidden="true">👍</span>
                 {{ formatCount(mod.ratingsPositive) }}
-              </span>
-              <span class="vote vote-dislike">
+              </button>
+              <button
+                type="button"
+                class="vote vote-dislike"
+                :class="{ 'is-selected': mod.userRating === -1 }"
+                :disabled="!authStatus.loggedIn || ratingBusy"
+                :aria-pressed="mod.userRating === -1"
+                :title="
+                  authStatus.loggedIn
+                    ? mod.userRating === -1
+                      ? 'Remove downvote'
+                      : 'Downvote'
+                    : 'Sign in to vote'
+                "
+                @click="onVote(-1)"
+              >
                 <span class="vote-icon" aria-hidden="true">👎</span>
                 {{ formatCount(mod.ratingsNegative) }}
-              </span>
+              </button>
             </div>
+            <p v-if="!authStatus.loggedIn" class="ratings-hint">
+              <NuxtLink
+                :to="{ path: '/', query: { redirect: `/mods/${mod.id}` } }"
+              >
+                Sign in
+              </NuxtLink>
+              to vote
+            </p>
+            <p v-else-if="ratingError" class="ratings-error">
+              {{ ratingError }}
+            </p>
           </section>
 
           <dl class="stats-list">
@@ -1188,6 +1246,17 @@ function dependencyMeta(dep: ModDependency) {
   border-radius: var(--modio-radius-sm);
   font-size: 0.82rem;
   font-weight: 600;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.vote:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .vote-like {
@@ -1195,8 +1264,52 @@ function dependencyMeta(dep: ModDependency) {
   color: var(--modio-success);
 }
 
+.vote-like:not(:disabled):hover {
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.vote-like.is-selected {
+  background: rgba(74, 222, 128, 0.22);
+  border-color: rgba(74, 222, 128, 0.85);
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.35);
+}
+
 .vote-dislike {
   border: 1px solid rgba(248, 113, 113, 0.45);
+  color: var(--modio-danger);
+}
+
+.vote-dislike:not(:disabled):hover {
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.vote-dislike.is-selected {
+  background: rgba(248, 113, 113, 0.22);
+  border-color: rgba(248, 113, 113, 0.85);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35);
+}
+
+.ratings-hint,
+.ratings-error {
+  margin: 0.55rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.ratings-hint {
+  color: var(--modio-text-muted);
+}
+
+.ratings-hint a {
+  color: var(--modio-accent);
+  text-decoration: none;
+}
+
+.ratings-hint a:hover {
+  text-decoration: underline;
+}
+
+.ratings-error {
   color: var(--modio-danger);
 }
 

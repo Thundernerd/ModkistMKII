@@ -23,6 +23,8 @@ export interface ModDetail {
   ratingsPercentagePositive: number;
   ratingsPositive: number;
   ratingsNegative: number;
+  /** Current user's rating: `1` positive, `-1` negative, `0` none. */
+  userRating: number;
   mediaImageUrls: string[];
   hasDependencies: boolean;
   homepageUrl?: string;
@@ -59,6 +61,29 @@ export interface ModFileListResult {
 
 export type DependencySort = "mostPopular" | "lastUpdated" | "alphabetical";
 
+function applyOptimisticRating(current: ModDetail, nextRating: number): ModDetail {
+  let positive = current.ratingsPositive;
+  let negative = current.ratingsNegative;
+  const previous = current.userRating;
+
+  if (previous === 1) positive = Math.max(0, positive - 1);
+  else if (previous === -1) negative = Math.max(0, negative - 1);
+
+  if (nextRating === 1) positive += 1;
+  else if (nextRating === -1) negative += 1;
+
+  const total = positive + negative;
+  const percentage = total > 0 ? Math.round((positive / total) * 100) : 0;
+
+  return {
+    ...current,
+    userRating: nextRating,
+    ratingsPositive: positive,
+    ratingsNegative: negative,
+    ratingsPercentagePositive: percentage,
+  };
+}
+
 export function useModDetail() {
   const mod = ref<ModDetail | null>(null);
   const dependencies = ref<ModDependency[]>([]);
@@ -66,6 +91,8 @@ export function useModDetail() {
   const dependenciesLoading = ref(false);
   const error = ref("");
   const dependenciesError = ref("");
+  const ratingError = ref("");
+  const ratingBusy = ref(false);
 
   async function fetchMod(modId: number) {
     loading.value = true;
@@ -73,6 +100,7 @@ export function useModDetail() {
     mod.value = null;
     dependencies.value = [];
     dependenciesError.value = "";
+    ratingError.value = "";
 
     try {
       mod.value = await invoke<ModDetail>("get_mod", { modId });
@@ -106,6 +134,26 @@ export function useModDetail() {
     return invoke<ModFileListResult>("list_mod_files", { modId });
   }
 
+  async function rateMod(modId: number, rating: number) {
+    if (!mod.value || ratingBusy.value) return;
+    if (![-1, 0, 1].includes(rating)) return;
+
+    const previous = { ...mod.value };
+    ratingBusy.value = true;
+    ratingError.value = "";
+    mod.value = applyOptimisticRating(mod.value, rating);
+
+    try {
+      await invoke("rate_mod", { modId, rating });
+    } catch (err) {
+      mod.value = previous;
+      ratingError.value = String(err);
+      throw err;
+    } finally {
+      ratingBusy.value = false;
+    }
+  }
+
   return {
     mod,
     dependencies,
@@ -113,8 +161,11 @@ export function useModDetail() {
     dependenciesLoading,
     error,
     dependenciesError,
+    ratingError,
+    ratingBusy,
     fetchMod,
     fetchDependencies,
     fetchModFiles,
+    rateMod,
   };
 }

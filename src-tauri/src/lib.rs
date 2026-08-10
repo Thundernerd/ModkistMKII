@@ -81,7 +81,7 @@ use subscription_sync_settings::{
 };
 use modio_client::{
     clear_mod_api_cache, get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies,
-    list_mod_files, list_mods, list_user_mods, modio_status, ModioState,
+    list_mod_files, list_mods, list_user_mods, modio_status, rate_mod, ModioState,
 };
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
@@ -166,6 +166,7 @@ pub fn run() {
             get_mod_tag_options,
             list_mods,
             get_mod,
+            rate_mod,
             list_mod_files,
             list_mod_dependencies,
             get_user_profile,

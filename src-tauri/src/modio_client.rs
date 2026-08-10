@@ -760,6 +760,8 @@ pub struct ModDetail {
     pub ratings_percentage_positive: u32,
     pub ratings_positive: u32,
     pub ratings_negative: u32,
+    /// Current user's rating for this mod: `1` positive, `-1` negative, `0` none.
+    pub user_rating: i8,
     pub media_image_urls: Vec<String>,
     pub has_dependencies: bool,
     pub homepage_url: Option<String>,
@@ -988,6 +990,7 @@ fn mod_to_detail(mod_: ModObject) -> ModDetail {
         ratings_percentage_positive: mod_.stats.ratings_percentage_positive,
         ratings_positive: mod_.stats.ratings_positive,
         ratings_negative: mod_.stats.ratings_negative,
+        user_rating: 0,
         media_image_urls,
         has_dependencies: mod_.dependencies,
         homepage_url: mod_.homepage_url,
@@ -1193,7 +1196,48 @@ pub async fn list_mods(
 #[tauri::command]
 pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
     let mod_ = fetch_mod_object(&state, mod_id).await?;
-    Ok(mod_to_detail(mod_))
+    let mut detail = mod_to_detail(mod_);
+    if let Some(token) = state.session_token() {
+        let game_id = state.game_id()?;
+        let api = state.api()?;
+        match api.get_my_rating(&token, game_id, mod_id).await {
+            Ok(Some(rating)) => detail.user_rating = rating,
+            Ok(None) => {}
+            Err(error) => {
+                log::warn!(
+                    "Did not load user rating for mod {mod_id}: {}",
+                    format_api_error(error)
+                );
+            }
+        }
+    }
+    Ok(detail)
+}
+
+#[tauri::command]
+pub async fn rate_mod(
+    state: State<'_, ModioState>,
+    mod_id: u64,
+    rating: i8,
+) -> Result<(), String> {
+    if !matches!(rating, -1 | 0 | 1) {
+        return Err("Rating must be 1 (positive), -1 (negative), or 0 (clear)".to_string());
+    }
+
+    log::info!("Rating mod {mod_id} with {rating}");
+    state
+        .with_oauth_request("rate_mod", || async {
+            let game_id = state.game_id()?;
+            let api = state.api()?;
+            let token = state.require_token()?;
+            api.add_mod_rating(&token, game_id, mod_id, rating)
+                .await
+                .map_err(format_api_error)?;
+            state.invalidate_mod_cache(mod_id);
+            log::info!("Rated mod {mod_id} with {rating}");
+            Ok(())
+        })
+        .await
 }
 
 #[tauri::command]
