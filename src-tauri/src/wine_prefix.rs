@@ -62,6 +62,7 @@ impl WineWinhttpStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WineLaunchKind {
     /// CrossOver bottle launch via `--bottle` / `--cx-app`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     CrossOver { bottle: String },
     /// Generic `WINEPREFIX` + wine binary (GameHub, Proton, vanilla Wine).
     WinePrefix,
@@ -81,6 +82,7 @@ struct WinePrefix {
 pub(crate) struct WineLaunchInfo {
     pub prefix: PathBuf,
     pub wine: PathBuf,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub kind: WineLaunchKind,
 }
 
@@ -724,9 +726,9 @@ fn crossover_launch_kind(prefix_path: &Path, label: Option<&str>) -> WineLaunchK
     WineLaunchKind::WinePrefix
 }
 
-fn find_wine_binary_for_kind(kind: &WineLaunchKind) -> Option<PathBuf> {
+fn find_wine_binary_for_kind(_kind: &WineLaunchKind) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    if matches!(kind, WineLaunchKind::CrossOver { .. }) {
+    if matches!(_kind, WineLaunchKind::CrossOver { .. }) {
         let crossover_wine = PathBuf::from(
             "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
         );
