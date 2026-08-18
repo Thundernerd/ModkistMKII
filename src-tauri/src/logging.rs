@@ -1,7 +1,8 @@
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
 use flexi_logger::writers::LogWriter;
-use flexi_logger::{Cleanup, Criterion, DeferredNow, Duplicate, FileSpec, Logger, Naming};
+use flexi_logger::{Cleanup, Criterion, DeferredNow, Duplicate, ErrorChannel, FileSpec, Logger, Naming};
 use log::Record;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
@@ -11,6 +12,7 @@ use crate::sentry_init;
 const DEFAULT_LOG_FILTER: &str = "info,modkistmkii_lib=info";
 const LOG_BASENAME: &str = "modkist";
 const LOG_SUBDIR: &str = "logs";
+const LOGGER_ERROR_BASENAME: &str = "flexi_logger-errors.log";
 const MAX_LOG_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_LOG_FILES: usize = 5;
 
@@ -58,7 +60,9 @@ fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Initialize Rust logging to a rotating file under `{app_data_dir}/logs`, next to
-/// the JSON config stores, and mirror info-level (and above) messages to stderr.
+/// the JSON config stores. Mirror info-level (and above) messages to stderr only
+/// when stderr is a terminal, so GUI/Steam/Deckify launches do not panic on a
+/// closed or piped stderr.
 ///
 /// Filter via `RUST_LOG`, e.g. `RUST_LOG=modkistmkii_lib=debug` for verbose output.
 pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
@@ -81,13 +85,21 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
         logger.log_to_file(file_spec)
     };
 
+    let duplicate = if io::stderr().is_terminal() {
+        Duplicate::Info
+    } else {
+        Duplicate::None
+    };
+
     logger
         .rotate(
             Criterion::Size(MAX_LOG_FILE_BYTES),
             Naming::Timestamps,
             Cleanup::KeepLogFiles(MAX_LOG_FILES),
         )
-        .duplicate_to_stderr(Duplicate::Info)
+        .duplicate_to_stderr(duplicate)
+        .error_channel(ErrorChannel::File(log_dir.join(LOGGER_ERROR_BASENAME)))
+        .panic_if_error_channel_is_broken(false)
         .format_for_files(flexi_logger::detailed_format)
         .format_for_writer(flexi_logger::colored_default_format)
         .start()
