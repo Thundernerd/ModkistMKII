@@ -100,12 +100,12 @@ function categoryTagAriaLabel(tag: string) {
           v-for="tag in categoryOptions"
           :key="tag"
           type="button"
-          class="category-tag"
+          class="ui-pill category-tag"
           :class="categoryTagClass(tag)"
           :aria-label="categoryTagAriaLabel(tag)"
           @click="emit('toggleCategoryTag', tag)"
         >
-          {{ tag }}
+          <span class="ui-pill-text">{{ tag }}</span>
         </button>
       </div>
     </div>
@@ -234,12 +234,10 @@ function categoryTagAriaLabel(tag: string) {
 }
 
 .category-tag {
-  padding: 0.28rem 0.6rem;
-  border-radius: 999px;
+  --ui-pill-px: 0.65rem;
   border: 1px solid var(--modio-border);
   background: var(--modio-surface-raised);
   color: var(--modio-text-muted);
-  font-size: 0.78rem;
   font-weight: 500;
 }
 

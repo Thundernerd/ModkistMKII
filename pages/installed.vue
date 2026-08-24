@@ -108,8 +108,8 @@ onMounted(loadInstalled);
             <div class="installed-info">
               <div class="installed-title-row">
                 <h2>{{ mod.name }}</h2>
-                <span class="kind-badge">{{ kindLabel(mod.kind) }}</span>
-                <span v-if="mod.updateAvailable" class="update-badge">Update</span>
+                <span class="ui-pill kind-badge"><span class="ui-pill-text">{{ kindLabel(mod.kind) }}</span></span>
+                <span v-if="mod.updateAvailable" class="ui-pill update-badge"><span class="ui-pill-text">Update</span></span>
               </div>
               <p class="installed-summary">{{ mod.summary }}</p>
               <p class="installed-meta">
@@ -273,14 +273,6 @@ onMounted(loadInstalled);
   margin: 0.4rem 0 0;
   font-size: 0.78rem;
   color: var(--modio-text-muted);
-}
-
-.kind-badge,
-.update-badge {
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 600;
 }
 
 .kind-badge {

@@ -142,14 +142,14 @@ onBeforeUnmount(() => {
           <div class="versions-item-main">
             <div class="versions-item-heading">
               <span class="versions-item-label">{{ versionLabel(file) }}</span>
-              <span v-if="latestFileId === file.id" class="versions-badge">
-                Latest
+              <span v-if="latestFileId === file.id" class="ui-pill versions-badge">
+                <span class="ui-pill-text">Latest</span>
               </span>
               <span
                 v-if="installedFileId === file.id"
-                class="versions-badge versions-badge-installed"
+                class="ui-pill versions-badge versions-badge-installed"
               >
-                Installed
+                <span class="ui-pill-text">Installed</span>
               </span>
             </div>
             <p class="versions-item-meta">
@@ -298,11 +298,6 @@ onBeforeUnmount(() => {
 }
 
 .versions-badge {
-  display: inline-block;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 600;
   background: rgba(var(--modio-accent-rgb), 0.14);
   color: var(--modio-accent);
 }

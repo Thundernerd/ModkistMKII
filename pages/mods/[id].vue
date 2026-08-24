@@ -414,13 +414,13 @@ function dependencyMeta(dep: ModDependency) {
                 Dependencies
                 <span
                   v-if="dependencies.length || dependenciesLoading"
-                  class="tab-badge"
+                  class="ui-pill ui-pill--count tab-badge"
                 >
-                  {{
+                  <span class="ui-pill-text">{{
                     dependenciesLoading && !dependencies.length
                       ? "…"
                       : dependencies.length
-                  }}
+                  }}</span>
                 </span>
               </button>
             </nav>
@@ -485,8 +485,8 @@ function dependencyMeta(dep: ModDependency) {
                       <div class="dependency-info">
                         <div class="dependency-title-row">
                           <h3>{{ dep.name }}</h3>
-                          <span v-if="dep.unavailable" class="unavailable-badge">
-                            Unavailable
+                          <span v-if="dep.unavailable" class="ui-pill unavailable-badge">
+                            <span class="ui-pill-text">Unavailable</span>
                           </span>
                         </div>
                         <p class="dependency-meta">{{ dependencyMeta(dep) }}</p>
@@ -683,8 +683,8 @@ function dependencyMeta(dep: ModDependency) {
           <section v-if="mod.tags.length" class="sidebar-section">
             <h2 class="sidebar-heading">Tags</h2>
             <div class="tag-list">
-              <span v-for="tag in mod.tags" :key="tag" class="tag-pill">
-                {{ tag }}
+              <span v-for="tag in mod.tags" :key="tag" class="ui-pill tag-pill">
+                <span class="ui-pill-text">{{ tag }}</span>
               </span>
             </div>
           </section>
@@ -873,17 +873,8 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .tab-badge {
-  min-width: 1.15rem;
-  height: 1.15rem;
-  padding: 0 0.3rem;
-  border-radius: 999px;
   background: var(--modio-accent);
   color: var(--modio-on-accent);
-  font-size: 0.68rem;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .tab-content {
@@ -1090,14 +1081,9 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .unavailable-badge {
-  display: inline-block;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
   background: rgba(248, 113, 113, 0.12);
   border: 1px solid rgba(248, 113, 113, 0.35);
   color: var(--modio-danger);
-  font-size: 0.68rem;
-  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -1376,12 +1362,8 @@ function dependencyMeta(dep: ModDependency) {
 }
 
 .tag-pill {
-  padding: 0.2rem 0.55rem;
-  border-radius: 999px;
   border: 1px solid rgba(var(--modio-accent-rgb), 0.35);
   color: var(--modio-accent);
-  font-size: 0.75rem;
-  font-weight: 600;
 }
 
 .creator-row {

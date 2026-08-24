@@ -219,10 +219,10 @@ onMounted(loadUpdates);
                 <div class="history-title-row">
                   <h3>{{ entry.name }}</h3>
                   <span
-                    class="history-badge"
+                    class="ui-pill history-badge"
                     :data-action="entry.action"
                   >
-                    {{ actionLabel(entry.action) }}
+                    <span class="ui-pill-text">{{ actionLabel(entry.action) }}</span>
                   </span>
                 </div>
                 <p class="updates-meta">{{ historyMeta(entry) }}</p>
@@ -404,12 +404,7 @@ onMounted(loadUpdates);
 }
 
 .history-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.12rem 0.45rem;
   border-radius: var(--modio-radius-sm);
-  font-size: 0.72rem;
-  font-weight: 600;
   letter-spacing: 0.01em;
   background: var(--modio-surface-raised);
   color: var(--modio-text-muted);

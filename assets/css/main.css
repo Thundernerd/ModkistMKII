@@ -180,6 +180,61 @@ select {
   color: #1f0a0a;
 }
 
+/* Suisse Int'l's em-box is taller below the baseline, so flex
+   centering the line-box still looks top-heavy. inline-block lets
+   text-box-trim apply to the glyphs; extra top padding is the
+   fallback when trim is unavailable. */
+.ui-pill {
+  --ui-pill-pt: 0.42rem;
+  --ui-pill-pb: 0.14rem;
+  --ui-pill-px: 0.55rem;
+  display: inline-block;
+  box-sizing: border-box;
+  line-height: 1;
+  padding: var(--ui-pill-pt) var(--ui-pill-px) var(--ui-pill-pb);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+
+@supports (text-box-trim: trim-both) {
+  .ui-pill {
+    --ui-pill-pt: 0.28rem;
+    --ui-pill-pb: 0.28rem;
+  }
+}
+
+.ui-pill-text {
+  display: block;
+  line-height: 1;
+  text-box-trim: trim-both;
+  text-box-edge: cap alphabetic;
+}
+
+.ui-pill--count {
+  --ui-pill-pt: 0.22rem;
+  --ui-pill-pb: 0;
+  --ui-pill-px: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+@supports (text-box-trim: trim-both) {
+  .ui-pill--count {
+    --ui-pill-pt: 0;
+    --ui-pill-pb: 0;
+  }
+}
+
 .app-shell {
   display: flex;
   height: 100vh;

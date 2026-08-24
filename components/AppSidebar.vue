@@ -317,10 +317,10 @@ async function selectProfile(profile: ProfileSummary) {
         <span>{{ item.label }}</span>
         <span
           v-if="item.badge && item.badge > 0"
-          class="app-sidebar-badge"
+          class="ui-pill ui-pill--count app-sidebar-badge"
           :aria-label="`${item.badge} updates available`"
         >
-          {{ item.badge }}
+          <span class="ui-pill-text">{{ item.badge }}</span>
         </span>
       </NuxtLink>
     </nav>
@@ -655,18 +655,8 @@ async function selectProfile(profile: ProfileSummary) {
 }
 
 .app-sidebar-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.25rem;
-  height: 1.25rem;
-  padding: 0 0.35rem;
-  border-radius: 999px;
   background: var(--modio-accent);
   color: var(--modio-on-accent);
-  font-size: 0.7rem;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .sidebar-play {

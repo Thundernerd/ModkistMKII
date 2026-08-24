@@ -58,20 +58,20 @@ function formatCount(value: number) {
         <h2 class="mod-name">{{ mod.name }}</h2>
         <p class="mod-summary">{{ mod.summary }}</p>
         <div class="mod-stats">
-          <span class="stat">
+          <span class="ui-pill stat">
             <span class="stat-icon" aria-hidden="true">↓</span>
-            {{ formatCount(mod.downloadsTotal) }}
+            <span class="ui-pill-text">{{ formatCount(mod.downloadsTotal) }}</span>
           </span>
-          <span class="stat">
+          <span class="ui-pill stat">
             <span class="stat-icon" aria-hidden="true">★</span>
-            {{ formatCount(mod.subscribersTotal) }}
+            <span class="ui-pill-text">{{ formatCount(mod.subscribersTotal) }}</span>
           </span>
-          <span v-if="mod.popularityRank" class="stat">
-            #{{ mod.popularityRank }}
+          <span v-if="mod.popularityRank" class="ui-pill stat">
+            <span class="ui-pill-text">#{{ mod.popularityRank }}</span>
           </span>
         </div>
         <div v-if="mod.tags.length" class="mod-tags">
-          <span v-for="tag in mod.tags" :key="tag" class="tag">{{ tag }}</span>
+          <span v-for="tag in mod.tags" :key="tag" class="ui-pill tag"><span class="ui-pill-text">{{ tag }}</span></span>
         </div>
         <p v-if="mod.dateUpdated" class="mod-updated">
           Updated {{ formatDate(mod.dateUpdated) }}
@@ -205,11 +205,8 @@ function formatCount(value: number) {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.15rem 0.45rem;
-  border-radius: 999px;
   background: var(--modio-surface-raised);
   color: var(--modio-text-muted);
-  font-size: 0.75rem;
   font-weight: 500;
 }
 
@@ -225,12 +222,10 @@ function formatCount(value: number) {
 }
 
 .tag {
-  padding: 0.12rem 0.5rem;
-  border-radius: 999px;
   border: 1px solid var(--modio-border);
   background: transparent;
   color: var(--modio-text-muted);
-  font-size: 0.72rem;
+  font-weight: 500;
 }
 
 .mod-updated {

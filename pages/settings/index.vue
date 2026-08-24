@@ -458,7 +458,7 @@ function profileKindLabel(kind: string) {
 
       <p class="status-line">
         Status:
-        <span :class="['status-badge', statusClass]">{{ statusLabel }}</span>
+        <span :class="['ui-pill', 'status-badge', statusClass]"><span class="ui-pill-text">{{ statusLabel }}</span></span>
       </p>
 
       <div class="action-row">
@@ -606,12 +606,7 @@ function profileKindLabel(kind: string) {
 }
 
 .status-badge {
-  display: inline-block;
   margin-left: 0.35rem;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 600;
 }
 
 .status-ok {

@@ -338,8 +338,8 @@ onUnmounted(() => {
             <div class="sideload-info">
               <div class="sideload-title-row">
                 <h2>{{ entry.name }}</h2>
-                <span class="kind-badge">{{ targetKindLabel(entry.targetKind) }}</span>
-                <span v-if="entry.linked" class="kind-badge linked-badge">Linked</span>
+                <span class="ui-pill kind-badge"><span class="ui-pill-text">{{ targetKindLabel(entry.targetKind) }}</span></span>
+                <span v-if="entry.linked" class="ui-pill kind-badge linked-badge"><span class="ui-pill-text">Linked</span></span>
               </div>
               <p class="sideload-meta">
                 {{ entry.id }}
@@ -516,10 +516,6 @@ onUnmounted(() => {
 }
 
 .kind-badge {
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 600;
   background: var(--modio-surface-raised);
   color: var(--modio-text-muted);
 }
