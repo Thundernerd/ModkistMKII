@@ -42,7 +42,7 @@ fn launch_direct_exe(game_dir: &Path) -> Result<(), String> {
         .map_err(|error| format!("Did not start the game: {error}"))
 }
 
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn command_exists(command: &str) -> bool {
     Command::new(command)
         .arg("--version")

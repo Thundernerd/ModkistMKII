@@ -6,7 +6,9 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use crate::game_path::{game_executable_in_dir, validate_directory, is_game_executable_name, STEAM_APP_ID};
+use crate::game_path::{game_executable_in_dir, validate_directory, STEAM_APP_ID};
+#[cfg(unix)]
+use crate::game_path::is_game_executable_name;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +36,7 @@ pub fn detect_game_paths() -> Vec<GamePathCandidate> {
 
     // Wine/CrossOver prefix trees can be huge; only scan them when Steam
     // (and GameHub) did not already find a valid install.
+    #[cfg(unix)]
     if candidates.is_empty() {
         for root in prefix_scan_roots() {
             for path in find_zeepkist_dirs_in_tree(&root, 8) {
@@ -114,6 +117,7 @@ fn steam_install_roots() -> Vec<PathBuf> {
         }
     }
 
+    #[cfg(unix)]
     if let Some(home) = home_dir() {
         #[cfg(target_os = "linux")]
         {
@@ -185,6 +189,7 @@ fn parse_vdf_quoted_value(value: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+#[cfg(unix)]
 fn prefix_scan_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let Some(home) = home_dir() else {
@@ -221,10 +226,12 @@ fn prefix_scan_roots() -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(unix)]
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+#[cfg(unix)]
 fn find_zeepkist_dirs_in_tree(root: &Path, max_depth: u32) -> Vec<PathBuf> {
     let mut found = Vec::new();
     if !root.is_dir() {
@@ -234,6 +241,7 @@ fn find_zeepkist_dirs_in_tree(root: &Path, max_depth: u32) -> Vec<PathBuf> {
     found
 }
 
+#[cfg(unix)]
 fn walk_for_zeepkist(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
     if depth == 0 {
         return;
