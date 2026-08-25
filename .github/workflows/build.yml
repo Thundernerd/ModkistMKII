@@ -127,6 +127,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          shared-key: tauri-release
+          cache-on-failure: true
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
