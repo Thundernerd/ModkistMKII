@@ -1,9 +1,11 @@
 # Create a versioned GitHub release with installers for macOS, Windows, and Linux.
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
-#   MODIO_API_KEY  — game API key from mod.io
-#   MODIO_GAME_ID  — numeric game ID from mod.io
-#   SENTRY_DSN     — optional Sentry DSN for Rust and frontend error reporting
+#   MODIO_API_KEY                 — game API key from mod.io
+#   MODIO_GAME_ID                 — numeric game ID from mod.io
+#   SENTRY_DSN                    — optional Sentry DSN for Rust and frontend error reporting
+#   TAURI_SIGNING_PRIVATE_KEY     — minisign private key for updater artifacts
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password for that key
 #
 # Run from Actions → Release → Run workflow.
 #
@@ -20,6 +22,8 @@
 #
 # This workflow commits the version bump to main, pushes a git tag, creates a GitHub
 # release, builds Tauri bundles for all platforms, and uploads installers to the release.
+# Linux releases are AppImage only. After all platform builds succeed, updater
+# manifests are published to a rolling `updater` GitHub release.
 # Prerelease channels mark the GitHub release as a prerelease. Re-running the same
 # version/tag will fail if that tag already exists.
 #
@@ -163,7 +167,7 @@ jobs:
             tauri_args: --bundles msi
           - os: ubuntu-22.04
             platform: linux
-            tauri_args: ""
+            tauri_args: --bundles appimage
 
     steps:
       - name: Checkout
@@ -220,11 +224,31 @@ jobs:
           MODIO_API_KEY: ${{ secrets.MODIO_API_KEY }}
           MODIO_GAME_ID: ${{ secrets.MODIO_GAME_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.tauri_args }}
 
       - name: Patch AppImage for host Wayland (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: bash .github/scripts/patch-appimage-wayland.sh
+
+      - name: Re-sign patched AppImage
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(src-tauri/target/release/bundle/appimage/*_*_*.AppImage)
+          if [[ ${#appimages[@]} -eq 0 ]]; then
+            appimages=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          fi
+          if [[ ${#appimages[@]} -eq 0 ]]; then
+            echo "::error::No AppImage found to re-sign"
+            exit 1
+          fi
+          npm run tauri signer sign -- "${appimages[0]}"
 
       - name: Upload bundles to release
         shell: bash
@@ -239,17 +263,17 @@ jobs:
             macos-universal)
               while IFS= read -r -d '' file; do
                 files+=("$file")
-              done < <(find src-tauri/target -path '*/release/bundle/*' -name '*.dmg' -type f -print0)
+              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -type f -print0)
               ;;
             windows)
               while IFS= read -r -d '' file; do
                 files+=("$file")
-              done < <(find src-tauri/target -path '*/release/bundle/*' -name '*.msi' -type f -print0)
+              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.msi' -o -name '*.msi.sig' \) -type f -print0)
               ;;
             linux)
               while IFS= read -r -d '' file; do
                 files+=("$file")
-              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.deb' -o -name '*.AppImage' \) -type f -print0)
+              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.AppImage.sig' \) -type f -print0)
               ;;
             *)
               echo "::error::Unknown platform: $PLATFORM"
@@ -261,3 +285,22 @@ jobs:
             exit 1
           fi
           gh release upload "$TAG" "${files[@]}" --clobber
+
+  publish_updater_manifest:
+    name: updater-manifest
+    needs: [prepare_release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare_release.outputs.tag }}
+
+      - name: Publish updater manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare_release.outputs.version }}
+          TAG: ${{ needs.prepare_release.outputs.tag }}
+          PRERELEASE_CHANNEL: ${{ inputs.prerelease_channel }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node .github/scripts/publish-updater-manifest.mjs

@@ -28,6 +28,7 @@ mod wine_prefix;
 mod gamehub;
 
 mod app_settings;
+mod app_updater;
 mod auth;
 mod bepinex;
 mod game_detect;
@@ -53,9 +54,10 @@ mod zip_extract;
 
 use app_settings::{
     get_app_settings, get_ignore_bepinex_version_warning_enabled, remember_skip_sign_in,
-    remember_ignore_bepinex_version_warning, set_auto_update_mods,
+    remember_ignore_bepinex_version_warning, set_auto_update_app, set_auto_update_mods,
     set_ignore_bepinex_version_warning,
 };
+use app_updater::check_and_install_app_update;
 use auth::{auth_status, logout, request_email_code, verify_email_code};
 use bepinex::{
     bepinex_status, configure_wine_winhttp, install_bepinex, reinstall_bepinex, verify_bepinex,
@@ -93,7 +95,6 @@ const RELOAD_IF_BLANK_JS: &str = r#"window.setTimeout(function () {
   }
 }, 500)"#;
 
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     dotenvy::dotenv().ok();
@@ -102,6 +103,8 @@ pub fn run() {
     let _sentry_guard = sentry_init::init();
 
     let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
@@ -181,6 +184,7 @@ pub fn run() {
             get_app_settings,
             get_ignore_bepinex_version_warning_enabled,
             set_auto_update_mods,
+            set_auto_update_app,
             set_ignore_bepinex_version_warning,
             remember_ignore_bepinex_version_warning,
             remember_skip_sign_in,
@@ -214,6 +218,7 @@ pub fn run() {
             list_sideloaded_mods,
             add_sideloaded_mod,
             remove_sideloaded_mod,
+            check_and_install_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

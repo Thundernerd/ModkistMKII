@@ -12,6 +12,7 @@ The app uses Tauri 2, Nuxt 4 (Vue), and Rust.
 - Sideload local `.dll`, `.zeeplevel`, and `.zip` files.
 - Detect Zeepkist from Steam or from a Wine prefix.
 - Launch Zeepkist from the app.
+- Check GitHub Releases on startup and install app updates in the background.
 
 ## Requirements
 
@@ -64,6 +65,10 @@ Release builds embed `MODIO_API_KEY`, `MODIO_GAME_ID`, and `SENTRY_DSN` at compi
 GitHub Actions has two workflows:
 
 - **Build** — manual builds for macOS, Windows, and Linux. Bundles appear as workflow artifacts.
-- **Release** — version bump, git tag, GitHub release, and installer upload.
+- **Release** — version bump, git tag, GitHub release, installer upload, and updater manifests. Linux releases are AppImage only.
 
 Both workflows need the repository secrets `MODIO_API_KEY` and `MODIO_GAME_ID`. `SENTRY_DSN` is optional.
+
+App auto-update also needs `TAURI_SIGNING_PRIVATE_KEY`. Generate a minisign keypair with `npm run tauri signer generate -- -w ~/.tauri/modkist.key --ci -p ""`, then paste the private key into that GitHub secret. If the key has a password, also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The public key is already in `src-tauri/tauri.conf.json`. Losing the private key means existing installs cannot receive updates.
+
+Local `npm run tauri build` needs the same private key in `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH`. `.env` files are ignored for signing.

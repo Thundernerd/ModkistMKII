@@ -21,6 +21,14 @@ const { notifications, dismissNotification } = useNotifications();
         <div class="app-notification-body">
           <h2 class="app-notification-title">{{ notification.title }}</h2>
           <p class="app-notification-message">{{ notification.message }}</p>
+          <button
+            v-if="notification.action"
+            type="button"
+            class="app-notification-action"
+            @click="notification.action.onClick()"
+          >
+            {{ notification.action.label }}
+          </button>
         </div>
         <button
           type="button"
@@ -109,6 +117,21 @@ const { notifications, dismissNotification } = useNotifications();
   font-size: 0.84rem;
   line-height: 1.45;
   color: var(--modio-text-muted);
+}
+
+.app-notification-action {
+  margin-top: 0.65rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--modio-border);
+  border-radius: var(--modio-radius-sm);
+  background: var(--modio-surface-hover);
+  color: var(--modio-text);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.app-notification-action:hover {
+  border-color: var(--modio-accent);
 }
 
 .app-notification-dismiss {

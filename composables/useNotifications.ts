@@ -1,10 +1,16 @@
 export type NotificationTone = "error" | "info" | "success" | "warning";
 
+export interface NotificationAction {
+  label: string;
+  onClick: () => void | Promise<void>;
+}
+
 export interface AppNotification {
   id: number;
   title: string;
   message: string;
   tone: NotificationTone;
+  action?: NotificationAction;
 }
 
 const notifications = ref<AppNotification[]>([]);
@@ -19,6 +25,7 @@ export function useNotifications() {
     message: string;
     tone?: NotificationTone;
     durationMs?: number;
+    action?: NotificationAction;
   }) {
     const id = nextId++;
     const notification: AppNotification = {
@@ -26,6 +33,7 @@ export function useNotifications() {
       title: options.title,
       message: options.message,
       tone: options.tone ?? "info",
+      action: options.action,
     };
 
     notifications.value = [...notifications.value, notification];

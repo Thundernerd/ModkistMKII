@@ -29,6 +29,7 @@ tauri-plugin-store = "2"
 dotenvy = "0.15"
 time = { version = "0.3", features = ["formatting"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 pelite = "0.10"
 log = "0.4"
@@ -37,7 +38,11 @@ sysinfo = "0.33"
 sentry = { version = "0.42", default-features = false, features = ["backtrace", "contexts", "panic", "release-health", "reqwest", "rustls"] }
 tauri-plugin-sentry = "0.5.0"
 tauri-plugin-window-state = "2"
+tauri-plugin-process = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
 

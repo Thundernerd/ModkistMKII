@@ -11,6 +11,8 @@
     "store:default",
     "dialog:default",
     "sentry:default",
-    "window-state:default"
+    "window-state:default",
+    "updater:default",
+    "process:default"
   ]
 }

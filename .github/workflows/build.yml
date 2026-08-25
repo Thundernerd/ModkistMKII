@@ -1,14 +1,17 @@
 # Manual release builds for macOS, Windows, and Linux.
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
-#   MODIO_API_KEY  — game API key from mod.io
-#   MODIO_GAME_ID  — numeric game ID from mod.io
-#   SENTRY_DSN     — optional Sentry DSN for Rust and frontend error reporting
+#   MODIO_API_KEY                 — game API key from mod.io
+#   MODIO_GAME_ID                 — numeric game ID from mod.io
+#   SENTRY_DSN                    — optional Sentry DSN for Rust and frontend error reporting
+#   TAURI_SIGNING_PRIVATE_KEY     — minisign private key for updater artifacts
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — optional password for that key
 #
 # Run from Actions → Build → Run workflow. Choose which platforms to build.
 # Each build sets a local prerelease version from the workflow run number
 # (for example 0.1.0-34) without committing to git. Bundles appear as workflow
-# artifacts (dmg/msi/deb/AppImage per platform).
+# artifacts (dmg/msi/deb/AppImage per platform). This workflow does not publish
+# updater manifests.
 
 name: Build
 
@@ -148,11 +151,31 @@ jobs:
           MODIO_API_KEY: ${{ secrets.MODIO_API_KEY }}
           MODIO_GAME_ID: ${{ secrets.MODIO_GAME_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.tauri_args }}
 
       - name: Patch AppImage for host Wayland (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: bash .github/scripts/patch-appimage-wayland.sh
+
+      - name: Re-sign patched AppImage
+        if: matrix.os == 'ubuntu-22.04'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(src-tauri/target/release/bundle/appimage/*_*_*.AppImage)
+          if [[ ${#appimages[@]} -eq 0 ]]; then
+            appimages=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          fi
+          if [[ ${#appimages[@]} -eq 0 ]]; then
+            echo "::error::No AppImage found to re-sign"
+            exit 1
+          fi
+          npm run tauri signer sign -- "${appimages[0]}"
 
       - name: Upload bundles
         uses: actions/upload-artifact@v7.0.1
