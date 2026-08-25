@@ -29,6 +29,8 @@ export interface ModDetail {
   hasDependencies: boolean;
   homepageUrl?: string;
   fileId?: number;
+  /** True when mod.io admin status is archived (3). */
+  isArchived: boolean;
 }
 
 export interface ModDependency {

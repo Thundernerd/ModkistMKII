@@ -248,12 +248,23 @@ where
     Ok(modfile.filter(|file| file.id != 0))
 }
 
+/// mod.io admin status: 3 = archived (only returned via `/me/*` endpoints).
+/// See https://docs.mod.io/restapi/status-and-visibility
+pub const MOD_STATUS_ARCHIVED: u8 = 3;
+
+pub fn is_mod_archived(mod_: &ModObject) -> bool {
+    mod_.status == MOD_STATUS_ARCHIVED
+}
+
 #[derive(Deserialize, Clone)]
 pub struct ModObject {
     #[serde(default)]
     pub id: u64,
     #[serde(default)]
     pub game_id: u64,
+    /// Admin status: 0 = not accepted, 1 = accepted, 3 = archived.
+    #[serde(default)]
+    pub status: u8,
     #[serde(default)]
     pub visible: u8,
     #[serde(default)]
@@ -966,6 +977,26 @@ mod tests {
         };
         let params = query.to_params();
         assert!(params.contains(&("_sort".to_string(), "name".to_string())));
+    }
+
+    #[test]
+    fn status_defaults_to_zero_when_missing() {
+        let mod_: ModObject = serde_json::from_str(r#"{"id":1}"#).unwrap();
+        assert_eq!(mod_.status, 0);
+        assert!(!is_mod_archived(&mod_));
+    }
+
+    #[test]
+    fn status_three_is_archived() {
+        let mod_: ModObject = serde_json::from_str(r#"{"id":1,"status":3}"#).unwrap();
+        assert_eq!(mod_.status, MOD_STATUS_ARCHIVED);
+        assert!(is_mod_archived(&mod_));
+    }
+
+    #[test]
+    fn status_accepted_is_not_archived() {
+        let mod_: ModObject = serde_json::from_str(r#"{"id":1,"status":1}"#).unwrap();
+        assert!(!is_mod_archived(&mod_));
     }
 
     #[test]

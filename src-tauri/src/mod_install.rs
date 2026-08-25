@@ -8,13 +8,13 @@ use tauri::{AppHandle, State};
 use crate::app_settings::auto_update_mods_enabled;
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
-use crate::game_process::ensure_game_not_running;
+use crate::game_process::{ensure_game_not_running, is_zeepkist_running};
 use crate::mod_download::download_modfile;
 use crate::mod_folder::{
     install_folder_name, is_legacy_install_folder_name, parse_install_folder_name,
     rename_install_folder,
 };
-use crate::modio_api::ModObject;
+use crate::modio_api::{is_mod_archived, ModObject};
 use crate::profiles::{
     active_profile_info, active_profile_install_blocked, active_profile_is_custom,
     active_profile_is_user, directory_has_any_file, profile_archives_root,
@@ -287,6 +287,21 @@ fn remove_installed_record_folder(game_dir: &Path, record: &InstalledModRecord) 
     Ok(())
 }
 
+/// Removes local install folders, profile pin, and sync-failure tracking for an
+/// archived mod. Does not unsubscribe (callers that sync the account profile do that).
+fn remove_archived_mod_local(
+    app: &AppHandle,
+    state: &ModioState,
+    game_dir: &Path,
+    mod_id: u64,
+) -> Result<(), String> {
+    log::info!("Mod {mod_id} is archived on mod.io — removed locally");
+    remove_installed_mod_folders(game_dir, mod_id)?;
+    let _ = remove_active_profile_manifest_mod(app, state, mod_id);
+    let _ = remove_sync_mod_tracking(app, mod_id);
+    Ok(())
+}
+
 fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
     for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
         let kind_dir = kind_root_dir(game_dir, kind);
@@ -375,9 +390,22 @@ async fn prepare_installed_records(
     let records = scan_installed_mods(game_dir)?;
     let mut available = Vec::with_capacity(records.len());
     let mut mods_by_id = HashMap::new();
+    let game_running = is_zeepkist_running();
 
     for record in records {
         match fetch_mod_outcome(state, record.mod_id).await {
+            ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
+                if game_running {
+                    log::warn!(
+                        "Mod {} is archived on mod.io but Zeepkist is running — deferring removal",
+                        record.mod_id
+                    );
+                    mods_by_id.insert(record.mod_id, mod_);
+                    available.push(record);
+                } else {
+                    remove_archived_mod_local(app, state, game_dir, record.mod_id)?;
+                }
+            }
             ModFetchOutcome::Found(mod_) => {
                 mods_by_id.insert(record.mod_id, mod_);
                 available.push(record);
@@ -682,6 +710,9 @@ async fn install_single_mod(
     file_id: Option<u64>,
 ) -> Result<(), String> {
     let mod_ = fetch_mod_object(state, mod_id).await?;
+    if is_mod_archived(&mod_) {
+        return Err(format!("Mod {mod_id} is archived on mod.io and cannot be installed."));
+    }
     let file = match file_id {
         Some(file_id) => {
             let game_id = state.game_id()?;
@@ -1158,12 +1189,39 @@ async fn sync_subscribed_mods_inner(
     let game_dir = game_directory(app)?;
     ensure_install_prerequisites(&game_dir)?;
     let ignored: HashSet<u64> = read_ignored_sync_mod_ids(app).into_iter().collect();
-    let mod_ids: Vec<u64> = fetch_subscribed_mod_ids(state)
+    let mut mod_ids: Vec<u64> = fetch_subscribed_mod_ids(state)
         .await?
         .into_iter()
         .filter(|mod_id| !ignored.contains(mod_id))
         .collect();
     ensure_subscription_sync_may_continue(app, state).await?;
+
+    // Archived mods remain in /me/subscribed until we unsubscribe. Remove them
+    // locally and drop the subscription so sync cannot reinstall them.
+    let mut archived_ids = HashSet::new();
+    for &mod_id in &mod_ids {
+        ensure_subscription_sync_may_continue(app, state).await?;
+        let is_archived = match state.cached_mod(mod_id) {
+            Some(mod_) => is_mod_archived(&mod_),
+            None => match fetch_mod_outcome(state, mod_id).await {
+                ModFetchOutcome::Found(mod_) => is_mod_archived(&mod_),
+                _ => false,
+            },
+        };
+        if is_archived {
+            archived_ids.insert(mod_id);
+        }
+    }
+    if !archived_ids.is_empty() {
+        for &mod_id in &archived_ids {
+            ensure_subscription_sync_may_continue(app, state).await?;
+            remove_archived_mod_local(app, state, &game_dir, mod_id)?;
+            log::info!("Unsubscribing from archived mod {mod_id}");
+            unsubscribe_from_mod(state, mod_id).await?;
+        }
+        mod_ids.retain(|mod_id| !archived_ids.contains(mod_id));
+    }
+
     let subscribed_count = mod_ids.len();
     let subscribed_roots: HashSet<u64> = mod_ids.iter().copied().collect();
 
@@ -1181,6 +1239,9 @@ async fn sync_subscribed_mods_inner(
         match collect_install_order(state, *mod_id).await {
             Ok(order) => {
                 for target_mod_id in order {
+                    if archived_ids.contains(&target_mod_id) {
+                        continue;
+                    }
                     if *mod_id != target_mod_id {
                         dependency_to_subscribers
                             .entry(target_mod_id)
@@ -1188,6 +1249,14 @@ async fn sync_subscribed_mods_inner(
                             .insert(*mod_id);
                     }
                     if ignored.contains(&target_mod_id) {
+                        continue;
+                    }
+                    // Skip archived dependencies discovered via fetch (may not be in archived_ids).
+                    if state
+                        .cached_mod(target_mod_id)
+                        .as_ref()
+                        .is_some_and(is_mod_archived)
+                    {
                         continue;
                     }
                     if seen_targets.insert(target_mod_id) {
@@ -1293,6 +1362,16 @@ async fn reconcile_custom_profile_mods_inner(
     let mut failed_dependencies = Vec::new();
 
     for entry in &manifest.mods {
+        let is_archived = match fetch_mod_outcome(state, entry.mod_id).await {
+            ModFetchOutcome::Found(mod_) => is_mod_archived(&mod_),
+            _ => false,
+        };
+        if is_archived {
+            remove_archived_mod_local(app, state, &game_dir, entry.mod_id)?;
+            installed_ids.remove(&entry.mod_id);
+            continue;
+        }
+
         if installed_ids.contains(&entry.mod_id) {
             skipped.push(entry.mod_id);
             continue;

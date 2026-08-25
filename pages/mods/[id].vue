@@ -525,6 +525,9 @@ function dependencyMeta(dep: ModDependency) {
           <p v-if="installEnvironmentError" class="sidebar-install-hint">
             {{ installEnvironmentError }}
           </p>
+          <p v-else-if="mod.isArchived" class="sidebar-install-hint">
+            This mod is archived on mod.io and cannot be installed.
+          </p>
           <p v-else-if="profileInstallBlocked" class="sidebar-install-hint">
             Installs are disabled on the Vanilla profile.
           </p>
@@ -534,7 +537,8 @@ function dependencyMeta(dep: ModDependency) {
 
           <ModInstallButton
             :mod-id="mod.id"
-            :status="getUiStatus(mod.id)"
+            :status="mod.isArchived ? 'unavailable' : getUiStatus(mod.id)"
+            :unavailable-label="mod.isArchived ? 'Archived' : undefined"
             :can-uninstall="getCanUninstall(mod.id)"
             :is-uninstalling="isUninstalling(mod.id)"
             :error="getInstallError(mod.id)"

@@ -9,12 +9,15 @@ const props = withDefaults(
     isUninstalling?: boolean;
     error?: string;
     compact?: boolean;
+    /** When status is unavailable, use this label instead of "Unavailable". */
+    unavailableLabel?: string;
   }>(),
   {
     canUninstall: false,
     isUninstalling: false,
     error: "",
     compact: false,
+    unavailableLabel: "Unavailable",
   },
 );
 
@@ -32,7 +35,7 @@ const label = computed(() => {
     case "upToDate":
       return "Uninstall";
     case "unavailable":
-      return "Unavailable";
+      return props.unavailableLabel;
     case "installBlocked":
       return "Install blocked";
     default:

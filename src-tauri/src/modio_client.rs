@@ -8,7 +8,7 @@ use tauri_plugin_store::StoreExt;
 use crate::mod_api_cache::ApiCache;
 use std::collections::HashSet;
 
-use crate::modio_api::{ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile};
+use crate::modio_api::{is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile};
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
@@ -766,6 +766,8 @@ pub struct ModDetail {
     pub has_dependencies: bool,
     pub homepage_url: Option<String>,
     pub file_id: Option<u64>,
+    /// True when mod.io admin status is archived (3).
+    pub is_archived: bool,
 }
 
 #[derive(Serialize)]
@@ -965,6 +967,7 @@ fn mod_to_detail(mod_: ModObject) -> ModDetail {
         .unwrap_or_else(|| mod_.logo.original.clone());
     let file_id = mod_.modfile.as_ref().map(|file| file.id);
     let submitted_by_avatar_url = mod_.submitted_by.avatar_thumb();
+    let is_archived = is_mod_archived(&mod_);
     let tags: Vec<String> = mod_.tags.into_iter().map(|tag| tag.name).collect();
 
     ModDetail {
@@ -995,6 +998,7 @@ fn mod_to_detail(mod_: ModObject) -> ModDetail {
         has_dependencies: mod_.dependencies,
         homepage_url: mod_.homepage_url,
         file_id,
+        is_archived,
     }
 }
 
@@ -1015,6 +1019,20 @@ fn mod_file_to_entry(file: Modfile) -> ModFileEntry {
 }
 
 fn mod_to_dependency(mod_: ModObject) -> ModDependency {
+    if is_mod_archived(&mod_) {
+        return ModDependency {
+            id: mod_.id,
+            name: mod_.name,
+            profile_url: mod_.profile_url,
+            logo_url: mod_.logo.thumb_320x180,
+            submitted_by_username: mod_.submitted_by.username,
+            date_updated: timestamp_to_iso(mod_.date_updated),
+            downloads_total: mod_.stats.downloads_total,
+            file_size_bytes: None,
+            unavailable: true,
+            unavailable_reason: Some("Archived on mod.io.".into()),
+        };
+    }
     let file_size_bytes = mod_.modfile.as_ref().map(|file| file.filesize);
     ModDependency {
         id: mod_.id,
@@ -1097,7 +1115,7 @@ fn mod_matches_game(mod_: &ModObject, game_id: u64) -> bool {
     mod_.game_id == 0 || mod_.game_id == game_id
 }
 
-/// Appends mods from a browse page, skipping duplicates and wrong-game entries.
+/// Appends mods from a browse page, skipping duplicates, wrong-game, and archived entries.
 fn append_mod_list_page(
     state: &ModioState,
     game_id: u64,
@@ -1106,7 +1124,7 @@ fn append_mod_list_page(
     list: ListResponse<ModObject>,
 ) {
     for mod_ in list.data {
-        if !mod_matches_game(&mod_, game_id) || !seen.insert(mod_.id) {
+        if !mod_matches_game(&mod_, game_id) || is_mod_archived(&mod_) || !seen.insert(mod_.id) {
             continue;
         }
         seed_mod_cache(state, &mod_);
@@ -1347,7 +1365,7 @@ pub async fn list_user_mods(state: State<'_, ModioState>) -> Result<ModListResul
     let mods = list
         .data
         .into_iter()
-        .filter(|mod_| mod_matches_game(mod_, game_id))
+        .filter(|mod_| mod_matches_game(mod_, game_id) && !is_mod_archived(mod_))
         .map(|mod_| {
             seed_mod_cache(&state, &mod_);
             mod_to_summary(mod_)
@@ -1457,5 +1475,52 @@ mod build_mod_query_tests {
             query.tags_not_in,
             vec!["UI".to_string(), "Audio".to_string()]
         );
+    }
+}
+
+#[cfg(test)]
+mod archived_mod_tests {
+    use super::*;
+
+    fn sample_mod(id: u64, status: u8) -> ModObject {
+        serde_json::from_str(&format!(
+            r#"{{"id":{id},"game_id":1,"status":{status},"name":"Mod {id}","modfile":null}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn append_mod_list_page_skips_archived() {
+        let state = ModioState::from_env();
+        let mut seen = HashSet::new();
+        let mut mods = Vec::new();
+        let list = ListResponse {
+            data: vec![sample_mod(10, 1), sample_mod(20, 3), sample_mod(30, 1)],
+            result_total: 3,
+        };
+
+        append_mod_list_page(&state, 1, &mut seen, &mut mods, list);
+
+        assert_eq!(mods.len(), 2);
+        assert_eq!(mods[0].id, 10);
+        assert_eq!(mods[1].id, 30);
+        assert!(!seen.contains(&20));
+    }
+
+    #[test]
+    fn mod_to_dependency_marks_archived_unavailable() {
+        let dep = mod_to_dependency(sample_mod(42, 3));
+        assert!(dep.unavailable);
+        assert_eq!(dep.unavailable_reason.as_deref(), Some("Archived on mod.io."));
+        assert_eq!(dep.name, "Mod 42");
+    }
+
+    #[test]
+    fn mod_to_detail_sets_is_archived() {
+        let detail = mod_to_detail(sample_mod(7, 3));
+        assert!(detail.is_archived);
+
+        let accepted = mod_to_detail(sample_mod(8, 1));
+        assert!(!accepted.is_archived);
     }
 }
