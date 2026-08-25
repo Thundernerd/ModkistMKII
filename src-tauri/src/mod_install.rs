@@ -277,16 +277,6 @@ fn find_installed_record(records: &[InstalledModRecord], mod_id: u64) -> Option<
     records.iter().find(|record| record.mod_id == mod_id)
 }
 
-fn remove_installed_record_folder(game_dir: &Path, record: &InstalledModRecord) -> Result<(), String> {
-    let path = kind_root_dir(game_dir, record.kind).join(&record.folder_name);
-    if path.is_dir() {
-        fs::remove_dir_all(&path).map_err(|e| {
-            format!("Did not remove installed mod folder {}: {e}", path.display())
-        })?;
-    }
-    Ok(())
-}
-
 /// Removes local install folders, profile pin, and sync-failure tracking.
 /// Does not unsubscribe (callers that sync the account profile do that).
 fn remove_inaccessible_mod_local(
@@ -1825,7 +1815,7 @@ mod tests {
     }
 
     #[test]
-    fn removes_installed_record_folder_by_name() {
+    fn removes_installed_mod_folders_by_mod_id() {
         let root = std::env::temp_dir().join("modkist-mod-install-cleanup");
         let _ = fs::remove_dir_all(&root);
         let game_dir = root.join("game");
@@ -1833,14 +1823,7 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         fs::write(folder.join("mod.dll"), b"test").unwrap();
 
-        let record = InstalledModRecord {
-            mod_id: 12345,
-            file_id: 67890,
-            kind: InstalledModKind::Plugin,
-            folder_name: "12345_67890".into(),
-        };
-
-        remove_installed_record_folder(&game_dir, &record).unwrap();
+        remove_installed_mod_folders(&game_dir, 12345).unwrap();
         assert!(!folder.exists());
 
         let _ = fs::remove_dir_all(&root);
