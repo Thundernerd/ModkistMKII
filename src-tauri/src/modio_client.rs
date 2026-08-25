@@ -453,9 +453,10 @@ pub fn format_api_error_logged_in(error: ApiError, logged_in: bool) -> String {
     error.message
 }
 
-/// True when mod.io reports the mod no longer exists (deleted or removed).
+/// True when mod.io reports the mod no longer exists, or a logged-in bearer
+/// retry confirmed the caller cannot access it.
 pub fn is_mod_unavailable(error: &ApiError) -> bool {
-    error.is_not_found()
+    error.is_not_found() || error.inaccessible_after_bearer_retry
 }
 
 pub fn should_cache_dependency_fetch_failure(error: &ApiError) -> bool {
@@ -1387,6 +1388,7 @@ mod format_api_error_tests {
             error_ref: None,
             message: "The mod ID you have included in your request could not be found.".to_string(),
             retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
         }
     }
 
@@ -1402,6 +1404,46 @@ mod format_api_error_tests {
         assert!(message.contains("private"));
         assert!(message.contains("not subscribed"));
         assert!(!message.contains("Sign in to mod.io"));
+    }
+}
+
+#[cfg(test)]
+mod is_mod_unavailable_tests {
+    use super::*;
+    use crate::modio_api::ApiError;
+
+    fn error(status: Option<u16>, inaccessible_after_bearer_retry: bool) -> ApiError {
+        ApiError {
+            status,
+            error_ref: None,
+            message: "test".to_string(),
+            retry_after_secs: None,
+            inaccessible_after_bearer_retry,
+        }
+    }
+
+    #[test]
+    fn treats_404_as_unavailable() {
+        assert!(is_mod_unavailable(&error(Some(404), false)));
+    }
+
+    #[test]
+    fn treats_bearer_retry_client_errors_as_unavailable() {
+        assert!(is_mod_unavailable(&error(Some(403), true)));
+        assert!(is_mod_unavailable(&error(Some(400), true)));
+    }
+
+    #[test]
+    fn logged_out_403_is_not_unavailable() {
+        assert!(!is_mod_unavailable(&error(Some(403), false)));
+    }
+
+    #[test]
+    fn transient_and_session_errors_are_not_unavailable() {
+        assert!(!is_mod_unavailable(&error(Some(401), false)));
+        assert!(!is_mod_unavailable(&error(Some(429), false)));
+        assert!(!is_mod_unavailable(&error(Some(503), false)));
+        assert!(!is_mod_unavailable(&error(None, false)));
     }
 }
 

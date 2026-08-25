@@ -287,15 +287,16 @@ fn remove_installed_record_folder(game_dir: &Path, record: &InstalledModRecord) 
     Ok(())
 }
 
-/// Removes local install folders, profile pin, and sync-failure tracking for an
-/// archived mod. Does not unsubscribe (callers that sync the account profile do that).
-fn remove_archived_mod_local(
+/// Removes local install folders, profile pin, and sync-failure tracking.
+/// Does not unsubscribe (callers that sync the account profile do that).
+fn remove_inaccessible_mod_local(
     app: &AppHandle,
     state: &ModioState,
     game_dir: &Path,
     mod_id: u64,
+    reason: &str,
 ) -> Result<(), String> {
-    log::info!("Mod {mod_id} is archived on mod.io — removed locally");
+    log::info!("Mod {mod_id} {reason} — removed locally");
     remove_installed_mod_folders(game_dir, mod_id)?;
     let _ = remove_active_profile_manifest_mod(app, state, mod_id);
     let _ = remove_sync_mod_tracking(app, mod_id);
@@ -403,7 +404,13 @@ async fn prepare_installed_records(
                     mods_by_id.insert(record.mod_id, mod_);
                     available.push(record);
                 } else {
-                    remove_archived_mod_local(app, state, game_dir, record.mod_id)?;
+                    remove_inaccessible_mod_local(
+                        app,
+                        state,
+                        game_dir,
+                        record.mod_id,
+                        "is archived on mod.io",
+                    )?;
                 }
             }
             ModFetchOutcome::Found(mod_) => {
@@ -411,8 +418,22 @@ async fn prepare_installed_records(
                 available.push(record);
             }
             ModFetchOutcome::Unavailable => {
-                remove_installed_record_folder(game_dir, &record)?;
-                state.invalidate_mod_cache(record.mod_id);
+                if game_running {
+                    log::warn!(
+                        "Mod {} is no longer available on mod.io but Zeepkist is running — deferring removal",
+                        record.mod_id
+                    );
+                    available.push(record);
+                } else {
+                    remove_inaccessible_mod_local(
+                        app,
+                        state,
+                        game_dir,
+                        record.mod_id,
+                        "is no longer available on mod.io",
+                    )?;
+                    state.invalidate_mod_cache(record.mod_id);
+                }
             }
             ModFetchOutcome::Failed(_) => available.push(record),
         }
@@ -1196,30 +1217,32 @@ async fn sync_subscribed_mods_inner(
         .collect();
     ensure_subscription_sync_may_continue(app, state).await?;
 
-    // Archived mods remain in /me/subscribed until we unsubscribe. Remove them
-    // locally and drop the subscription so sync cannot reinstall them.
-    let mut archived_ids = HashSet::new();
+    // Archived or inaccessible mods remain in /me/subscribed until we unsubscribe.
+    // Remove them locally and drop the subscription so sync cannot reinstall them.
+    let mut drop_reasons: HashMap<u64, &'static str> = HashMap::new();
     for &mod_id in &mod_ids {
         ensure_subscription_sync_may_continue(app, state).await?;
-        let is_archived = match state.cached_mod(mod_id) {
-            Some(mod_) => is_mod_archived(&mod_),
-            None => match fetch_mod_outcome(state, mod_id).await {
-                ModFetchOutcome::Found(mod_) => is_mod_archived(&mod_),
-                _ => false,
-            },
+        let reason = match fetch_mod_outcome(state, mod_id).await {
+            ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
+                Some("is archived on mod.io")
+            }
+            ModFetchOutcome::Unavailable => Some("is no longer available on mod.io"),
+            _ => None,
         };
-        if is_archived {
-            archived_ids.insert(mod_id);
+        if let Some(reason) = reason {
+            drop_reasons.insert(mod_id, reason);
         }
     }
-    if !archived_ids.is_empty() {
-        for &mod_id in &archived_ids {
+    if !drop_reasons.is_empty() {
+        for (&mod_id, reason) in &drop_reasons {
             ensure_subscription_sync_may_continue(app, state).await?;
-            remove_archived_mod_local(app, state, &game_dir, mod_id)?;
-            log::info!("Unsubscribing from archived mod {mod_id}");
-            unsubscribe_from_mod(state, mod_id).await?;
+            remove_inaccessible_mod_local(app, state, &game_dir, mod_id, reason)?;
+            log::info!("Unsubscribing from inaccessible mod {mod_id} ({reason})");
+            if let Err(message) = unsubscribe_from_mod(state, mod_id).await {
+                log::warn!("Could not unsubscribe from inaccessible mod {mod_id}: {message}");
+            }
         }
-        mod_ids.retain(|mod_id| !archived_ids.contains(mod_id));
+        mod_ids.retain(|mod_id| !drop_reasons.contains_key(mod_id));
     }
 
     let subscribed_count = mod_ids.len();
@@ -1239,7 +1262,7 @@ async fn sync_subscribed_mods_inner(
         match collect_install_order(state, *mod_id).await {
             Ok(order) => {
                 for target_mod_id in order {
-                    if archived_ids.contains(&target_mod_id) {
+                    if drop_reasons.contains_key(&target_mod_id) {
                         continue;
                     }
                     if *mod_id != target_mod_id {
@@ -1251,11 +1274,13 @@ async fn sync_subscribed_mods_inner(
                     if ignored.contains(&target_mod_id) {
                         continue;
                     }
-                    // Skip archived dependencies discovered via fetch (may not be in archived_ids).
+                    // Skip archived/unavailable dependencies discovered via fetch
+                    // (may not be in drop_reasons).
                     if state
                         .cached_mod(target_mod_id)
                         .as_ref()
                         .is_some_and(is_mod_archived)
+                        || state.cached_mod_unavailable(target_mod_id)
                     {
                         continue;
                     }
@@ -1362,14 +1387,30 @@ async fn reconcile_custom_profile_mods_inner(
     let mut failed_dependencies = Vec::new();
 
     for entry in &manifest.mods {
-        let is_archived = match fetch_mod_outcome(state, entry.mod_id).await {
-            ModFetchOutcome::Found(mod_) => is_mod_archived(&mod_),
-            _ => false,
-        };
-        if is_archived {
-            remove_archived_mod_local(app, state, &game_dir, entry.mod_id)?;
-            installed_ids.remove(&entry.mod_id);
-            continue;
+        match fetch_mod_outcome(state, entry.mod_id).await {
+            ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
+                remove_inaccessible_mod_local(
+                    app,
+                    state,
+                    &game_dir,
+                    entry.mod_id,
+                    "is archived on mod.io",
+                )?;
+                installed_ids.remove(&entry.mod_id);
+                continue;
+            }
+            ModFetchOutcome::Unavailable => {
+                remove_inaccessible_mod_local(
+                    app,
+                    state,
+                    &game_dir,
+                    entry.mod_id,
+                    "is no longer available on mod.io",
+                )?;
+                installed_ids.remove(&entry.mod_id);
+                continue;
+            }
+            _ => {}
         }
 
         if installed_ids.contains(&entry.mod_id) {

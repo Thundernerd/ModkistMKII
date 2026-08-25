@@ -5,8 +5,10 @@
 //! (`https://g-{game_id}.modapi.io/v1` by default). Mod metadata and dependency
 //! reads try the game `api_key` first; when that fails and a bearer token is
 //! available, the same request is retried with OAuth (e.g. private subscribed
-//! mods). Failures on the api-key attempt are logged at debug level when a
-//! bearer retry is planned. Other OAuth-only endpoints always use the bearer token.
+//! mods). A failed bearer retry is marked inaccessible unless it is a 5xx, 429,
+//! 401, or transport error. Failures on the api-key attempt are logged at debug
+//! level when a bearer retry is planned. Other OAuth-only endpoints always use
+//! the bearer token.
 
 use std::time::{Duration, Instant};
 
@@ -32,6 +34,10 @@ pub struct ApiError {
     pub error_ref: Option<u32>,
     pub message: String,
     pub retry_after_secs: Option<u64>,
+    /// Set when an api-key GET failed and the bearer retry also failed with a
+    /// response that means the caller cannot access the mod (not 5xx / 429 / 401
+    /// / transport). Callers treat this as "mod unavailable".
+    pub inaccessible_after_bearer_retry: bool,
 }
 
 impl ApiError {
@@ -41,6 +47,7 @@ impl ApiError {
             error_ref: None,
             message,
             retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
         }
     }
 
@@ -74,6 +81,32 @@ impl ApiError {
     /// Both mean the desired rating state is already reached.
     pub fn is_rating_already_applied(&self) -> bool {
         matches!(self.error_ref, Some(15028 | 15043))
+    }
+
+    pub fn is_unauthorized(&self) -> bool {
+        self.status == Some(401)
+    }
+
+    pub fn is_server_error(&self) -> bool {
+        self.status.is_some_and(|status| (500..600).contains(&status))
+    }
+
+    /// True when a failed bearer retry should be treated as "this mod is gone
+    /// or inaccessible", rather than a transient or session problem.
+    fn should_mark_inaccessible_after_bearer_retry(&self) -> bool {
+        if self.status.is_none()
+            || self.is_rate_limited()
+            || self.is_unauthorized()
+            || self.is_server_error()
+        {
+            return false;
+        }
+        true
+    }
+
+    fn mark_inaccessible_after_bearer_retry(mut self) -> Self {
+        self.inaccessible_after_bearer_retry = self.should_mark_inaccessible_after_bearer_retry();
+        self
     }
 
     fn log(&self, context: &str) {
@@ -538,6 +571,7 @@ impl ApiClient {
             error_ref,
             message,
             retry_after_secs: retry_after,
+            inaccessible_after_bearer_retry: false,
         };
         // If mod.io rate limited us, pause all subsequent requests for the
         // advised window instead of immediately retrying into the same block.
@@ -613,7 +647,7 @@ impl ApiClient {
             Ok(value) => Ok(value),
             Err(bearer_error) => {
                 api_key_error.log(context);
-                Err(bearer_error)
+                Err(bearer_error.mark_inaccessible_after_bearer_retry())
             }
         }
     }
@@ -1059,6 +1093,7 @@ mod tests {
             error_ref: Some(11009),
             message: "slow down".to_string(),
             retry_after_secs: Some(60),
+            inaccessible_after_bearer_retry: false,
         };
         assert!(err.is_rate_limited());
         assert!(!err.is_auth());
@@ -1071,9 +1106,62 @@ mod tests {
             error_ref: Some(15005),
             message: "not subscribed".to_string(),
             retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
         };
         assert!(err.is_not_subscribed());
         assert!(!err.is_not_found());
         assert!(!err.is_rate_limited());
+    }
+
+    fn test_error(status: Option<u16>) -> ApiError {
+        ApiError {
+            status,
+            error_ref: None,
+            message: "test".to_string(),
+            retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
+        }
+    }
+
+    #[test]
+    fn bearer_retry_marks_client_errors_inaccessible() {
+        let err = test_error(Some(403)).mark_inaccessible_after_bearer_retry();
+        assert!(err.inaccessible_after_bearer_retry);
+
+        let err = test_error(Some(404)).mark_inaccessible_after_bearer_retry();
+        assert!(err.inaccessible_after_bearer_retry);
+
+        let err = test_error(Some(400)).mark_inaccessible_after_bearer_retry();
+        assert!(err.inaccessible_after_bearer_retry);
+    }
+
+    #[test]
+    fn bearer_retry_does_not_mark_transient_or_session_errors() {
+        assert!(!test_error(Some(500))
+            .mark_inaccessible_after_bearer_retry()
+            .inaccessible_after_bearer_retry);
+        assert!(!test_error(Some(503))
+            .mark_inaccessible_after_bearer_retry()
+            .inaccessible_after_bearer_retry);
+        assert!(!test_error(Some(429))
+            .mark_inaccessible_after_bearer_retry()
+            .inaccessible_after_bearer_retry);
+        assert!(!test_error(Some(401))
+            .mark_inaccessible_after_bearer_retry()
+            .inaccessible_after_bearer_retry);
+        assert!(!test_error(None)
+            .mark_inaccessible_after_bearer_retry()
+            .inaccessible_after_bearer_retry);
+
+        let rate_limited = ApiError {
+            status: Some(400),
+            error_ref: Some(11008),
+            message: "too many requests".to_string(),
+            retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
+        };
+        assert!(!rate_limited
+            .mark_inaccessible_after_bearer_retry()
+            .inaccessible_after_bearer_retry);
     }
 }
