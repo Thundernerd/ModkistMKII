@@ -16,10 +16,17 @@ export default defineNuxtConfig({
     envPrefix: ["VITE_", "TAURI_"],
     optimizeDeps: {
       include: [
+        "@sentry/vue",
+        "@tanstack/vue-virtual",
+        "@tauri-apps/api/app",
         "@tauri-apps/api/core",
         "@tauri-apps/api/event",
+        "@tauri-apps/api/webview",
+        "@tauri-apps/api/window",
         "@tauri-apps/plugin-dialog",
+        "@tauri-apps/plugin-opener",
         "@tauri-apps/plugin-process",
+        "tauri-plugin-sentry-api",
       ],
     },
     server: {
