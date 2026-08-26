@@ -78,7 +78,8 @@ use profiles::{
     logout_requires_profile_selection_command, rename_profile, switch_profile,
 };
 use sideload::{
-    add_sideloaded_mod, list_sideloaded_mods, remove_sideloaded_mod, sideloaded_mod_path,
+    add_sideloaded_mod, list_sideloaded_mods, remove_sideloaded_mod, rename_sideloaded_mod,
+    sideloaded_mod_path,
 };
 use subscription_sync_settings::{
     list_failed_sync_mods_command, set_failed_sync_mod_ignored, FailedSyncState,
@@ -219,6 +220,7 @@ pub fn run() {
             list_sideloaded_mods,
             add_sideloaded_mod,
             remove_sideloaded_mod,
+            rename_sideloaded_mod,
             sideloaded_mod_path,
             check_and_install_app_update,
         ])

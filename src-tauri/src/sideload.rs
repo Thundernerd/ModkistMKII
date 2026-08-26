@@ -1120,6 +1120,96 @@ pub fn sideloaded_mod_path(app: AppHandle, entry_id: String) -> Result<String, S
     Ok(entry_path.to_string_lossy().into_owned())
 }
 
+fn rename_sideload_entry(root: &Path, entry_id: &str, new_name: &str) -> Result<(), String> {
+    if !is_safe_entry_id(entry_id) {
+        return Err("Invalid sideload entry id.".into());
+    }
+
+    let sanitized = sanitize_mod_name(new_name);
+    if sanitized.is_empty() {
+        return Err("Enter a name for the sideloaded mod.".into());
+    }
+    if !is_safe_path_segment(&sanitized) {
+        return Err("Invalid sideload name.".into());
+    }
+
+    let entry_path = resolve_entry_dir(root, entry_id);
+    if !entry_path.exists() {
+        return Err("Sideloaded mod was not found.".into());
+    }
+
+    let is_file = entry_path.is_file();
+    let current_name = if is_file {
+        entry_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| "Did not read sideload entry name.".to_string())?
+    } else {
+        entry_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "Did not read sideload entry name.".to_string())?
+    };
+
+    if current_name == sanitized {
+        return Ok(());
+    }
+
+    let dest_file_name = if is_file {
+        match entry_path.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) => format!("{sanitized}.{ext}"),
+            None => sanitized.clone(),
+        }
+    } else {
+        sanitized.clone()
+    };
+
+    let parts: Vec<&str> = entry_id.split('/').collect();
+    let new_entry_id = match parts.as_slice() {
+        [kind, _] => format!("{kind}/{dest_file_name}"),
+        [_] => dest_file_name.clone(),
+        _ => return Err("Invalid sideload entry id.".into()),
+    };
+
+    if !is_safe_entry_id(&new_entry_id) {
+        return Err("Invalid sideload name.".into());
+    }
+
+    let parent = entry_path
+        .parent()
+        .ok_or_else(|| "Did not resolve sideload entry parent.".to_string())?;
+    let dest_path = parent.join(&dest_file_name);
+
+    if dest_path.exists() {
+        return Err(format!(
+            "A sideloaded mod named \"{sanitized}\" already exists."
+        ));
+    }
+
+    fs::rename(&entry_path, &dest_path).map_err(|e| {
+        format!(
+            "Did not rename sideload entry {} to {}: {e}",
+            entry_path.display(),
+            dest_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rename_sideloaded_mod(
+    app: AppHandle,
+    entry_id: String,
+    new_name: String,
+) -> Result<Vec<SideloadedEntry>, String> {
+    ensure_game_not_running()?;
+
+    let root = ensure_sideload_ready(&app)?;
+    rename_sideload_entry(&root, &entry_id, &new_name)?;
+    list_all_entries(&root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1139,6 +1229,42 @@ mod tests {
         assert!(is_safe_entry_id("Plugins/MyMod.dll"));
         assert!(is_safe_entry_id("Blueprints/MyLevel"));
         assert!(is_safe_entry_id("Blueprints/MyLevel.zeeplevel"));
+    }
+
+    #[test]
+    fn renames_directory_and_loose_file_entries() {
+        let root = std::env::temp_dir().join("modkist-sideload-rename");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Plugins/net472")).unwrap();
+        fs::write(root.join("Plugins/net472/mod.dll"), b"dll").unwrap();
+        fs::write(root.join("Plugins/LooseMod.dll"), b"dll").unwrap();
+
+        rename_sideload_entry(&root, "Plugins/net472", "CoolMod").unwrap();
+        assert!(root.join("Plugins/CoolMod").is_dir());
+        assert!(!root.join("Plugins/net472").exists());
+        assert!(root.join("Plugins/CoolMod/mod.dll").is_file());
+
+        rename_sideload_entry(&root, "Plugins/LooseMod.dll", "RenamedLoose").unwrap();
+        assert!(root.join("Plugins/RenamedLoose.dll").is_file());
+        assert!(!root.join("Plugins/LooseMod.dll").exists());
+
+        fs::create_dir_all(root.join("Plugins/Taken")).unwrap();
+        let conflict = rename_sideload_entry(&root, "Plugins/CoolMod", "Taken").unwrap_err();
+        assert!(conflict.contains("already exists"));
+
+        rename_sideload_entry(&root, "Plugins/CoolMod", "CoolMod").unwrap();
+        assert!(root.join("Plugins/CoolMod").is_dir());
+
+        let empty = rename_sideload_entry(&root, "Plugins/CoolMod", "   ").unwrap_err();
+        assert!(empty.contains("Enter a name"));
+
+        let entries = list_all_entries(&root).unwrap();
+        assert!(entries.iter().any(|entry| entry.id == "Plugins/CoolMod"));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.id == "Plugins/RenamedLoose.dll"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

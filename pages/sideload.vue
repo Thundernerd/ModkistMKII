@@ -18,8 +18,10 @@ const {
   addSideloaded,
   removeSideloaded,
   openSideloadedFolder,
+  renameSideloaded,
   isRemoving,
   isOpening,
+  isRenaming,
 } = useSideload();
 const { gameRunning, gameRunningMessage } = useGameProcess();
 
@@ -29,6 +31,8 @@ const pendingSourcePaths = ref<string[]>([]);
 const pendingFolderName = ref("");
 const pendingUseSymlinks = ref(false);
 const linking = ref(false);
+const renameOpen = ref(false);
+const renameEntry = ref<SideloadedEntry | null>(null);
 const dropzoneRef = ref<HTMLElement | null>(null);
 const dragActive = ref(false);
 let unlistenDragDrop: UnlistenFn | undefined;
@@ -171,6 +175,30 @@ async function handleOpenFolder(entry: SideloadedEntry) {
   pageError.value = "";
   try {
     await openSideloadedFolder(entry.id);
+  } catch (err) {
+    pageError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+function openRename(entry: SideloadedEntry) {
+  pageError.value = "";
+  renameEntry.value = entry;
+  renameOpen.value = true;
+}
+
+function closeRename() {
+  renameOpen.value = false;
+  renameEntry.value = null;
+}
+
+async function handleRename(newName: string) {
+  const entry = renameEntry.value;
+  if (!entry) return;
+
+  pageError.value = "";
+  try {
+    await renameSideloaded(entry.id, newName);
+    closeRename();
   } catch (err) {
     pageError.value = err instanceof Error ? err.message : String(err);
   }
@@ -371,6 +399,14 @@ onUnmounted(() => {
               </button>
               <button
                 type="button"
+                class="btn-secondary"
+                :disabled="actionsDisabled || isRenaming(entry.id)"
+                @click="openRename(entry)"
+              >
+                Rename
+              </button>
+              <button
+                type="button"
                 class="btn-danger"
                 :disabled="actionsDisabled || isRemoving(entry.id)"
                 @click="handleRemove(entry)"
@@ -388,6 +424,14 @@ onUnmounted(() => {
       :folder-name="pendingFolderName"
       @close="closeTargetChoice"
       @select="handleTargetChoice"
+    />
+
+    <SideloadRenameDialog
+      :open="renameOpen"
+      :current-name="renameEntry?.name ?? ''"
+      :busy="renameEntry ? isRenaming(renameEntry.id) : false"
+      @close="closeRename"
+      @rename="handleRename"
     />
   </div>
 </template>

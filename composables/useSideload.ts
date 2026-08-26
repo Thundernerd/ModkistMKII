@@ -24,6 +24,7 @@ export function useSideload() {
   const adding = ref(false);
   const removingIds = ref<Set<string>>(new Set());
   const openingIds = ref<Set<string>>(new Set());
+  const renamingIds = ref<Set<string>>(new Set());
   const error = ref("");
 
   async function refreshSideloaded() {
@@ -78,6 +79,10 @@ export function useSideload() {
     return openingIds.value.has(entryId);
   }
 
+  function isRenaming(entryId: string) {
+    return renamingIds.value.has(entryId);
+  }
+
   async function removeSideloaded(entryId: string) {
     removingIds.value = new Set(removingIds.value).add(entryId);
     error.value = "";
@@ -113,18 +118,40 @@ export function useSideload() {
     }
   }
 
+  async function renameSideloaded(entryId: string, newName: string) {
+    renamingIds.value = new Set(renamingIds.value).add(entryId);
+    error.value = "";
+
+    try {
+      entries.value = await invoke<SideloadedEntry[]>("rename_sideloaded_mod", {
+        entryId,
+        newName,
+      });
+    } catch (err) {
+      error.value = String(err);
+      throw err;
+    } finally {
+      const next = new Set(renamingIds.value);
+      next.delete(entryId);
+      renamingIds.value = next;
+    }
+  }
+
   return {
     entries,
     loading,
     adding,
     removingIds,
     openingIds,
+    renamingIds,
     error,
     refreshSideloaded,
     addSideloaded,
     removeSideloaded,
     openSideloadedFolder,
+    renameSideloaded,
     isRemoving,
     isOpening,
+    isRenaming,
   };
 }
