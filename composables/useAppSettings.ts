@@ -2,20 +2,17 @@ import { invoke } from "~/utils/tauri";
 
 export interface AppSettings {
   autoUpdateMods: boolean;
-  autoUpdateApp: boolean;
   skipSignIn: boolean;
   ignoreBepInExVersionWarning: boolean;
 }
 
 const autoUpdateMods = ref(true);
-const autoUpdateApp = ref(true);
 const skipSignIn = ref(false);
 const ignoreBepInExVersionWarning = ref(false);
 const settingsReady = ref(false);
 
 function syncSettings(settings: AppSettings) {
   autoUpdateMods.value = settings.autoUpdateMods;
-  autoUpdateApp.value = settings.autoUpdateApp;
   skipSignIn.value = settings.skipSignIn;
   ignoreBepInExVersionWarning.value = settings.ignoreBepInExVersionWarning;
 }
@@ -30,14 +27,6 @@ export function useAppSettings() {
 
   async function setAutoUpdateMods(enabled: boolean) {
     const settings = await invoke<AppSettings>("set_auto_update_mods", {
-      enabled,
-    });
-    syncSettings(settings);
-    return settings;
-  }
-
-  async function setAutoUpdateApp(enabled: boolean) {
-    const settings = await invoke<AppSettings>("set_auto_update_app", {
       enabled,
     });
     syncSettings(settings);
@@ -72,13 +61,11 @@ export function useAppSettings() {
 
   return {
     autoUpdateMods,
-    autoUpdateApp,
     skipSignIn,
     ignoreBepInExVersionWarning,
     settingsReady,
     refreshAppSettings,
     setAutoUpdateMods,
-    setAutoUpdateApp,
     setIgnoreBepInExVersionWarning,
     rememberIgnoreBepInExVersionWarning,
     isBepInExVersionWarningSuppressed,

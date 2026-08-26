@@ -5,7 +5,6 @@ import { runStartupLaunchArgs } from "~/composables/useStartupLaunchArgs";
 const ready = ref(false);
 const { startGameProcessPolling, stopGameProcessPolling } = useGameProcess();
 const { configureWineWinhttp } = useWineWinhttp();
-const { checkAndInstallAppUpdate } = useAppUpdater();
 
 onMounted(async () => {
   if (!(await ensureGamePath())) {
@@ -16,7 +15,6 @@ onMounted(async () => {
   if (ready.value) {
     startGameProcessPolling();
     configureWineWinhttp().catch(() => {});
-    checkAndInstallAppUpdate().catch(() => {});
     await runStartupLaunchArgs();
   }
 });

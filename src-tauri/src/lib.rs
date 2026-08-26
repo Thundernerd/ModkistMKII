@@ -54,7 +54,7 @@ mod zip_extract;
 
 use app_settings::{
     get_app_settings, get_ignore_bepinex_version_warning_enabled, remember_skip_sign_in,
-    remember_ignore_bepinex_version_warning, set_auto_update_app, set_auto_update_mods,
+    remember_ignore_bepinex_version_warning, set_auto_update_mods,
     set_ignore_bepinex_version_warning,
 };
 use app_updater::check_and_install_app_update;
@@ -184,7 +184,6 @@ pub fn run() {
             get_app_settings,
             get_ignore_bepinex_version_warning_enabled,
             set_auto_update_mods,
-            set_auto_update_app,
             set_ignore_bepinex_version_warning,
             remember_ignore_bepinex_version_warning,
             remember_skip_sign_in,

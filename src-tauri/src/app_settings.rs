@@ -4,7 +4,6 @@ use tauri_plugin_store::StoreExt;
 
 pub const SETTINGS_STORE_PATH: &str = "modkist-settings.json";
 const AUTO_UPDATE_MODS_KEY: &str = "autoUpdateMods";
-const AUTO_UPDATE_APP_KEY: &str = "autoUpdateApp";
 const SKIP_SIGN_IN_KEY: &str = "skipSignIn";
 const IGNORE_BEPINEX_VERSION_WARNING_KEY: &str = "ignoreBepInExVersionWarning";
 
@@ -12,7 +11,6 @@ const IGNORE_BEPINEX_VERSION_WARNING_KEY: &str = "ignoreBepInExVersionWarning";
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub auto_update_mods: bool,
-    pub auto_update_app: bool,
     pub skip_sign_in: bool,
     pub ignore_bepinex_version_warning: bool,
 }
@@ -40,7 +38,6 @@ pub fn ignore_bepinex_version_warning_enabled(app: &AppHandle) -> bool {
 fn app_settings_for(app: &AppHandle) -> AppSettings {
     AppSettings {
         auto_update_mods: auto_update_mods_enabled(app),
-        auto_update_app: auto_update_app_enabled(app),
         skip_sign_in: read_skip_sign_in(app),
         ignore_bepinex_version_warning: read_ignore_bepinex_version_warning(app),
     }
@@ -57,14 +54,6 @@ pub fn auto_update_mods_enabled(app: &AppHandle) -> bool {
     app.store(SETTINGS_STORE_PATH)
         .ok()
         .and_then(|store| store.get(AUTO_UPDATE_MODS_KEY))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(true)
-}
-
-pub fn auto_update_app_enabled(app: &AppHandle) -> bool {
-    app.store(SETTINGS_STORE_PATH)
-        .ok()
-        .and_then(|store| store.get(AUTO_UPDATE_APP_KEY))
         .and_then(|value| value.as_bool())
         .unwrap_or(true)
 }
@@ -86,18 +75,6 @@ pub fn set_auto_update_mods(app: AppHandle, enabled: bool) -> Result<AppSettings
     store.save().map_err(|e| e.to_string())?;
     log::info!(
         "Auto-update mods {}",
-        if enabled { "enabled" } else { "disabled" }
-    );
-    Ok(app_settings_for(&app))
-}
-
-#[tauri::command]
-pub fn set_auto_update_app(app: AppHandle, enabled: bool) -> Result<AppSettings, String> {
-    let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
-    store.set(AUTO_UPDATE_APP_KEY, serde_json::json!(enabled));
-    store.save().map_err(|e| e.to_string())?;
-    log::info!(
-        "Auto-update Modkist {}",
         if enabled { "enabled" } else { "disabled" }
     );
     Ok(app_settings_for(&app))

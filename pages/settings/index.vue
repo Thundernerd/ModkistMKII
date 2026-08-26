@@ -19,12 +19,10 @@ const {
 } = useBepInEx();
 const {
   autoUpdateMods,
-  autoUpdateApp,
   ignoreBepInExVersionWarning,
   settingsReady,
   refreshAppSettings,
   setAutoUpdateMods,
-  setAutoUpdateApp,
 } = useAppSettings();
 const {
   wineStatus,
@@ -239,8 +237,6 @@ const {
 
 const savingAutoUpdate = ref(false);
 const autoUpdateError = ref("");
-const savingAutoUpdateApp = ref(false);
-const autoUpdateAppError = ref("");
 const openingLogsFolder = ref(false);
 const logsFolderError = ref("");
 
@@ -268,19 +264,6 @@ async function handleAutoUpdateToggle() {
     autoUpdateError.value = err instanceof Error ? err.message : String(err);
   } finally {
     savingAutoUpdate.value = false;
-  }
-}
-
-async function handleAutoUpdateAppToggle() {
-  const next = !autoUpdateApp.value;
-  savingAutoUpdateApp.value = true;
-  autoUpdateAppError.value = "";
-  try {
-    await setAutoUpdateApp(next);
-  } catch (err) {
-    autoUpdateAppError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    savingAutoUpdateApp.value = false;
   }
 }
 
@@ -347,37 +330,6 @@ function profileKindLabel(kind: string) {
       </div>
       <p v-if="logsFolderError" class="error feedback">{{ logsFolderError }}</p>
     </header>
-
-    <section class="panel">
-      <h2 class="panel-title">Application</h2>
-      <p class="hint panel-desc">
-        Control how Modkist updates itself.
-      </p>
-
-      <div class="setting-row">
-        <div class="setting-copy">
-          <span class="setting-label">Auto-update Modkist</span>
-          <span class="setting-hint">
-            When enabled, Modkist downloads and installs app updates in the
-            background, then asks you to restart.
-          </span>
-        </div>
-        <button
-          type="button"
-          class="setting-toggle"
-          role="switch"
-          :aria-checked="autoUpdateApp"
-          :disabled="!settingsReady || savingAutoUpdateApp"
-          @click="handleAutoUpdateAppToggle"
-        >
-          <span class="setting-toggle-track" :class="{ on: autoUpdateApp }">
-            <span class="setting-toggle-thumb" />
-          </span>
-        </button>
-      </div>
-
-      <p v-if="autoUpdateAppError" class="error feedback">{{ autoUpdateAppError }}</p>
-    </section>
 
     <section class="panel">
       <h2 class="panel-title">Mods</h2>
