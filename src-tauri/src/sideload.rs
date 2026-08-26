@@ -1105,6 +1105,21 @@ pub fn remove_sideloaded_mod(
     list_all_entries(&root)
 }
 
+#[tauri::command]
+pub fn sideloaded_mod_path(app: AppHandle, entry_id: String) -> Result<String, String> {
+    if !is_safe_entry_id(&entry_id) {
+        return Err("Invalid sideload entry id.".into());
+    }
+
+    let root = ensure_sideload_ready(&app)?;
+    let entry_path = resolve_entry_dir(&root, &entry_id);
+    if !entry_path.exists() {
+        return Err("Sideloaded mod was not found.".into());
+    }
+
+    Ok(entry_path.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

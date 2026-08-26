@@ -1,3 +1,4 @@
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "~/utils/tauri";
 
 export type SideloadTargetKind = "plugins" | "blueprints";
@@ -22,6 +23,7 @@ export function useSideload() {
   const loading = ref(false);
   const adding = ref(false);
   const removingIds = ref<Set<string>>(new Set());
+  const openingIds = ref<Set<string>>(new Set());
   const error = ref("");
 
   async function refreshSideloaded() {
@@ -72,6 +74,10 @@ export function useSideload() {
     return removingIds.value.has(entryId);
   }
 
+  function isOpening(entryId: string) {
+    return openingIds.value.has(entryId);
+  }
+
   async function removeSideloaded(entryId: string) {
     removingIds.value = new Set(removingIds.value).add(entryId);
     error.value = "";
@@ -90,15 +96,35 @@ export function useSideload() {
     }
   }
 
+  async function openSideloadedFolder(entryId: string) {
+    openingIds.value = new Set(openingIds.value).add(entryId);
+    error.value = "";
+
+    try {
+      const path = await invoke<string>("sideloaded_mod_path", { entryId });
+      await revealItemInDir(path);
+    } catch (err) {
+      error.value = String(err);
+      throw err;
+    } finally {
+      const next = new Set(openingIds.value);
+      next.delete(entryId);
+      openingIds.value = next;
+    }
+  }
+
   return {
     entries,
     loading,
     adding,
     removingIds,
+    openingIds,
     error,
     refreshSideloaded,
     addSideloaded,
     removeSideloaded,
+    openSideloadedFolder,
     isRemoving,
+    isOpening,
   };
 }

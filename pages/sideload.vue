@@ -17,7 +17,9 @@ const {
   refreshSideloaded,
   addSideloaded,
   removeSideloaded,
+  openSideloadedFolder,
   isRemoving,
+  isOpening,
 } = useSideload();
 const { gameRunning, gameRunningMessage } = useGameProcess();
 
@@ -160,6 +162,15 @@ async function handleRemove(entry: SideloadedEntry) {
   pageError.value = "";
   try {
     await removeSideloaded(entry.id);
+  } catch (err) {
+    pageError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function handleOpenFolder(entry: SideloadedEntry) {
+  pageError.value = "";
+  try {
+    await openSideloadedFolder(entry.id);
   } catch (err) {
     pageError.value = err instanceof Error ? err.message : String(err);
   }
@@ -349,14 +360,24 @@ onUnmounted(() => {
               </p>
             </div>
 
-            <button
-              type="button"
-              class="btn-danger"
-              :disabled="actionsDisabled || isRemoving(entry.id)"
-              @click="handleRemove(entry)"
-            >
-              {{ isRemoving(entry.id) ? "Removing…" : "Remove" }}
-            </button>
+            <div class="sideload-actions">
+              <button
+                type="button"
+                class="btn-secondary"
+                :disabled="loading || adding || linking || isOpening(entry.id)"
+                @click="handleOpenFolder(entry)"
+              >
+                {{ isOpening(entry.id) ? "Opening…" : "Open folder" }}
+              </button>
+              <button
+                type="button"
+                class="btn-danger"
+                :disabled="actionsDisabled || isRemoving(entry.id)"
+                @click="handleRemove(entry)"
+              >
+                {{ isRemoving(entry.id) ? "Removing…" : "Remove" }}
+              </button>
+            </div>
           </article>
         </li>
       </ul>
@@ -494,6 +515,13 @@ onUnmounted(() => {
   border-radius: var(--modio-radius);
   border: 1px solid var(--modio-border);
   background: var(--modio-surface);
+}
+
+.sideload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 .sideload-title-row {
