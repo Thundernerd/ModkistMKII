@@ -1003,14 +1003,18 @@ fn mod_to_detail(mod_: ModObject) -> ModDetail {
     }
 }
 
+pub(crate) fn modfile_version_label(file: &Modfile) -> String {
+    if file.version.trim().is_empty() {
+        file.filename.clone()
+    } else {
+        file.version.clone()
+    }
+}
+
 fn mod_file_to_entry(file: Modfile) -> ModFileEntry {
     ModFileEntry {
         id: file.id,
-        version: if file.version.trim().is_empty() {
-            file.filename.clone()
-        } else {
-            file.version
-        },
+        version: modfile_version_label(&file),
         filename: file.filename,
         filesize: file.filesize,
         date_added: timestamp_to_iso(file.date_added),

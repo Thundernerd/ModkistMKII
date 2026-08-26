@@ -14,7 +14,7 @@ use crate::mod_folder::{
     install_folder_name, is_legacy_install_folder_name, parse_install_folder_name,
     rename_install_folder,
 };
-use crate::modio_api::{is_mod_archived, ModObject};
+use crate::modio_api::{is_mod_archived, ModObject, Modfile};
 use crate::profiles::{
     active_profile_info, active_profile_install_blocked, active_profile_is_custom,
     active_profile_is_user, directory_has_any_file, profile_archives_root,
@@ -29,7 +29,8 @@ use crate::subscription_sync_settings::{
 };
 use crate::modio_client::{
     fetch_mod_object, fetch_mod_outcome, fetch_mod_dependency_ids, fetch_subscribed_mod_ids,
-    subscribe_to_mod, unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioState,
+    format_api_error, modfile_version_label, subscribe_to_mod, unsubscribe_from_mod,
+    with_rate_limit_retry, ModFetchOutcome, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -146,6 +147,10 @@ pub struct InstalledModEntry {
     pub tags: Vec<String>,
     pub update_available: bool,
     pub latest_file_id: Option<u64>,
+    /// Human-readable version for the installed file (falls back to filename).
+    pub version: String,
+    /// Human-readable version for the current mod.io file, when known.
+    pub latest_version: Option<String>,
     pub can_uninstall: bool,
     pub uninstall_blocked_by: Vec<UninstallBlocker>,
 }
@@ -1528,6 +1533,53 @@ pub async fn list_installed_mod_records(app: AppHandle) -> Result<Vec<InstalledM
     scan_installed_mods(&game_dir)
 }
 
+async fn resolve_installed_file_version(
+    state: &ModioState,
+    mod_id: u64,
+    file_id: u64,
+    latest_file: Option<&Modfile>,
+) -> String {
+    if let Some(file) = latest_file.filter(|file| file.id == file_id) {
+        return modfile_version_label(file);
+    }
+
+    if let Some(files) = state.cached_mod_files(mod_id) {
+        if let Some(file) = files.iter().find(|file| file.id == file_id) {
+            return modfile_version_label(file);
+        }
+    }
+
+    let Ok(game_id) = state.game_id() else {
+        return String::new();
+    };
+    let Ok(api) = state.api() else {
+        return String::new();
+    };
+    let token = state.session_token();
+    match api
+        .get_mod_file(game_id, mod_id, file_id, token.as_deref())
+        .await
+    {
+        Ok(file) => {
+            let label = modfile_version_label(&file);
+            if let Some(mut files) = state.cached_mod_files(mod_id) {
+                if !files.iter().any(|cached| cached.id == file.id) {
+                    files.push(file);
+                    state.store_mod_files(mod_id, files);
+                }
+            }
+            label
+        }
+        Err(error) => {
+            log::warn!(
+                "Did not resolve version for mod {mod_id} file {file_id}: {}",
+                format_api_error(error)
+            );
+            String::new()
+        }
+    }
+}
+
 async fn list_installed_mods_inner(
     app: &AppHandle,
     state: &ModioState,
@@ -1545,8 +1597,13 @@ async fn list_installed_mods_inner(
             continue;
         };
 
-        let latest_file_id = mod_.modfile.as_ref().map(|file| file.id);
+        let latest_file = mod_.modfile.as_ref();
+        let latest_file_id = latest_file.map(|file| file.id);
+        let latest_version = latest_file.map(modfile_version_label);
         let update_available = latest_file_id.is_some_and(|latest| latest != record.file_id);
+        let version =
+            resolve_installed_file_version(state, record.mod_id, record.file_id, latest_file)
+                .await;
         let tags: Vec<String> = mod_.tags.iter().map(|tag| tag.name.clone()).collect();
         let blockers =
             uninstall_blockers_for(state, record.mod_id, &installed_ids, &dependency_map)
@@ -1563,6 +1620,8 @@ async fn list_installed_mods_inner(
             tags,
             update_available,
             latest_file_id,
+            version,
+            latest_version,
             can_uninstall: blockers.is_empty(),
             uninstall_blocked_by: blockers,
         });

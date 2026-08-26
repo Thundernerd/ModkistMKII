@@ -162,10 +162,13 @@ onMounted(loadUpdates);
                 <div class="updates-info">
                   <h2>{{ mod.name }}</h2>
                   <p class="updates-summary">{{ mod.summary }}</p>
-                  <p class="updates-meta">
-                    Installed file {{ mod.fileId }}
-                    <span v-if="mod.latestFileId">
-                      · Latest {{ mod.latestFileId }}
+                  <p
+                    v-if="mod.version || mod.latestVersion"
+                    class="updates-meta"
+                  >
+                    <template v-if="mod.version">Installed {{ mod.version }}</template>
+                    <span v-if="mod.latestVersion">
+                      <template v-if="mod.version"> · </template>Latest {{ mod.latestVersion }}
                     </span>
                   </p>
                 </div>

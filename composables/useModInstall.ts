@@ -46,6 +46,8 @@ export interface InstalledModEntry {
   tags: string[];
   updateAvailable: boolean;
   latestFileId: number | null;
+  version: string;
+  latestVersion: string | null;
   canUninstall: boolean;
   uninstallBlockedBy: UninstallBlocker[];
 }
@@ -151,6 +153,11 @@ function installedModLogo(modId: number) {
 
 function installedModFileId(modId: number) {
   return installedMods.value.find((mod) => mod.modId === modId)?.fileId ?? null;
+}
+
+function installedModVersion(modId: number) {
+  const version = installedMods.value.find((mod) => mod.modId === modId)?.version?.trim();
+  return version || undefined;
 }
 
 function historyActionFromPriorStatus(
@@ -505,7 +512,7 @@ export function useModInstall() {
       logoUrl: installedModLogo(options.modId),
       action: options.action,
       fileId: options.fileId ?? installedModFileId(options.modId),
-      versionLabel: options.versionLabel,
+      versionLabel: options.versionLabel ?? installedModVersion(options.modId),
       dependencyCount: options.dependencyCount ?? 0,
     });
   }

@@ -112,10 +112,10 @@ onMounted(loadInstalled);
                 <span v-if="mod.updateAvailable" class="ui-pill update-badge"><span class="ui-pill-text">Update</span></span>
               </div>
               <p class="installed-summary">{{ mod.summary }}</p>
-              <p class="installed-meta">
-                File {{ mod.fileId }}
-                <span v-if="mod.updateAvailable && mod.latestFileId">
-                  · Latest {{ mod.latestFileId }}
+              <p v-if="mod.version || (mod.updateAvailable && mod.latestVersion)" class="installed-meta">
+                <template v-if="mod.version">{{ mod.version }}</template>
+                <span v-if="mod.updateAvailable && mod.latestVersion">
+                  <template v-if="mod.version"> · </template>Latest {{ mod.latestVersion }}
                 </span>
               </p>
             </div>
