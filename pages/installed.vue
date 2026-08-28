@@ -38,8 +38,10 @@ async function loadInstalled() {
   }
 }
 
+const { catchModAction } = useModioErrorFeedback();
+
 async function handleInstall(modId: number) {
-  await installMod(modId);
+  await catchModAction(() => installMod(modId));
 }
 
 async function handleUninstall(modId: number, name: string) {
@@ -48,7 +50,7 @@ async function handleUninstall(modId: number, name: string) {
     { title: "Uninstall mod?", kind: "warning" },
   );
   if (!confirmed) return;
-  await uninstallMod(modId);
+  await catchModAction(() => uninstallMod(modId));
 }
 
 function kindLabel(kind: "plugin" | "blueprint") {

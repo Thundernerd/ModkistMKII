@@ -4,7 +4,9 @@ import {
   useInstallHistory,
   type InstallHistoryAction,
 } from "~/composables/useInstallHistory";
+import { useModioRateLimit } from "~/composables/useModioRateLimit";
 import { useNotifications } from "~/composables/useNotifications";
+import { isRateLimitedMessage, rateLimitUserMessage } from "~/utils/modioError";
 
 export type InstallUiStatus =
   | "notInstalled"
@@ -68,10 +70,6 @@ const SUCCESS_TOAST_DURATION_MS = 6_000;
 const WARNING_TOAST_DURATION_MS = 8_000;
 const ERROR_TOAST_DURATION_MS = 8_000;
 
-function isRateLimitedMessage(message: string) {
-  return message.toLowerCase().includes("rate limit");
-}
-
 function isReadableToastDetail(message: string) {
   const trimmed = message.trim();
   if (!trimmed || trimmed.length > 80) {
@@ -95,8 +93,7 @@ function subscriptionSyncFailureToast(message: string): {
   if (isRateLimitedMessage(message)) {
     return {
       title: "mod.io rate limit",
-      message:
-        "Did not sync your subscribed mods. Try again in about a minute.",
+      message: `Did not sync your subscribed mods. ${rateLimitUserMessage()}`,
     };
   }
 
@@ -491,6 +488,7 @@ async function seedInstalledFromDisk() {
 
 export function useModInstall() {
   const { pushNotification } = useNotifications();
+  const { showRateLimitBanner } = useModioRateLimit();
   const { recordInstall } = useInstallHistory();
   const {
     installBlocked: profileInstallBlocked,
@@ -691,6 +689,9 @@ export function useModInstall() {
           isCustom ? "Custom profile reconcile failed" : "Subscription sync failed",
           message,
         );
+        if (isRateLimitedMessage(message)) {
+          showRateLimitBanner();
+        }
         pushNotification({
           ...(isCustom
             ? {

@@ -1,10 +1,14 @@
 import type { ProfileSummary } from "~/composables/useProfiles";
+import { useModioErrorFeedback } from "~/composables/useModioErrorFeedback";
 import { useProfiles } from "~/composables/useProfiles";
 import { useModInstall } from "~/composables/useModInstall";
 import { useProfileSwitchUi } from "~/composables/useProfileSwitchUi";
+import { useNotifications } from "~/composables/useNotifications";
 
 export function useProfileActivation() {
   const { switchProfile } = useProfiles();
+  const { notifyIfRateLimited } = useModioErrorFeedback();
+  const { pushNotification } = useNotifications();
   const {
     invalidateInstalledModsCache,
     resetSessionSync,
@@ -35,6 +39,17 @@ export function useProfileActivation() {
         );
         await syncSubscribedModsIfNeeded();
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!notifyIfRateLimited(message)) {
+        pushNotification({
+          title: "Profile switch failed",
+          message,
+          tone: "error",
+          durationMs: 10_000,
+        });
+      }
+      throw error;
     } finally {
       endProfileSwitch();
     }

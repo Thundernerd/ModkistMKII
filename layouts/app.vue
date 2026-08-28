@@ -30,6 +30,7 @@ onUnmounted(() => {
     <div class="app-main">
       <ProfileSwitchOverlay />
       <AppNotifications />
+      <ModioRateLimitBanner />
       <WinePrefixBanner />
       <slot />
     </div>

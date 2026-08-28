@@ -247,13 +247,17 @@ async function copyModId() {
   }
 }
 
+const { catchModAction } = useModioErrorFeedback();
+
 async function handleInstall(targetModId = modId.value, fileId?: number) {
-  await installMod(targetModId, fileId);
+  await catchModAction(() => installMod(targetModId, fileId));
 }
 
 async function handleInstallVersion(fileId: number, versionLabel: string) {
   versionsOpen.value = false;
-  await installMod(modId.value, fileId, { versionLabel });
+  await catchModAction(() =>
+    installMod(modId.value, fileId, { versionLabel }),
+  );
 }
 
 async function handleUninstall(targetModId = modId.value, modName?: string) {
@@ -263,7 +267,7 @@ async function handleUninstall(targetModId = modId.value, modName?: string) {
     { title: "Uninstall mod?", kind: "warning" },
   );
   if (!confirmed) return;
-  await uninstallMod(targetModId);
+  await catchModAction(() => uninstallMod(targetModId));
 }
 
 function dependencyMeta(dep: ModDependency) {

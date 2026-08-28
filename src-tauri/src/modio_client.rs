@@ -590,7 +590,14 @@ pub(crate) async fn resolve_mod_name(state: &ModioState, mod_id: u64) -> Option<
 }
 
 pub(crate) fn is_rate_limited_message(message: &str) -> bool {
-    message.to_ascii_lowercase().contains("rate limit")
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("rate limit") || lower.contains("too many requests") {
+        return true;
+    }
+    if lower.contains("error_ref 11008") || lower.contains("error_ref 11009") {
+        return true;
+    }
+    lower.contains("429")
 }
 
 pub(crate) async fn with_rate_limit_retry<T, F, Fut>(mut operation: F) -> Result<T, String>
@@ -1408,6 +1415,19 @@ mod format_api_error_tests {
         assert!(message.contains("private"));
         assert!(message.contains("not subscribed"));
         assert!(!message.contains("Sign in to mod.io"));
+    }
+
+    #[test]
+    fn rate_limited_formatted_message_is_detected() {
+        let error = ApiError {
+            status: Some(400),
+            error_ref: Some(11008),
+            message: "You have made too many requests in a short period of time, please wait and try again soon.".to_string(),
+            retry_after_secs: Some(60),
+            inaccessible_after_bearer_retry: false,
+        };
+        let message = format_api_error_logged_in(error, true);
+        assert!(is_rate_limited_message(&message));
     }
 }
 

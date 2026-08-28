@@ -1,5 +1,7 @@
 import { invoke } from "~/utils/tauri";
+import { useModioRateLimit } from "~/composables/useModioRateLimit";
 import { useNotifications } from "~/composables/useNotifications";
+import { isRateLimitedMessage, rateLimitUserMessage } from "~/utils/modioError";
 
 export interface ModSummary {
   id: number;
@@ -47,6 +49,7 @@ const DEFAULT_LIMIT = 20;
 
 export function useMods() {
   const { pushNotification } = useNotifications();
+  const { showRateLimitBanner } = useModioRateLimit();
   const mods = ref<ModSummary[]>([]);
   const total = ref(0);
   const loading = ref(false);
@@ -105,10 +108,14 @@ export function useMods() {
         return;
       }
       const message = String(err);
+      const rateLimited = isRateLimitedMessage(message);
+      if (rateLimited) {
+        showRateLimitBanner();
+      }
       pushNotification({
         title: append ? "Did not load more mods" : "Did not load mods",
-        message,
-        tone: "error",
+        message: rateLimited ? rateLimitUserMessage() : message,
+        tone: rateLimited ? "warning" : "error",
         durationMs: 10_000,
       });
       if (!append) {

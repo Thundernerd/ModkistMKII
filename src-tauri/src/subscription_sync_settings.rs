@@ -202,7 +202,11 @@ fn refine_sync_failure(category: &str, message: &str) -> (String, Option<String>
     let lower = message.to_ascii_lowercase();
     let detail = truncate_error_detail(message);
 
-    if lower.contains("rate limit") {
+    if lower.contains("rate limit")
+        || lower.contains("too many requests")
+        || lower.contains("error_ref 11008")
+        || lower.contains("error_ref 11009")
+    {
         return ("rate_limit".to_string(), detail);
     }
     if lower.contains("no longer available") {

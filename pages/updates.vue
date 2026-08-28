@@ -44,8 +44,10 @@ async function loadUpdates() {
   }
 }
 
+const { catchModAction } = useModioErrorFeedback();
+
 async function handleInstall(modId: number) {
-  await installMod(modId);
+  await catchModAction(() => installMod(modId));
 }
 
 async function handleUpdateAll() {

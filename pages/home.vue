@@ -50,10 +50,12 @@ const {
   refreshModioStatus,
 } = useModioStatus();
 
+const { catchModAction, notifyIfRateLimited } = useModioErrorFeedback();
+
 const refreshing = ref(false);
 
 async function handleInstall(modId: number) {
-  await installMod(modId);
+  await catchModAction(() => installMod(modId));
 }
 
 async function handleUninstall(modId: number, modName: string) {
@@ -62,7 +64,7 @@ async function handleUninstall(modId: number, modName: string) {
     { title: "Uninstall mod?", kind: "warning" },
   );
   if (!confirmed) return;
-  await uninstallMod(modId);
+  await catchModAction(() => uninstallMod(modId));
 }
 
 async function refreshMods() {
@@ -81,6 +83,9 @@ async function refreshMods() {
     }
     resetSessionSync();
     await syncSubscribedModsIfNeeded();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    notifyIfRateLimited(message);
   } finally {
     refreshing.value = false;
   }
