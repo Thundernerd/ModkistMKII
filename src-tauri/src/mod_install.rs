@@ -1347,6 +1347,7 @@ async fn sync_subscribed_mods_inner(
         }
         Err(message) => log::error!("Subscription sync failed: {message}"),
     }
+    state.persist_cache(app);
     match result {
         Ok(mut summary) => {
             summary.dependency_failure_count = count_dependency_sync_failures(app)

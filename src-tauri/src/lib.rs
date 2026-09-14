@@ -149,7 +149,7 @@ pub fn run() {
                     state.auth_status().username.as_deref().unwrap_or("user")
                 );
             }
-            ModioState::clear_legacy_persisted_cache(app.handle());
+            state.load_persisted_cache(app.handle());
             app.manage(state);
 
             let launch_options = LaunchOptions::from_env_args();
