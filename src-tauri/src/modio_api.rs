@@ -25,6 +25,16 @@ const USER_AGENT: &str = concat!("Modkist/", env!("CARGO_PKG_VERSION"));
 /// bursts even when the per-minute quota is fine, so we pace every call.
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(110);
 
+/// mod.io `error_ref` codes that every caller checking them treats as a benign
+/// no-op (already in the desired state) rather than a real failure: "not
+/// subscribed" (15005, from unsubscribe) and "rating already applied/no
+/// rating to retract" (15028/15043, from rate). Logged at debug level
+/// instead of warn/error so they don't get reported as crashes. Checked both
+/// from the parsed `ApiError` (see `ApiError::is_expected_no_op`) and
+/// straight off the `X-Modio-Error-Ref` response header in `log_response`,
+/// which runs before the body is read.
+const EXPECTED_NO_OP_ERROR_REFS: [u32; 3] = [15005, 15028, 15043];
+
 /// Error returned by any mod.io API call. Captures the HTTP status, the mod.io
 /// `error_ref`, the server message and the `Retry-After` value (seconds) so the
 /// caller can distinguish rate limits, auth failures and missing resources.
@@ -87,7 +97,7 @@ impl ApiError {
     /// no-op (already in the desired state), not a real failure. Logged at
     /// debug level instead of error so they don't get reported as crashes.
     fn is_expected_no_op(&self) -> bool {
-        self.is_not_subscribed() || self.is_rating_already_applied()
+        self.error_ref.is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref))
     }
 
     pub fn is_unauthorized(&self) -> bool {
@@ -1001,9 +1011,15 @@ fn log_response(
         status.as_u16(),
         header_dump.join(", ")
     );
+    let expected_no_op = headers
+        .get("x-modio-error-ref")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u32>().ok())
+        .is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref));
+
     if status.is_success() {
         log::info!("{line}");
-    } else if quiet_on_failure && status.as_u16() != 429 {
+    } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
     } else {
         log::warn!("{line}");
