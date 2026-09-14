@@ -781,6 +781,15 @@ async fn reconcile_failed_sync_mods(
     }
 }
 
+/// Unique, non-conflicting staging directory name for an in-progress install.
+/// Deliberately doesn't parse as a valid `mod_id_file_id[_name]` install
+/// folder name so scan_kind_directory's orphan-cleanup ignores it.
+fn staging_dir_name(mod_id: u64, file_id: u64) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!(".modkist-installing-{mod_id}-{file_id}-{}-{counter}", std::process::id())
+}
+
 async fn install_single_mod(
     state: &ModioState,
     game_dir: &Path,
@@ -813,12 +822,22 @@ async fn install_single_mod(
 
     remove_installed_mod_folders(game_dir, mod_id)?;
 
-    let target_dir = kind_root_dir(game_dir, kind)
-        .join(install_folder_name(mod_id, file_id, &mod_.name));
-    fs::create_dir_all(&target_dir).map_err(|e| {
+    let kind_dir = kind_root_dir(game_dir, kind);
+    fs::create_dir_all(&kind_dir)
+        .map_err(|e| format!("Did not create {}: {e}", kind_dir.display()))?;
+    let target_dir = kind_dir.join(install_folder_name(mod_id, file_id, &mod_.name));
+
+    // Extract into a staging directory instead of target_dir directly. Its name
+    // doesn't parse as `mod_id_file_id[_name]`, so scan_kind_directory (which
+    // runs concurrently whenever anything refreshes the installed-mods list)
+    // ignores it entirely instead of finding an empty, still-populating
+    // directory that happens to share the final install folder's name and
+    // deleting it out from under this install.
+    let staging_dir = kind_dir.join(staging_dir_name(mod_id, file_id));
+    fs::create_dir_all(&staging_dir).map_err(|e| {
         format!(
-            "Did not create mod install directory {}: {e}",
-            target_dir.display()
+            "Did not create mod install staging directory {}: {e}",
+            staging_dir.display()
         )
     })?;
 
@@ -834,7 +853,7 @@ async fn install_single_mod(
             Some(expected_size),
         )
         .await?;
-        install_downloaded_mod(&download_path, &target_dir, &filename)?;
+        install_downloaded_mod(&download_path, &staging_dir, &filename)?;
         Ok::<(), String>(())
     }
     .await;
@@ -842,9 +861,21 @@ async fn install_single_mod(
     let _ = fs::remove_file(&download_path);
 
     if let Err(message) = install_result {
-        let _ = fs::remove_dir_all(&target_dir);
+        let _ = fs::remove_dir_all(&staging_dir);
         return Err(message);
     }
+
+    // Defensive: remove_installed_mod_folders already cleared any prior
+    // install of this mod, but nothing stops a concurrent operation from
+    // recreating target_dir in between, and rename() onto an existing
+    // non-empty directory fails.
+    let _ = remove_dir_all_with_retry(&target_dir);
+    fs::rename(&staging_dir, &target_dir).map_err(|e| {
+        format!(
+            "Did not move installed mod into place at {}: {e}",
+            target_dir.display()
+        )
+    })?;
 
     state.invalidate_mod_cache(mod_id);
 
