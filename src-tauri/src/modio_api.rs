@@ -674,8 +674,22 @@ impl ApiClient {
         match retry().await {
             Ok(value) => Ok(value),
             Err(bearer_error) => {
-                api_key_error.log(context);
-                Err(bearer_error.mark_inaccessible_after_bearer_retry())
+                let bearer_error = bearer_error.mark_inaccessible_after_bearer_retry();
+                if bearer_error.inaccessible_after_bearer_retry {
+                    // Every caller treats this as "mod unavailable" and moves on
+                    // (see ModFetchOutcome::Unavailable), not a real failure, so
+                    // keep it out of Sentry — still visible in the log file.
+                    log::debug!(
+                        "{context} not accessible with api key ({}) or bearer token ({}); treating as unavailable",
+                        api_key_error.message, bearer_error.message
+                    );
+                } else {
+                    // 401/429/5xx/transport on the bearer retry is a genuinely
+                    // unexpected failure the caller will propagate, so surface it.
+                    api_key_error.log(context);
+                    bearer_error.log(context);
+                }
+                Err(bearer_error)
             }
         }
     }
@@ -736,7 +750,11 @@ impl ApiClient {
                 if may_retry_with_bearer && Self::should_retry_with_bearer(&api_key_error) =>
             {
                 self.retry_with_bearer_after_api_key_failure(&path, api_key_error, || {
-                    self.send(reqwest::Method::GET, &path, token, &[], None)
+                    // Quiet here too: retry_with_bearer_after_api_key_failure
+                    // itself logs a single, appropriately-leveled summary once
+                    // it knows whether this becomes a real failure or just an
+                    // inaccessible mod.
+                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, true)
                 })
                 .await
             }
@@ -795,7 +813,11 @@ impl ApiClient {
                 if may_retry_with_bearer && Self::should_retry_with_bearer(&api_key_error) =>
             {
                 self.retry_with_bearer_after_api_key_failure(&path, api_key_error, || {
-                    self.send(reqwest::Method::GET, &path, token, &[], None)
+                    // Quiet here too: retry_with_bearer_after_api_key_failure
+                    // itself logs a single, appropriately-leveled summary once
+                    // it knows whether this becomes a real failure or just an
+                    // inaccessible mod.
+                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, true)
                 })
                 .await
             }
