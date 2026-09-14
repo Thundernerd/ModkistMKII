@@ -83,6 +83,13 @@ impl ApiError {
         matches!(self.error_ref, Some(15028 | 15043))
     }
 
+    /// True for error codes every caller that checks them treats as a benign
+    /// no-op (already in the desired state), not a real failure. Logged at
+    /// debug level instead of error so they don't get reported as crashes.
+    fn is_expected_no_op(&self) -> bool {
+        self.is_not_subscribed() || self.is_rating_already_applied()
+    }
+
     pub fn is_unauthorized(&self) -> bool {
         self.status == Some(401)
     }
@@ -116,6 +123,15 @@ impl ApiError {
             self.status,
             self.error_ref,
             self.retry_after_secs
+        );
+    }
+
+    fn log_expected(&self, context: &str) {
+        log::debug!(
+            "mod.io API error [{context}] (expected, treated as no-op): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
         );
     }
 
@@ -580,6 +596,8 @@ impl ApiClient {
         }
         if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);
+        } else if error.is_expected_no_op() {
+            error.log_expected(path);
         } else {
             error.log(path);
         }
