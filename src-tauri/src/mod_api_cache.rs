@@ -4,22 +4,33 @@ use std::time::{Duration, Instant};
 use crate::modio_api::{ModObject, Modfile};
 
 const CACHE_TTL: Duration = Duration::from_secs(300);
+/// Dependency graphs are effectively immutable per mod (unlike mod metadata,
+/// files or subscription state), so they can be cached far longer without
+/// going stale — this cuts most of the per-installed-mod dependency requests
+/// that repeat every time the 5-minute default TTL expires within a session.
+const DEPENDENCY_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 struct Timed<T> {
     value: T,
     fetched_at: Instant,
+    ttl: Duration,
 }
 
 impl<T: Clone> Timed<T> {
     fn new(value: T) -> Self {
+        Self::with_ttl(value, CACHE_TTL)
+    }
+
+    fn with_ttl(value: T, ttl: Duration) -> Self {
         Self {
             value,
             fetched_at: Instant::now(),
+            ttl,
         }
     }
 
     fn is_valid(&self) -> bool {
-        self.fetched_at.elapsed() < CACHE_TTL
+        self.fetched_at.elapsed() < self.ttl
     }
 }
 
@@ -125,7 +136,7 @@ impl ApiCache {
 
     pub(crate) fn store_dependencies(&mut self, mod_id: u64, dependencies: Vec<u64>) {
         self.dependencies
-            .insert(mod_id, Timed::new(dependencies));
+            .insert(mod_id, Timed::with_ttl(dependencies, DEPENDENCY_CACHE_TTL));
     }
 
     pub(crate) fn get_subscribed_mod_ids(&self) -> Option<Vec<u64>> {
