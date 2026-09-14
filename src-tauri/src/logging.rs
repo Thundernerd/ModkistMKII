@@ -60,9 +60,10 @@ fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Initialize Rust logging to a rotating file under `{app_data_dir}/logs`, next to
-/// the JSON config stores. Mirror info-level (and above) messages to stderr only
-/// when stderr is a terminal, so GUI/Steam/Deckify launches do not panic on a
-/// closed or piped stderr.
+/// the JSON config stores. Mirror info-level (and above) messages to stderr in debug
+/// builds unconditionally (so `tauri dev` shows logs even when stderr isn't a TTY),
+/// and in release builds only when stderr is a terminal, so GUI/Steam/Deckify launches
+/// do not panic on a closed or piped stderr.
 ///
 /// Filter via `RUST_LOG`, e.g. `RUST_LOG=modkistmkii_lib=debug` for verbose output.
 pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
@@ -85,7 +86,7 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
         logger.log_to_file(file_spec)
     };
 
-    let duplicate = if io::stderr().is_terminal() {
+    let duplicate = if cfg!(debug_assertions) || io::stderr().is_terminal() {
         Duplicate::Info
     } else {
         Duplicate::None
