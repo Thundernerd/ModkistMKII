@@ -1327,6 +1327,15 @@ pub async fn list_mods(
                         .map_err(format_api_error)
                 })
                 .await?;
+            // When this single page already covers every subscription (common
+            // case: fewer subscriptions than the browse page size), seed the
+            // subscribed-id cache so a subsequent sync doesn't re-fetch
+            // /me/subscribed from scratch just to get the same full id list.
+            if subscriptions.data.len() as u32 >= subscriptions.result_total {
+                let subscribed_ids: Vec<u64> =
+                    subscriptions.data.iter().map(|mod_| mod_.id).collect();
+                state.store_subscribed_mod_ids(subscribed_ids);
+            }
             (Some(user_list), Some(subscriptions))
         } else {
             (None, None)
