@@ -2552,6 +2552,7 @@ dependencies = [
  "time",
  "tokio",
  "url",
+ "winreg",
  "zip 2.4.2",
 ]
 

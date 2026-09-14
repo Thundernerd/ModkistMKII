@@ -59,6 +59,11 @@ fn find_steam_executable() -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
         let mut candidates = Vec::new();
+        // Prefer the registry, since Steam is very often installed outside
+        // the default Program Files locations (different drive, custom path).
+        if let Some(install_dir) = crate::game_path::windows_steam_install_dir() {
+            candidates.push(install_dir.join("steam.exe"));
+        }
         if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
             candidates.push(PathBuf::from(program_files_x86).join("Steam/steam.exe"));
         }

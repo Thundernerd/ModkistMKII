@@ -10,6 +10,29 @@ pub const STEAM_APP_ID: &str = "1440670";
 pub const GAME_EXECUTABLE: &str = "zeepkist.exe";
 const GAME_DIRECTORY_KEY: &str = "gameDirectoryPath";
 
+/// Reads Steam's actual install directory from the registry, so detection
+/// works regardless of where the user installed it (not just the two default
+/// Program Files locations). Steam always keeps this key up to date.
+#[cfg(windows)]
+pub(crate) fn windows_steam_install_dir() -> Option<PathBuf> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+
+    let from_key = |hive: winreg::HKEY, subkey: &str, value: &str| -> Option<PathBuf> {
+        let key = RegKey::predef(hive).open_subkey(subkey).ok()?;
+        let path: String = key.get_value(value).ok()?;
+        Some(PathBuf::from(path))
+    };
+
+    from_key(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath").or_else(|| {
+        from_key(
+            HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\WOW6432Node\\Valve\\Steam",
+            "InstallPath",
+        )
+    })
+}
+
 pub(crate) fn is_game_executable_name(name: &str) -> bool {
     name.eq_ignore_ascii_case(GAME_EXECUTABLE)
 }
