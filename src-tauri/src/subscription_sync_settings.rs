@@ -363,8 +363,13 @@ async fn enrich_failed_sync_mod_names(
     state: &crate::modio_client::ModioState,
     list: &mut FailedSyncModList,
 ) {
+    let mod_ids: Vec<u64> = list.mods.iter().map(|entry| entry.mod_id).collect();
+    let outcomes = crate::modio_client::fetch_mod_outcomes_batch(state, &mod_ids).await;
     for entry in &mut list.mods {
-        entry.mod_name = crate::modio_client::resolve_mod_name(state, entry.mod_id).await;
+        entry.mod_name = match outcomes.get(&entry.mod_id) {
+            Some(crate::modio_client::ModFetchOutcome::Found(mod_)) => Some(mod_.name.clone()),
+            _ => None,
+        };
     }
 }
 

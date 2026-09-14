@@ -544,6 +544,7 @@ pub(crate) fn seed_mod_cache(state: &ModioState, mod_: &ModObject) {
     state.store_mod(mod_.clone());
 }
 
+#[derive(Clone)]
 pub(crate) enum ModFetchOutcome {
     Found(ModObject),
     Unavailable,
@@ -704,17 +705,6 @@ pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<
         }
         ModFetchOutcome::Failed(message) => Err(message),
     }
-}
-
-pub(crate) async fn resolve_mod_name(state: &ModioState, mod_id: u64) -> Option<String> {
-    if let Some(mod_) = state.cached_mod(mod_id) {
-        return Some(mod_.name);
-    }
-
-    fetch_mod_object(state, mod_id)
-        .await
-        .ok()
-        .map(|mod_| mod_.name)
 }
 
 pub(crate) fn is_rate_limited_message(message: &str) -> bool {
@@ -1449,9 +1439,16 @@ pub async fn list_mod_dependencies(
 ) -> Result<ModDependencyListResult, String> {
     let dependency_ids = fetch_mod_dependency_ids(&state, mod_id).await?;
 
+    let outcomes = fetch_mod_outcomes_batch(&state, &dependency_ids).await;
     let mut mods = Vec::with_capacity(dependency_ids.len());
     for dependency_id in dependency_ids {
-        match fetch_mod_outcome(&state, dependency_id).await {
+        let outcome = outcomes
+            .get(&dependency_id)
+            .cloned()
+            .unwrap_or(ModFetchOutcome::Failed(format!(
+                "Mod {dependency_id} was not returned by the batch fetch"
+            )));
+        match outcome {
             ModFetchOutcome::Found(mod_) => mods.push(mod_to_dependency(mod_)),
             ModFetchOutcome::Unavailable => mods.push(unavailable_dependency(
                 dependency_id,

@@ -28,9 +28,9 @@ use crate::subscription_sync_settings::{
     record_failed_sync_mod, remove_sync_mod_tracking, FailedSyncModList,
 };
 use crate::modio_client::{
-    fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcome, fetch_mod_outcomes_batch,
-    fetch_subscribed_mod_ids, format_api_error, modfile_version_label, subscribe_to_mod,
-    unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioState,
+    fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch, fetch_subscribed_mod_ids,
+    format_api_error, modfile_version_label, subscribe_to_mod, unsubscribe_from_mod,
+    with_rate_limit_retry, ModFetchOutcome, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -333,6 +333,14 @@ async fn normalize_legacy_install_folder_names(
     state: &ModioState,
     game_dir: &Path,
 ) -> Result<(), String> {
+    struct LegacyFolder {
+        kind_dir: PathBuf,
+        folder_name: String,
+        mod_id: u64,
+        file_id: u64,
+    }
+
+    let mut legacy_folders = Vec::new();
     for kind_dir in managed_install_kind_dirs(app, game_dir)? {
         if !kind_dir.is_dir() {
             continue;
@@ -361,17 +369,33 @@ async fn normalize_legacy_install_folder_names(
                 continue;
             };
 
-            let ModFetchOutcome::Found(mod_) = fetch_mod_outcome(state, mod_id).await else {
-                continue;
-            };
-
-            if mod_.modfile.as_ref().is_some_and(|file| file.id != file_id) {
-                continue;
-            }
-
-            let target_name = install_folder_name(mod_id, file_id, &mod_.name);
-            rename_install_folder(&kind_dir, &folder_name, &target_name)?;
+            legacy_folders.push(LegacyFolder {
+                kind_dir: kind_dir.clone(),
+                folder_name,
+                mod_id,
+                file_id,
+            });
         }
+    }
+
+    if legacy_folders.is_empty() {
+        return Ok(());
+    }
+
+    let mod_ids: Vec<u64> = legacy_folders.iter().map(|folder| folder.mod_id).collect();
+    let outcomes = fetch_mod_outcomes_batch(state, &mod_ids).await;
+
+    for folder in legacy_folders {
+        let Some(ModFetchOutcome::Found(mod_)) = outcomes.get(&folder.mod_id).cloned() else {
+            continue;
+        };
+
+        if mod_.modfile.as_ref().is_some_and(|file| file.id != folder.file_id) {
+            continue;
+        }
+
+        let target_name = install_folder_name(folder.mod_id, folder.file_id, &mod_.name);
+        rename_install_folder(&folder.kind_dir, &folder.folder_name, &target_name)?;
     }
 
     Ok(())
@@ -389,11 +413,12 @@ async fn prepare_installed_records(
     let game_running = is_zeepkist_running();
 
     let record_ids: Vec<u64> = records.iter().map(|record| record.mod_id).collect();
-    let mut outcomes = fetch_mod_outcomes_batch(state, &record_ids).await;
+    let outcomes = fetch_mod_outcomes_batch(state, &record_ids).await;
 
     for record in records {
         let outcome = outcomes
-            .remove(&record.mod_id)
+            .get(&record.mod_id)
+            .cloned()
             .unwrap_or(ModFetchOutcome::Failed(format!(
                 "Mod {} was not returned by the batch fetch",
                 record.mod_id
@@ -1224,13 +1249,14 @@ async fn sync_subscribed_mods_inner(
     // Archived or inaccessible mods remain in /me/subscribed until we unsubscribe.
     // Remove them locally and drop the subscription so sync cannot reinstall them.
     let mut drop_reasons: HashMap<u64, &'static str> = HashMap::new();
+    let subscription_outcomes = fetch_mod_outcomes_batch(state, &mod_ids).await;
+    ensure_subscription_sync_may_continue(app, state).await?;
     for &mod_id in &mod_ids {
-        ensure_subscription_sync_may_continue(app, state).await?;
-        let reason = match fetch_mod_outcome(state, mod_id).await {
-            ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
+        let reason = match subscription_outcomes.get(&mod_id) {
+            Some(ModFetchOutcome::Found(mod_)) if is_mod_archived(mod_) => {
                 Some("is archived on mod.io")
             }
-            ModFetchOutcome::Unavailable => Some("is no longer available on mod.io"),
+            Some(ModFetchOutcome::Unavailable) => Some("is no longer available on mod.io"),
             _ => None,
         };
         if let Some(reason) = reason {
@@ -1391,8 +1417,18 @@ async fn reconcile_custom_profile_mods_inner(
     let mut skipped = Vec::new();
     let mut failed_dependencies = Vec::new();
 
+    let manifest_ids: Vec<u64> = manifest.mods.iter().map(|entry| entry.mod_id).collect();
+    let manifest_outcomes = fetch_mod_outcomes_batch(state, &manifest_ids).await;
+
     for entry in &manifest.mods {
-        match fetch_mod_outcome(state, entry.mod_id).await {
+        let outcome = manifest_outcomes
+            .get(&entry.mod_id)
+            .cloned()
+            .unwrap_or(ModFetchOutcome::Failed(format!(
+                "Mod {} was not returned by the batch fetch",
+                entry.mod_id
+            )));
+        match outcome {
             ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
                 remove_inaccessible_mod_local(
                     app,
