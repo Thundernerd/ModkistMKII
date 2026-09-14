@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -299,6 +300,32 @@ fn remove_inaccessible_mod_local(
     Ok(())
 }
 
+/// Windows' `RemoveDirectoryW` (which `remove_dir_all` calls for every entry)
+/// can return `ERROR_DIR_NOT_EMPTY` (raw os error 145) transiently right after
+/// a plugin DLL was loaded/unloaded or is still being released by antivirus —
+/// the file is marked delete-pending but the directory listing hasn't caught
+/// up yet. Retrying briefly clears this up almost every time; see
+/// https://github.com/rust-lang/rust/issues/29497.
+const REMOVE_DIR_RETRY_ATTEMPTS: u32 = 5;
+const REMOVE_DIR_RETRY_DELAY: Duration = Duration::from_millis(150);
+
+fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
+    for attempt in 1..=REMOVE_DIR_RETRY_ATTEMPTS {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < REMOVE_DIR_RETRY_ATTEMPTS && error.raw_os_error() == Some(145) => {
+                log::debug!(
+                    "Removing {} hit a transient \"directory not empty\" error, retrying ({attempt}/{REMOVE_DIR_RETRY_ATTEMPTS})",
+                    path.display()
+                );
+                std::thread::sleep(REMOVE_DIR_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("loop always returns on the final attempt")
+}
+
 fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
     for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
         let kind_dir = kind_root_dir(game_dir, kind);
@@ -319,7 +346,7 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
 
             let path = entry.path();
             if path.is_dir() {
-                fs::remove_dir_all(&path).map_err(|e| {
+                remove_dir_all_with_retry(&path).map_err(|e| {
                     format!("Did not remove installed mod folder {}: {e}", path.display())
                 })?;
             }
