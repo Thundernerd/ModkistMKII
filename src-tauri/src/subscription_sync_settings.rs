@@ -9,6 +9,7 @@ use crate::app_settings::SETTINGS_STORE_PATH;
 const LEGACY_FAILED_SYNC_MODS_KEY: &str = "failedSyncModIds";
 const FAILED_SYNC_MODS_KEY: &str = "failedSyncMods";
 const IGNORED_SYNC_MODS_KEY: &str = "ignoredSyncModIds";
+const PENDING_UNSUBSCRIBE_MODS_KEY: &str = "pendingUnsubscribeModIds";
 const MAX_ERROR_DETAIL_LEN: usize = 240;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +99,33 @@ fn write_u64_list(app: &AppHandle, key: &str, mod_ids: &[u64]) -> Result<(), Str
     let store = app.store(SETTINGS_STORE_PATH).map_err(|e| e.to_string())?;
     store.set(key, serde_json::json!(mod_ids));
     store.save().map_err(|e| e.to_string())
+}
+
+/// Mods that were uninstalled/dropped locally but whose mod.io unsubscribe
+/// call failed (most commonly a rate limit) and so still needs to be retried.
+/// Persisted so a pending unsubscribe survives an app restart.
+pub fn read_pending_unsubscribe_mod_ids(app: &AppHandle) -> Vec<u64> {
+    read_u64_list(app, PENDING_UNSUBSCRIBE_MODS_KEY)
+}
+
+pub fn add_pending_unsubscribe_mod(app: &AppHandle, mod_id: u64) -> Result<(), String> {
+    let mut ids = read_pending_unsubscribe_mod_ids(app);
+    if ids.contains(&mod_id) {
+        return Ok(());
+    }
+    ids.push(mod_id);
+    sort_dedup(&mut ids);
+    write_u64_list(app, PENDING_UNSUBSCRIBE_MODS_KEY, &ids)
+}
+
+pub fn remove_pending_unsubscribe_mod(app: &AppHandle, mod_id: u64) -> Result<(), String> {
+    let mut ids = read_pending_unsubscribe_mod_ids(app);
+    let before = ids.len();
+    ids.retain(|&id| id != mod_id);
+    if ids.len() == before {
+        return Ok(());
+    }
+    write_u64_list(app, PENDING_UNSUBSCRIBE_MODS_KEY, &ids)
 }
 
 fn sort_dedup(mod_ids: &mut Vec<u64>) {

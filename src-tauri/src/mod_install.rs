@@ -23,9 +23,10 @@ use crate::profiles::{
     ManifestModEntry, ProfileKind,
 };
 use crate::subscription_sync_settings::{
-    clear_failed_sync_mod, count_dependency_sync_failures, is_dependency_sync_failure,
-    list_failed_sync_mods, read_failed_sync_mod_ids, read_ignored_sync_mod_ids,
-    record_failed_sync_mod, remove_sync_mod_tracking, FailedSyncModList,
+    add_pending_unsubscribe_mod, clear_failed_sync_mod, count_dependency_sync_failures,
+    is_dependency_sync_failure, list_failed_sync_mods, read_failed_sync_mod_ids,
+    read_ignored_sync_mod_ids, read_pending_unsubscribe_mod_ids, record_failed_sync_mod,
+    remove_pending_unsubscribe_mod, remove_sync_mod_tracking, FailedSyncModList,
 };
 use crate::modio_client::{
     fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch, fetch_subscribed_mod_ids,
@@ -1203,6 +1204,49 @@ pub async fn sync_subscribed_mods(
     sync_subscribed_mods_inner(&app, &state).await
 }
 
+/// Unsubscribes from a mod on mod.io, but never blocks local removal on it:
+/// on failure (most commonly a rate limit hit while uninstalling) the mod id
+/// is queued and retried the next time subscription sync runs instead of
+/// leaving the mod installed locally just because the remote call failed.
+async fn unsubscribe_or_schedule(app: &AppHandle, state: &ModioState, mod_id: u64) {
+    state.cancel_subscription_sync();
+    let result = unsubscribe_from_mod(state, mod_id).await;
+    state.reset_subscription_sync_cancel();
+    match result {
+        Ok(()) => {
+            let _ = remove_pending_unsubscribe_mod(app, mod_id);
+        }
+        Err(message) => {
+            log::warn!(
+                "Did not unsubscribe from mod {mod_id}, scheduling retry: {message}"
+            );
+            let _ = add_pending_unsubscribe_mod(app, mod_id);
+        }
+    }
+}
+
+/// Retries any unsubscribes that previously failed (e.g. rate-limited while
+/// the user was uninstalling a mod). Runs at the start of subscription sync
+/// so pending unsubscribes get flushed opportunistically without a dedicated
+/// scheduler.
+async fn flush_pending_unsubscribes(app: &AppHandle, state: &ModioState) {
+    let pending = read_pending_unsubscribe_mod_ids(app);
+    if pending.is_empty() {
+        return;
+    }
+    log::info!("Retrying {} pending unsubscribe(s)", pending.len());
+    for mod_id in pending {
+        match unsubscribe_from_mod(state, mod_id).await {
+            Ok(()) => {
+                let _ = remove_pending_unsubscribe_mod(app, mod_id);
+            }
+            Err(message) => {
+                log::warn!("Still could not unsubscribe from mod {mod_id}: {message}");
+            }
+        }
+    }
+}
+
 async fn sync_subscribed_mods_inner(
     app: &AppHandle,
     state: &ModioState,
@@ -1235,6 +1279,8 @@ async fn sync_subscribed_mods_inner(
     ensure_game_not_running()?;
 
     state.reset_subscription_sync_cancel();
+
+    flush_pending_unsubscribes(app, state).await;
 
     let game_dir = game_directory(app)?;
     ensure_install_prerequisites(&game_dir)?;
@@ -1269,7 +1315,10 @@ async fn sync_subscribed_mods_inner(
             remove_inaccessible_mod_local(app, state, &game_dir, mod_id, reason)?;
             log::info!("Unsubscribing from inaccessible mod {mod_id} ({reason})");
             if let Err(message) = unsubscribe_from_mod(state, mod_id).await {
-                log::warn!("Could not unsubscribe from inaccessible mod {mod_id}: {message}");
+                log::warn!(
+                    "Could not unsubscribe from inaccessible mod {mod_id}, scheduling retry: {message}"
+                );
+                let _ = add_pending_unsubscribe_mod(app, mod_id);
             }
         }
         mod_ids.retain(|mod_id| !drop_reasons.contains_key(mod_id));
@@ -1755,10 +1804,7 @@ pub async fn unsubscribe_failed_sync_mod(
         }
     }
 
-    state.cancel_subscription_sync();
-    let result = unsubscribe_from_mod(&state, mod_id).await;
-    state.reset_subscription_sync_cancel();
-    result?;
+    unsubscribe_or_schedule(&app, &state, mod_id).await;
 
     remove_sync_mod_tracking(&app, mod_id)?;
 
@@ -1800,10 +1846,7 @@ pub async fn uninstall_mod(
         state.auth_status().logged_in && active_profile_is_user(&app, &state)?;
     if should_unsubscribe {
         log::debug!("Account profile active — unsubscribing from mod {mod_id}");
-        state.cancel_subscription_sync();
-        let result = unsubscribe_from_mod(&state, mod_id).await;
-        state.reset_subscription_sync_cancel();
-        result?;
+        unsubscribe_or_schedule(&app, &state, mod_id).await;
     }
 
     remove_installed_mod_folders(&game_dir, mod_id)?;
