@@ -19,6 +19,12 @@ export default defineNuxtPlugin({
       app: nuxtApp.vueApp,
       environment: sentryEnvironment(),
       attachProps: false,
+      // Benign browser warnings surfaced via window.onerror, not real bugs:
+      // https://github.com/WICG/resize-observer/issues/38
+      ignoreErrors: [
+        "ResizeObserver loop limit exceeded",
+        "ResizeObserver loop completed with undelivered notifications.",
+      ],
     });
   },
 });

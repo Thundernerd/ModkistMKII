@@ -79,6 +79,7 @@ function measureRow(
 }
 
 let resizeObserver: ResizeObserver | undefined;
+let resizeFrame: number | undefined;
 
 onMounted(() => {
   scrollElement.value =
@@ -87,7 +88,15 @@ onMounted(() => {
   updateColumns();
   if (containerRef.value) {
     resizeObserver = new ResizeObserver(() => {
-      updateColumns();
+      // Defer past this observation cycle: updateColumns() can change layout
+      // (row/scrollbar sizing) that re-triggers the observer, and doing that
+      // synchronously inside the callback is what causes the browser's
+      // "ResizeObserver loop limit exceeded" warning.
+      if (resizeFrame !== undefined) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = undefined;
+        updateColumns();
+      });
     });
     resizeObserver.observe(containerRef.value);
   }
@@ -95,6 +104,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  if (resizeFrame !== undefined) {
+    cancelAnimationFrame(resizeFrame);
+  }
 });
 
 watch(columnCount, () => {
