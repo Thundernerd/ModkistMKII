@@ -28,9 +28,9 @@ use crate::subscription_sync_settings::{
     record_failed_sync_mod, remove_sync_mod_tracking, FailedSyncModList,
 };
 use crate::modio_client::{
-    fetch_mod_object, fetch_mod_outcome, fetch_mod_dependency_ids, fetch_subscribed_mod_ids,
-    format_api_error, modfile_version_label, subscribe_to_mod, unsubscribe_from_mod,
-    with_rate_limit_retry, ModFetchOutcome, ModioState,
+    fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcome, fetch_mod_outcomes_batch,
+    fetch_subscribed_mod_ids, format_api_error, modfile_version_label, subscribe_to_mod,
+    unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -388,8 +388,17 @@ async fn prepare_installed_records(
     let mut mods_by_id = HashMap::new();
     let game_running = is_zeepkist_running();
 
+    let record_ids: Vec<u64> = records.iter().map(|record| record.mod_id).collect();
+    let mut outcomes = fetch_mod_outcomes_batch(state, &record_ids).await;
+
     for record in records {
-        match fetch_mod_outcome(state, record.mod_id).await {
+        let outcome = outcomes
+            .remove(&record.mod_id)
+            .unwrap_or(ModFetchOutcome::Failed(format!(
+                "Mod {} was not returned by the batch fetch",
+                record.mod_id
+            )));
+        match outcome {
             ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
                 if game_running {
                     log::warn!(

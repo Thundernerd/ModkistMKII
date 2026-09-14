@@ -662,6 +662,28 @@ impl ApiClient {
             .await
     }
 
+    /// Fetches multiple mods in a single request via the `id-in` filter, instead
+    /// of one `GET /mods/{id}` per mod. Callers should chunk `mod_ids` to stay
+    /// well under mod.io's URL length limits (e.g. 100 ids per call).
+    pub async fn get_mods_by_id(
+        &self,
+        game_id: u64,
+        mod_ids: &[u64],
+    ) -> Result<ListResponse<ModObject>, ApiError> {
+        let path = format!("/games/{game_id}/mods");
+        let ids = mod_ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let params = vec![
+            ("id-in".to_string(), ids),
+            ("_limit".to_string(), mod_ids.len().to_string()),
+        ];
+        self.send(reqwest::Method::GET, &path, None, &params, None)
+            .await
+    }
+
     pub async fn get_mod(
         &self,
         game_id: u64,

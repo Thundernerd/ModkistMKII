@@ -6,7 +6,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::mod_api_cache::ApiCache;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::modio_api::{is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile};
 
@@ -566,6 +566,102 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
     }
 
     outcome
+}
+
+/// Ids per `id-in` batch request; keeps the query string well under typical URL
+/// length limits.
+const BATCH_FETCH_CHUNK_SIZE: usize = 100;
+
+/// Fetches multiple mods with one `id-in` request per chunk of `mod_ids`
+/// instead of one request per mod. Already-cached ids (found, unavailable) are
+/// resolved from cache without any request. Any id the batch call doesn't
+/// return — e.g. a private mod the api key alone can't see, or the whole batch
+/// request failing — falls back to [`fetch_mod_outcome`], which retries with a
+/// bearer token and handles rate limits/unavailability per mod.
+pub(crate) async fn fetch_mod_outcomes_batch(
+    state: &ModioState,
+    mod_ids: &[u64],
+) -> HashMap<u64, ModFetchOutcome> {
+    let mut outcomes = HashMap::with_capacity(mod_ids.len());
+    let mut pending = Vec::new();
+
+    for &mod_id in mod_ids {
+        if state.cached_mod_unavailable(mod_id) {
+            outcomes.insert(mod_id, ModFetchOutcome::Unavailable);
+            continue;
+        }
+        if let Some(mod_) = state.cached_mod(mod_id) {
+            seed_mod_cache(state, &mod_);
+            outcomes.insert(mod_id, ModFetchOutcome::Found(mod_));
+            continue;
+        }
+        pending.push(mod_id);
+    }
+
+    if pending.is_empty() {
+        return outcomes;
+    }
+
+    let game_id = match state.game_id() {
+        Ok(game_id) => game_id,
+        Err(message) => {
+            for mod_id in pending {
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone()));
+            }
+            return outcomes;
+        }
+    };
+    let api = match state.api() {
+        Ok(api) => api,
+        Err(message) => {
+            for mod_id in pending {
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone()));
+            }
+            return outcomes;
+        }
+    };
+
+    for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
+        let mut found_ids = HashSet::new();
+        match api.get_mods_by_id(game_id, chunk).await {
+            Ok(list) => {
+                for mod_ in list.data {
+                    found_ids.insert(mod_.id);
+                    seed_mod_cache(state, &mod_);
+                    outcomes.insert(mod_.id, ModFetchOutcome::Found(mod_));
+                }
+            }
+            Err(error) if error.is_rate_limited() => {
+                log::warn!("mod.io rate limit hit on batch mod fetch, retrying in 61 seconds");
+                tokio::time::sleep(Duration::from_secs(61)).await;
+                match api.get_mods_by_id(game_id, chunk).await {
+                    Ok(list) => {
+                        for mod_ in list.data {
+                            found_ids.insert(mod_.id);
+                            seed_mod_cache(state, &mod_);
+                            outcomes.insert(mod_.id, ModFetchOutcome::Found(mod_));
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("Batch mod fetch failed after retry: {}", error.message);
+                    }
+                }
+            }
+            Err(error) => {
+                log::warn!("Batch mod fetch failed, falling back to per-mod requests: {}", error.message);
+            }
+        }
+
+        for &mod_id in chunk {
+            if !found_ids.contains(&mod_id) {
+                // fetch_mod_outcome already marks unavailable/caches as needed.
+                let outcome = fetch_mod_outcome(state, mod_id).await;
+                outcomes.insert(mod_id, outcome);
+            }
+        }
+    }
+
+    outcomes
 }
 
 pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, String> {
