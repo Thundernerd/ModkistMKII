@@ -10,6 +10,7 @@
 //! level when a bearer retry is planned. Other OAuth-only endpoints always use
 //! the bearer token.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
@@ -437,10 +438,15 @@ impl ModQuery {
     }
 }
 
+/// Called with the rejected token when mod.io answers a bearer request with
+/// 401 (e.g. error_ref 11005: revoked, expired or malformed token).
+pub type TokenRejectedHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
     api_key: String,
+    on_token_rejected: Option<TokenRejectedHook>,
     /// Earliest instant the next request may start. Guards both the steady-state
     /// pacing and the self-healing backoff after a `Retry-After` response.
     next_request_at: tokio::sync::Mutex<Instant>,
@@ -474,8 +480,14 @@ impl ApiClient {
             http,
             base_url: format!("https://{host}/v1"),
             api_key,
+            on_token_rejected: None,
             next_request_at: tokio::sync::Mutex::new(Instant::now()),
         })
+    }
+
+    pub fn with_token_rejected_hook(mut self, hook: TokenRejectedHook) -> Self {
+        self.on_token_rejected = Some(hook);
+        self
     }
 
     /// Waits until this request is allowed to start, then reserves the next slot
@@ -603,6 +615,11 @@ impl ApiClient {
         // advised window instead of immediately retrying into the same block.
         if error.is_rate_limited() {
             self.respect_retry_after(error.retry_after_secs.unwrap_or(60)).await;
+        }
+        if let (Some(token), Some(hook)) = (token, self.on_token_rejected.as_ref()) {
+            if error.is_unauthorized() {
+                hook(token);
+            }
         }
         if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);

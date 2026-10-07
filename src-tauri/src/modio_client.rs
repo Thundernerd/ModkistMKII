@@ -1,16 +1,22 @@
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::mod_api_cache::{ApiCache, PersistedCache};
 use std::collections::{HashMap, HashSet};
 
-use crate::modio_api::{is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile};
+use crate::modio_api::{
+    is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile,
+    TokenRejectedHook,
+};
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
+/// Emitted when mod.io rejects the stored token and the session is cleared.
+pub const SESSION_EXPIRED_EVENT: &str = "modio-session-expired";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
 const USERNAME_KEY: &str = "username";
 
@@ -70,6 +76,10 @@ pub struct ModioState {
     session: Mutex<SessionData>,
     api_cache: Mutex<ApiCache>,
     subscription_sync_cancelled: std::sync::atomic::AtomicBool,
+    token_rejected_hook: OnceLock<TokenRejectedHook>,
+    /// Set when the session was cleared because mod.io rejected the token, so
+    /// the UI can ask the user to sign in again. Cleared on sign-in or logout.
+    session_expired: AtomicBool,
     /// Serializes OAuth reads/writes so subscription sync and subscribe/unsubscribe
     /// never hit mod.io concurrently (avoids spurious global rate limits).
     oauth_request: tokio::sync::Mutex<()>,
@@ -89,6 +99,8 @@ impl ModioState {
             }),
             api_cache: Mutex::new(ApiCache::default()),
             subscription_sync_cancelled: std::sync::atomic::AtomicBool::new(false),
+            token_rejected_hook: OnceLock::new(),
+            session_expired: AtomicBool::new(false),
             oauth_request: tokio::sync::Mutex::new(()),
         }
     }
@@ -354,12 +366,16 @@ impl ModioState {
         }
 
         let api_key = self.api_key.as_deref().unwrap();
-        let client = Arc::new(ApiClient::new(
+        let mut client = ApiClient::new(
             api_key.to_string(),
             self.config.game_id,
             self.config.api_host.as_deref(),
             self.config.use_test_env,
-        )?);
+        )?;
+        if let Some(hook) = self.token_rejected_hook.get() {
+            client = client.with_token_rejected_hook(hook.clone());
+        }
+        let client = Arc::new(client);
         *guard = Some(client.clone());
         Ok(client)
     }
@@ -377,7 +393,60 @@ impl ModioState {
         AuthStatus {
             logged_in: session.token.is_some(),
             username: session.username.clone(),
+            session_expired: self.session_expired.load(Ordering::Relaxed),
         }
+    }
+
+    /// Makes every API client built from now on report rejected tokens back to
+    /// this state. Call once during setup, before any request is made.
+    pub fn install_token_rejected_hook(&self, app: &AppHandle) {
+        let app = app.clone();
+        let hook: TokenRejectedHook = Arc::new(move |token| {
+            app.state::<ModioState>().expire_session(&app, token);
+        });
+        let _ = self.token_rejected_hook.set(hook);
+    }
+
+    /// Checks the restored token with a cheap `/me` call. A 401 goes through the
+    /// token-rejected hook, which clears the session; other failures (offline,
+    /// rate limit) leave the session alone.
+    pub async fn validate_restored_session(&self) {
+        let Some(token) = self.session_token() else {
+            return;
+        };
+        let Ok(api) = self.api() else {
+            return;
+        };
+        if let Err(error) = api.get_authenticated_user(&token).await {
+            if !error.is_unauthorized() {
+                log::debug!("Did not validate restored mod.io session: {error}");
+            }
+        }
+    }
+
+    /// Clears the session after mod.io rejected `rejected_token`. A no-op when
+    /// the session already moved on (logged out, or signed in with a new token),
+    /// so late responses from in-flight requests cannot end a fresh session.
+    fn expire_session(&self, app: &AppHandle, rejected_token: &str) {
+        let username = {
+            let mut session = self.session.lock().unwrap();
+            if session.token.as_deref() != Some(rejected_token) {
+                return;
+            }
+            session.token = None;
+            session.username.take()
+        };
+        self.session_expired.store(true, Ordering::Relaxed);
+        self.cancel_subscription_sync();
+        self.clear_api_cache();
+        if let Err(error) = delete_stored_session(app) {
+            log::warn!("Did not remove expired mod.io session from disk: {error}");
+        }
+        log::warn!(
+            "mod.io rejected the session token for {}; signed out",
+            username.as_deref().unwrap_or("user")
+        );
+        let _ = app.emit(SESSION_EXPIRED_EVENT, ());
     }
 
     pub fn restore_from_store(&self, app: &AppHandle) -> Result<(), String> {
@@ -409,6 +478,7 @@ impl ModioState {
             session.token = Some(token.clone());
             session.username = Some(username.clone());
         }
+        self.session_expired.store(false, Ordering::Relaxed);
 
         let store = app.store(AUTH_STORE_PATH).map_err(|e| e.to_string())?;
         store.set(ACCESS_TOKEN_KEY, serde_json::json!(token));
@@ -429,12 +499,9 @@ impl ModioState {
             session.token = None;
             session.username = None;
         }
+        self.session_expired.store(false, Ordering::Relaxed);
         self.clear_api_cache();
-
-        let store = app.store(AUTH_STORE_PATH).map_err(|e| e.to_string())?;
-        let _ = store.delete(ACCESS_TOKEN_KEY);
-        let _ = store.delete(USERNAME_KEY);
-        store.save().map_err(|e| e.to_string())?;
+        delete_stored_session(app)?;
 
         log::info!("mod.io session cleared for {username}");
         Ok(())
@@ -451,6 +518,13 @@ impl ModioState {
             .as_deref()
             .ok_or_else(|| "MODIO_API_KEY is not set in .env".to_string())
     }
+}
+
+fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
+    let store = app.store(AUTH_STORE_PATH).map_err(|e| e.to_string())?;
+    let _ = store.delete(ACCESS_TOKEN_KEY);
+    let _ = store.delete(USERNAME_KEY);
+    store.save().map_err(|e| e.to_string())
 }
 
 /// Converts an `ApiError` into a user-facing message, preserving the rate-limit
@@ -844,6 +918,7 @@ pub struct ModioStatus {
 pub struct AuthStatus {
     pub logged_in: bool,
     pub username: Option<String>,
+    pub session_expired: bool,
 }
 
 #[derive(Serialize)]
