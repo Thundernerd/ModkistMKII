@@ -141,6 +141,7 @@ pub fn run() {
             FailedSyncState::initialize(app.handle());
 
             let state = ModioState::from_env();
+            state.install_token_rejected_hook(app.handle());
             if let Err(error) = state.restore_from_store(app.handle()) {
                 log::warn!("Failed to restore mod.io session: {error}");
             } else if state.auth_status().logged_in {
@@ -151,6 +152,14 @@ pub fn run() {
             }
             state.load_persisted_cache(app.handle());
             app.manage(state);
+
+            let validate_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                validate_handle
+                    .state::<ModioState>()
+                    .validate_restored_session()
+                    .await;
+            });
 
             let launch_options = LaunchOptions::from_env_args();
             if launch_options.profile_name.is_some() || launch_options.launch_game {

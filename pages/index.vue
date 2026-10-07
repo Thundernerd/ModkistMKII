@@ -127,6 +127,14 @@ onMounted(async () => {
         <h1>Sign in with mod.io</h1>
       </div>
 
+      <p
+        v-if="authStatus.sessionExpired && step === 'enterEmail'"
+        class="session-expired-notice"
+        role="status"
+      >
+        Your mod.io session expired or was revoked. Sign in again to continue.
+      </p>
+
       <p v-if="modioStatusChecked && !modioConfigured" class="hint">
         {{
           modioMessage ||
@@ -328,6 +336,17 @@ button.link:hover:not(:disabled) {
 .skip-row {
   margin-top: 1.25rem;
   text-align: center;
+}
+
+.session-expired-notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: var(--modio-radius);
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--modio-text);
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .hint,

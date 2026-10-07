@@ -5,8 +5,10 @@ import { runStartupLaunchArgs } from "~/composables/useStartupLaunchArgs";
 const ready = ref(false);
 const { startGameProcessPolling, stopGameProcessPolling } = useGameProcess();
 const { configureWineWinhttp } = useWineWinhttp();
+const { listenForSessionExpiry } = useModioAuth();
 
 onMounted(async () => {
+  listenForSessionExpiry().catch(() => {});
   if (!(await ensureGamePath())) {
     return;
   }
@@ -31,6 +33,7 @@ onUnmounted(() => {
       <ProfileSwitchOverlay />
       <AppNotifications />
       <ModioRateLimitBanner />
+      <ModioSessionExpiredBanner />
       <WinePrefixBanner />
       <slot />
     </div>
