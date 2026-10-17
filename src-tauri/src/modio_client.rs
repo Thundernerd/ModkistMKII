@@ -1672,6 +1672,13 @@ mod is_mod_unavailable_tests {
     }
 
     #[test]
+    fn logged_out_mod_not_found_403_is_unavailable() {
+        let mut err = error(Some(403), false);
+        err.error_ref = Some(15024);
+        assert!(is_mod_unavailable(&err));
+    }
+
+    #[test]
     fn transient_and_session_errors_are_not_unavailable() {
         assert!(!is_mod_unavailable(&error(Some(401), false)));
         assert!(!is_mod_unavailable(&error(Some(429), false)));
