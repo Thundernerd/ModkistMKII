@@ -36,6 +36,13 @@ const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(110);
 /// which runs before the body is read.
 const EXPECTED_NO_OP_ERROR_REFS: [u32; 3] = [15005, 15028, 15043];
 
+/// mod.io `error_ref` for "The mod ID you have included in your request could
+/// not be found." mod.io returns it as HTTP 403 (not 404) for mods that were
+/// deleted or hidden, e.g. when an installed mod is later removed. Callers treat
+/// it like a 404 ("mod unavailable"), so it is logged at info level instead of
+/// warn/error to keep it out of Sentry.
+const MOD_NOT_FOUND_ERROR_REF: u32 = 15024;
+
 /// Error returned by any mod.io API call. Captures the HTTP status, the mod.io
 /// `error_ref`, the server message and the `Retry-After` value (seconds) so the
 /// caller can distinguish rate limits, auth failures and missing resources.
@@ -72,8 +79,10 @@ impl ApiError {
         matches!(self.status, Some(401 | 403))
     }
 
+    /// True for HTTP 404, and for mod.io's "mod could not be found" error_ref,
+    /// which it returns as HTTP 403.
     pub fn is_not_found(&self) -> bool {
-        self.status == Some(404)
+        self.status == Some(404) || self.error_ref == Some(MOD_NOT_FOUND_ERROR_REF)
     }
 
     pub fn is_conflict(&self) -> bool {
@@ -134,6 +143,15 @@ impl ApiError {
             self.status,
             self.error_ref,
             self.retry_after_secs
+        );
+    }
+
+    fn log_mod_not_found(&self, context: &str) {
+        log::info!(
+            "mod.io API error [{context}] (mod not found, treated as unavailable): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
         );
     }
 
@@ -625,6 +643,8 @@ impl ApiClient {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
             error.log_expected(path);
+        } else if error.error_ref == Some(MOD_NOT_FOUND_ERROR_REF) {
+            error.log_mod_not_found(path);
         } else {
             error.log(path);
         }
@@ -1050,13 +1070,13 @@ fn log_response(
         status.as_u16(),
         header_dump.join(", ")
     );
-    let expected_no_op = headers
+    let error_ref = headers
         .get("x-modio-error-ref")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u32>().ok())
-        .is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref));
+        .and_then(|value| value.parse::<u32>().ok());
+    let expected_no_op = error_ref.is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref));
 
-    if status.is_success() {
+    if status.is_success() || error_ref == Some(MOD_NOT_FOUND_ERROR_REF) {
         log::info!("{line}");
     } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
@@ -1206,6 +1226,22 @@ mod tests {
         assert!(err.is_not_subscribed());
         assert!(!err.is_not_found());
         assert!(!err.is_rate_limited());
+    }
+
+    #[test]
+    fn mod_not_found_403_is_not_found() {
+        let err = ApiError {
+            status: Some(403),
+            error_ref: Some(15024),
+            message: "The mod ID you have included in your request could not be found.".to_string(),
+            retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
+        };
+        assert!(err.is_not_found());
+
+        let mut forbidden = err.clone();
+        forbidden.error_ref = None;
+        assert!(!forbidden.is_not_found());
     }
 
     fn test_error(status: Option<u16>) -> ApiError {
