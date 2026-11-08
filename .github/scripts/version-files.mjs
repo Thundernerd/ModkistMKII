@@ -1,27 +1,39 @@
 import fs from "node:fs";
 
+// Every file the release bump rewrites; release.yml must stage all of them.
+export const VERSION_FILES = [
+  "package.json",
+  "package-lock.json",
+  "src-tauri/tauri.conf.json",
+  "src-tauri/Cargo.toml",
+  "src-tauri/Cargo.lock",
+];
+
 export function readCurrentVersion() {
   return JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+}
+
+function updateJson(path, update) {
+  const json = JSON.parse(fs.readFileSync(path, "utf8"));
+  update(json);
+  fs.writeFileSync(path, JSON.stringify(json, null, 2) + "\n");
 }
 
 export function updateVersionFiles(newVersion) {
   const current = readCurrentVersion();
 
-  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-  pkg.version = newVersion;
-  fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+  updateJson("package.json", (pkg) => {
+    pkg.version = newVersion;
+  });
 
-  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
-  lock.version = newVersion;
-  lock.packages[""].version = newVersion;
-  fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2) + "\n");
+  updateJson("package-lock.json", (npmLock) => {
+    npmLock.version = newVersion;
+    npmLock.packages[""].version = newVersion;
+  });
 
-  const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
-  tauri.version = newVersion;
-  fs.writeFileSync(
-    "src-tauri/tauri.conf.json",
-    JSON.stringify(tauri, null, 2) + "\n",
-  );
+  updateJson("src-tauri/tauri.conf.json", (tauri) => {
+    tauri.version = newVersion;
+  });
 
   const cargoTomlPath = "src-tauri/Cargo.toml";
   const cargoToml = fs.readFileSync(cargoTomlPath, "utf8");
