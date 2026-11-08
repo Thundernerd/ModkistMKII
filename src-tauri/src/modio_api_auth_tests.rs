@@ -11,25 +11,25 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use super::*;
 
-const GAME_ID: u64 = 3213;
-const TOKEN: &str = "expired-token";
+pub(crate) const GAME_ID: u64 = 3213;
+pub(crate) const TOKEN: &str = "expired-token";
 
 #[derive(Clone, Debug)]
-struct Received {
-    path: String,
-    bearer: bool,
+pub(crate) struct Received {
+    pub(crate) path: String,
+    pub(crate) bearer: bool,
 }
 
 type Responder = dyn Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync;
 
 /// Minimal HTTP/1.1 server: one response per connection, records every request.
-struct FakeModio {
-    base_url: String,
+pub(crate) struct FakeModio {
+    pub(crate) base_url: String,
     received: Arc<Mutex<Vec<Received>>>,
 }
 
 impl FakeModio {
-    fn start(respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static) -> Self {
+    pub(crate) fn start(respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -91,7 +91,7 @@ impl FakeModio {
         (client, refusals)
     }
 
-    fn received(&self) -> Vec<Received> {
+    pub(crate) fn received(&self) -> Vec<Received> {
         self.received.lock().unwrap().clone()
     }
 
@@ -110,11 +110,11 @@ impl FakeModio {
     }
 }
 
-fn error_body(error_ref: u32, message: &str) -> String {
+pub(crate) fn error_body(error_ref: u32, message: &str) -> String {
     format!(r#"{{"error":{{"code":401,"error_ref":{error_ref},"message":"{message}"}}}}"#)
 }
 
-fn token_expired() -> (u16, Option<u32>, String) {
+pub(crate) fn token_expired() -> (u16, Option<u32>, String) {
     (401, Some(TOKEN_REJECTED_ERROR_REF), error_body(TOKEN_REJECTED_ERROR_REF, "Access token is expired, or has been revoked."))
 }
 
@@ -143,7 +143,7 @@ impl log::Log for ReportCapture {
     fn flush(&self) {}
 }
 
-fn capture_reports() {
+pub(crate) fn capture_reports() {
     static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
         log::set_boxed_logger(Box::new(ReportCapture)).unwrap();
@@ -152,7 +152,7 @@ fn capture_reports() {
     REPORTS.with(|reports| reports.borrow_mut().clear());
 }
 
-fn sentry_reports() -> Vec<String> {
+pub(crate) fn sentry_reports() -> Vec<String> {
     REPORTS.with(|reports| reports.borrow().clone())
 }
 

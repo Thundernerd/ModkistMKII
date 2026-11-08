@@ -1237,7 +1237,7 @@ fn log_response(
 
 #[cfg(test)]
 #[path = "modio_api_auth_tests.rs"]
-mod auth_tests;
+pub(crate) mod auth_tests;
 
 #[cfg(test)]
 mod tests {
