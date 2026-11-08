@@ -103,7 +103,7 @@ fn error_body(error_ref: u32, message: &str) -> String {
 }
 
 fn token_expired() -> (u16, Option<u32>, String) {
-    (401, Some(11005), error_body(11005, "Access token is expired, or has been revoked."))
+    (401, Some(TOKEN_REJECTED_ERROR_REF), error_body(TOKEN_REJECTED_ERROR_REF, "Access token is expired, or has been revoked."))
 }
 
 // --- Sentry-report capture -------------------------------------------------
@@ -191,8 +191,11 @@ async fn an_expired_token_on_a_mod_read_retry_is_not_reported_to_sentry() {
     assert_eq!(sentry_reports(), Vec::<String>::new());
 }
 
+/// mod.io `error_ref` for "api_key supplied is invalid".
+const API_KEY_INVALID_ERROR_REF: u32 = 11002;
+
 fn api_key_invalid() -> (u16, Option<u32>, String) {
-    (401, Some(11002), error_body(11002, "api_key supplied is invalid."))
+    (401, Some(API_KEY_INVALID_ERROR_REF), error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."))
 }
 
 #[tokio::test]
@@ -215,7 +218,7 @@ async fn a_refused_api_key_is_reported_to_sentry_once() {
     assert!(rejected.lock().unwrap().is_empty(), "no session token was involved");
     let reports = sentry_reports();
     assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-    assert!(reports[0].contains("API key"), "report should name the cause: {}", reports[0]);
+    assert!(reports[0].contains("game API key refused"), "report should name the cause: {}", reports[0]);
 }
 
 #[tokio::test]

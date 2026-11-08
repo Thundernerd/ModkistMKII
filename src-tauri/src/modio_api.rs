@@ -7,7 +7,7 @@
 //! available, the same request is retried with OAuth (e.g. private subscribed
 //! mods). A failed bearer retry is marked inaccessible unless it is a 5xx, 429,
 //! 401, or transport error. Failures on the api-key attempt are logged at debug
-//! level when a bearer retry is planned. Other OAuth-only endpoints always use
+//! level when a bearer retry is planned, except a 401 (see below). Other OAuth-only endpoints always use
 //! the bearer token.
 //!
 //! A 401 on a bearer request goes to the token-rejected hook (sign out, prompt
@@ -60,10 +60,10 @@ const MODFILE_NOT_FOUND_ERROR_REF: u32 = 14000;
 
 /// mod.io `error_ref` codes meaning the requested mod or file no longer exists.
 /// Logged at info level since callers treat them as "unavailable".
+const NOT_FOUND_ERROR_REFS: [u32; 2] = [MOD_NOT_FOUND_ERROR_REF, MODFILE_NOT_FOUND_ERROR_REF];
+
 /// mod.io `error_ref` for an expired, revoked or malformed access token.
 const TOKEN_REJECTED_ERROR_REF: u32 = 11005;
-
-const NOT_FOUND_ERROR_REFS: [u32; 2] = [MOD_NOT_FOUND_ERROR_REF, MODFILE_NOT_FOUND_ERROR_REF];
 
 /// Error returned by any mod.io API call. Captures the HTTP status, the mod.io
 /// `error_ref`, the server message and the `Retry-After` value (seconds) so the
@@ -204,18 +204,14 @@ impl ApiError {
         );
     }
 
-    fn log_api_key_rejected(&self, context: &str) {
-        log::error!(
-            "mod.io refused the game API key [{context}]: {} (status={:?}, error_ref={:?}); later API key rejections are logged at info",
-            self.message,
-            self.status,
-            self.error_ref
-        );
-    }
-
-    fn log_api_key_rejected_again(&self, context: &str) {
-        log::info!(
-            "mod.io refused the game API key [{context}]: {} (status={:?}, error_ref={:?})",
+    /// A refused game API key fails every public read the same way, so only
+    /// the first one per client is reported (error); the rest log at info.
+    fn log_api_key_rejected(&self, context: &str, first: bool) {
+        let level = if first { log::Level::Error } else { log::Level::Info };
+        log::log!(
+            level,
+            "mod.io API error [{context}] (game API key refused{}): {} (status={:?}, error_ref={:?})",
+            if first { ", later refusals logged at info" } else { "" },
             self.message,
             self.status,
             self.error_ref
@@ -751,11 +747,8 @@ impl ApiClient {
         if token_rejected {
             error.log_token_rejected(path);
         } else if token.is_none() && error.is_unauthorized() {
-            if self.api_key_rejection_reported.swap(true, Ordering::Relaxed) {
-                error.log_api_key_rejected_again(path);
-            } else {
-                error.log_api_key_rejected(path);
-            }
+            let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
+            error.log_api_key_rejected(path, first);
         } else if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
