@@ -237,3 +237,11 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod ci_red_probe {
+    #[test]
+    fn ci_red_probe_fails() {
+        assert_eq!(1, 2, "deliberate failure to prove CI goes red");
+    }
+}
