@@ -35,3 +35,20 @@ test("sets the release version in package-lock.json", (t) => {
   assert.equal(lock.version, "9.9.9");
   assert.equal(lock.packages[""].version, "9.9.9");
 });
+
+test("release workflow commits every version file", () => {
+  const workflow = fs.readFileSync(
+    path.join(repoRoot, ".github/workflows/release.yml"),
+    "utf8",
+  );
+  const gitAdd = workflow
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("git add "));
+  assert.ok(gitAdd, "release.yml has no git add line");
+
+  const staged = gitAdd.split(/\s+/).slice(2);
+  for (const file of VERSION_FILES) {
+    assert.ok(staged.includes(file), `release.yml does not stage ${file}`);
+  }
+});
