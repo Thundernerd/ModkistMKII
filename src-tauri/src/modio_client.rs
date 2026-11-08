@@ -442,7 +442,7 @@ impl ModioState {
         if let Err(error) = delete_stored_session(app) {
             log::warn!("Did not remove expired mod.io session from disk: {error}");
         }
-        log::warn!(
+        log::info!(
             "mod.io rejected the session token for {}; signed out",
             username.as_deref().unwrap_or("user")
         );

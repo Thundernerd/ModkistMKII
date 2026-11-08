@@ -172,6 +172,15 @@ impl ApiError {
         );
     }
 
+    fn log_token_rejected(&self, context: &str) {
+        log::info!(
+            "mod.io API error [{context}] (session token rejected, signing out): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
+        );
+    }
+
     fn log_expected(&self, context: &str) {
         log::debug!(
             "mod.io API error [{context}] (expected, treated as no-op): {} (status={:?}, error_ref={:?})",
@@ -611,6 +620,7 @@ impl ApiClient {
             response.headers(),
             started.elapsed(),
             quiet_on_failure,
+            authenticated && self.on_token_rejected.is_some(),
         );
 
         let retry_after = response
@@ -651,12 +661,18 @@ impl ApiClient {
         if error.is_rate_limited() {
             self.respect_retry_after(error.retry_after_secs.unwrap_or(60)).await;
         }
+        // An expired or revoked token is routine: the hook signs the user out
+        // and the UI prompts them to log in again, so keep it out of Sentry.
+        let mut token_rejected = false;
         if let (Some(token), Some(hook)) = (token, self.on_token_rejected.as_ref()) {
             if error.is_unauthorized() {
                 hook(token);
+                token_rejected = true;
             }
         }
-        if quiet_on_failure && !error.is_rate_limited() {
+        if token_rejected {
+            error.log_token_rejected(path);
+        } else if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
             error.log_expected(path);
@@ -1076,6 +1092,7 @@ fn log_response(
     headers: &reqwest::header::HeaderMap,
     elapsed: std::time::Duration,
     quiet_on_failure: bool,
+    handles_token_rejection: bool,
 ) {
     let header_dump: Vec<String> = headers
         .iter()
@@ -1095,7 +1112,9 @@ fn log_response(
 
     let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
-    if status.is_success() || known_not_found {
+    let token_rejected = handles_token_rejection && status.as_u16() == 401;
+
+    if status.is_success() || known_not_found || token_rejected {
         log::info!("{line}");
     } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
