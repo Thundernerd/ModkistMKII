@@ -666,11 +666,21 @@ pub(crate) struct ModioError {
 impl ModioError {
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
         let credentials_rejected = error.is_unauthorized();
-        let sign_in_required = !logged_in && error.is_forbidden();
         Self {
             message: format_api_error_logged_in(error, logged_in),
             credentials_rejected,
+            sign_in_required: false,
+        }
+    }
+
+    /// The failure of a single mod's read (`get_mod`, `get_mod_dependencies`).
+    /// Without a session token, a 403 means a private or hidden mod, which
+    /// `ApiClient` already logs at info.
+    pub(crate) fn from_mod_read(error: ApiError, logged_in: bool, token_sent: bool) -> Self {
+        let sign_in_required = !token_sent && error.is_forbidden();
+        Self {
             sign_in_required,
+            ..Self::from_api(error, logged_in)
         }
     }
 
@@ -795,7 +805,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
             if should_cache_dependency_fetch_failure(&error) {
                 state.mark_dependency_fetch_failed(mod_id);
             }
-            Err(ModioError::from_api(error, logged_in))
+            Err(ModioError::from_mod_read(error, logged_in, token.is_some()))
         }
     }
 }
@@ -853,9 +863,10 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
                 tokio::time::sleep(Duration::from_secs(61)).await;
                 return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
-                ModFetchOutcome::Failed(ModioError::from_api(
+                ModFetchOutcome::Failed(ModioError::from_mod_read(
                     error,
                     state.auth_status().logged_in,
+                    token.is_some(),
                 ))
             }
         }
