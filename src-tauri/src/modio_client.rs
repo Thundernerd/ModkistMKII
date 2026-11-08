@@ -87,11 +87,13 @@ pub struct ModioState {
 
 impl ModioState {
     pub fn from_env() -> Self {
-        let api_key = crate::modio_env::modio_api_key();
+        Self::new(crate::modio_env::modio_api_key(), ModioConfig::from_env())
+    }
 
+    fn new(api_key: Option<String>, config: ModioConfig) -> Self {
         Self {
             api_key,
-            config: ModioConfig::from_env(),
+            config,
             api_client: Mutex::new(None),
             session: Mutex::new(SessionData {
                 token: None,
@@ -125,20 +127,13 @@ impl ModioState {
                         state.end_rejected_session(token);
                     }
                 }));
-            Self {
-                api_key: Some("game-key".into()),
-                config,
-                api_client: Mutex::new(Some(Arc::new(client))),
-                session: Mutex::new(SessionData {
-                    token: Some(token.to_string()),
-                    username: Some("tester".into()),
-                }),
-                api_cache: Mutex::new(ApiCache::default()),
-                subscription_sync_cancelled: AtomicBool::new(false),
-                token_rejected_hook: OnceLock::new(),
-                session_expired: AtomicBool::new(false),
-                oauth_request: tokio::sync::Mutex::new(()),
-            }
+            let state = Self::new(Some("game-key".into()), config);
+            *state.api_client.lock().unwrap() = Some(Arc::new(client));
+            *state.session.lock().unwrap() = SessionData {
+                token: Some(token.to_string()),
+                username: Some("tester".into()),
+            };
+            state
         })
     }
 
