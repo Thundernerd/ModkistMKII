@@ -534,13 +534,20 @@ pub type TokenRejectedHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// request (error_ref 11000-11002: missing, malformed or invalid key).
 pub type ApiKeyRefusedHook = Arc<dyn Fn() + Send + Sync>;
 
+/// How an `ApiClient` reports credential failures back to the app. Every hook
+/// is optional; a new hook is a field here plus its call site in the client.
+#[derive(Clone, Default)]
+pub struct ApiClientHooks {
+    pub on_token_rejected: Option<TokenRejectedHook>,
+    pub on_api_key_refused: Option<ApiKeyRefusedHook>,
+}
+
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
     api_key: String,
-    on_token_rejected: Option<TokenRejectedHook>,
-    on_api_key_refused: Option<ApiKeyRefusedHook>,
-    /// Set once `on_api_key_refused` was called.
+    hooks: ApiClientHooks,
+    /// Set once `hooks.on_api_key_refused` was called.
     api_key_refusal_signalled: AtomicBool,
     /// Tokens mod.io already answered with 401. Later requests carrying one of
     /// them fail locally instead of firing another doomed request.
@@ -581,8 +588,7 @@ impl ApiClient {
             http,
             base_url: format!("https://{host}/v1"),
             api_key,
-            on_token_rejected: None,
-            on_api_key_refused: None,
+            hooks: ApiClientHooks::default(),
             api_key_refusal_signalled: AtomicBool::new(false),
             rejected_tokens: std::sync::Mutex::new(HashSet::new()),
             api_key_rejection_reported: AtomicBool::new(false),
@@ -597,13 +603,8 @@ impl ApiClient {
         self
     }
 
-    pub fn with_token_rejected_hook(mut self, hook: TokenRejectedHook) -> Self {
-        self.on_token_rejected = Some(hook);
-        self
-    }
-
-    pub fn with_api_key_refused_hook(mut self, hook: ApiKeyRefusedHook) -> Self {
-        self.on_api_key_refused = Some(hook);
+    pub fn with_hooks(mut self, hooks: ApiClientHooks) -> Self {
+        self.hooks = hooks;
         self
     }
 
@@ -714,7 +715,7 @@ impl ApiClient {
             quiet_on_failure,
             // send_raw logs these 401s itself: a rejected token goes to the
             // hook, a refused API key is reported once below.
-            !authenticated || self.on_token_rejected.is_some(),
+            !authenticated || self.hooks.on_token_rejected.is_some(),
         );
 
         let retry_after = response
@@ -760,7 +761,7 @@ impl ApiClient {
         let mut token_rejected = false;
         if let Some(token) = token.filter(|_| error.is_unauthorized()) {
             self.remember_rejected_token(token);
-            if let Some(hook) = self.on_token_rejected.as_ref() {
+            if let Some(hook) = self.hooks.on_token_rejected.as_ref() {
                 hook(token);
                 token_rejected = true;
             }
@@ -773,7 +774,7 @@ impl ApiClient {
             if error.is_api_key_refused()
                 && !self.api_key_refusal_signalled.swap(true, Ordering::Relaxed)
             {
-                if let Some(hook) = self.on_api_key_refused.as_ref() {
+                if let Some(hook) = self.hooks.on_api_key_refused.as_ref() {
                     hook();
                 }
             }

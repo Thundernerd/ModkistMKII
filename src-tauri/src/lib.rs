@@ -141,8 +141,7 @@ pub fn run() {
             FailedSyncState::initialize(app.handle());
 
             let state = ModioState::from_env();
-            state.install_token_rejected_hook(app.handle());
-            state.install_api_key_refused_hook(app.handle());
+            state.install_api_client_hooks(app.handle());
             if let Err(error) = state.restore_from_store(app.handle()) {
                 log::warn!("Failed to restore mod.io session: {error}");
             } else if state.auth_status().logged_in {
