@@ -725,7 +725,7 @@ async fn install_state_for_mod(
     records: &[InstalledModRecord],
     dependency_map: &HashMap<u64, Vec<u64>>,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
-) -> Result<ModInstallState, String> {
+) -> Result<ModInstallState, ModioError> {
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let installed = find_installed_record(records, mod_id);
     let latest_file_id = match resolve_latest_file_id(state, mod_id, mods_by_id).await {
@@ -889,10 +889,10 @@ async fn install_single_mod(
     game_dir: &Path,
     mod_id: u64,
     file_id: Option<u64>,
-) -> Result<(), String> {
+) -> Result<(), ModioError> {
     let mod_ = fetch_mod_object(state, mod_id).await?;
     if is_mod_archived(&mod_) {
-        return Err(format!("Mod {mod_id} is archived on mod.io and cannot be installed."));
+        return Err(format!("Mod {mod_id} is archived on mod.io and cannot be installed.").into());
     }
     let file = match file_id {
         Some(file_id) => {
@@ -901,7 +901,7 @@ async fn install_single_mod(
             let token = state.session_token();
             api.get_mod_file(game_id, mod_id, file_id, token.as_deref())
                 .await
-                .map_err(crate::modio_client::format_api_error)?
+                .map_err(|error| ModioError::from_api(error, false))?
         }
         None => mod_
             .modfile
@@ -956,7 +956,7 @@ async fn install_single_mod(
 
     if let Err(message) = install_result {
         let _ = fs::remove_dir_all(&staging_dir);
-        return Err(message);
+        return Err(message.into());
     }
 
     // Defensive: remove_installed_mod_folders already cleared any prior
@@ -983,6 +983,15 @@ async fn ensure_subscription_sync_may_continue(
     }
     if !active_profile_is_user(app, state)? {
         return Err(SUBSCRIPTION_SYNC_CANCELLED.into());
+    }
+    Ok(())
+}
+
+/// Stops a run of per-mod mod.io reads once mod.io rejected `session`, the
+/// token the run started with (see [`ModioState::session_rejected`]).
+fn ensure_session_not_rejected(state: &ModioState, session: Option<&str>) -> Result<(), ModioError> {
+    if state.session_rejected(session) {
+        return Err(ModioError::session_rejected());
     }
     Ok(())
 }
@@ -1069,9 +1078,10 @@ fn record_install_target_failure(
     root_mod_id: Option<u64>,
     target_mod_id: u64,
     category: &str,
-    message: &str,
+    error: &ModioError,
     failed_dependencies: &mut Vec<u64>,
 ) -> bool {
+    let message = error.message.as_str();
     let is_dependency = !is_requested_mod(root_mod_id, target_mod_id);
     if !subscription_sync && !is_dependency {
         return false;
@@ -1085,20 +1095,26 @@ fn record_install_target_failure(
                 "Skipped mod {target_mod_id} during subscription sync: {message}"
             );
         } else if category == "install_state" {
-            log::error!(
+            log::log!(
+                error.log_level(log::Level::Error),
                 "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
             );
         } else {
-            log::error!(
+            log::log!(
+                error.log_level(log::Level::Error),
                 "Failed to install mod {target_mod_id} during subscription sync: {message}"
             );
         }
     } else if category == "install_state" {
-        log::warn!(
+        log::log!(
+            error.log_level(log::Level::Warn),
             "Failed to resolve install state for dependency {target_mod_id}: {message}"
         );
     } else {
-        log::warn!("Failed to install dependency {target_mod_id}: {message}");
+        log::log!(
+            error.log_level(log::Level::Warn),
+            "Failed to install dependency {target_mod_id}: {message}"
+        );
     }
 
     if let Some((app, roots, subscribers)) = sync_failure_context {
@@ -1154,11 +1170,12 @@ async fn install_targets_internal(
     mods_by_id: Option<&HashMap<u64, ModObject>>,
     sync_failure_context: Option<SyncFailureContext<'_>>,
     root_mod_id: Option<u64>,
-) -> Result<InstallModResult, String> {
+) -> Result<InstallModResult, ModioError> {
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
     let mut failed_dependencies = Vec::new();
     let subscription_sync = app.is_some();
+    let session = state.session_token();
 
     log::debug!(
         "Installing {} mod target(s){}",
@@ -1170,6 +1187,7 @@ async fn install_targets_internal(
         if let Some(app) = app {
             ensure_subscription_sync_may_continue(app, state).await?;
         }
+        ensure_session_not_rejected(state, session.as_deref())?;
 
         if should_subscribe {
             subscribe_to_mod(state, target_mod_id).await?;
@@ -1185,19 +1203,19 @@ async fn install_targets_internal(
         .await
         {
             Ok(state_for_mod) => state_for_mod,
-            Err(message) => {
+            Err(error) => {
                 if record_install_target_failure(
                     sync_failure_context,
                     subscription_sync,
                     root_mod_id,
                     target_mod_id,
                     "install_state",
-                    &message,
+                    &error,
                     &mut failed_dependencies,
                 ) {
                     continue;
                 }
-                return Err(message);
+                return Err(error);
             }
         };
         if matches!(state_for_mod.status.as_str(), "upToDate") {
@@ -1238,6 +1256,7 @@ async fn install_targets_internal(
         if let Some(app) = app {
             ensure_subscription_sync_may_continue(app, state).await?;
         }
+        ensure_session_not_rejected(state, session.as_deref())?;
 
         log::info!("Installing mod {target_mod_id}");
         let target_file_id = file_override
@@ -1253,19 +1272,19 @@ async fn install_targets_internal(
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
             }
-            Err(message) => {
+            Err(error) => {
                 if record_install_target_failure(
                     sync_failure_context,
                     subscription_sync,
                     root_mod_id,
                     target_mod_id,
                     "install",
-                    &message,
+                    &error,
                     &mut failed_dependencies,
                 ) {
                     continue;
                 }
-                return Err(message);
+                return Err(error);
             }
         }
     }
@@ -1570,10 +1589,10 @@ async fn sync_subscribed_mods_inner(
             summary.installed.len(),
             summary.skipped.len()
         ),
-        Err(message) if message == SUBSCRIPTION_SYNC_CANCELLED => {
+        Err(error) if error.message == SUBSCRIPTION_SYNC_CANCELLED => {
             log::info!("Subscription sync cancelled");
         }
-        Err(message) => log::error!("Subscription sync failed: {message}"),
+        Err(error) => log::error!("Subscription sync failed: {error}"),
     }
     state.persist_cache(app);
     match result {
@@ -1585,7 +1604,7 @@ async fn sync_subscribed_mods_inner(
             }
             Ok(summary)
         }
-        Err(message) => Err(message),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -1890,7 +1909,9 @@ pub async fn get_mod_install_state(
     let records = scan_installed_mods_after_cleanup(&app, &state, &game_dir).await?;
     let installed_ids: HashSet<u64> = records.iter().map(|record| record.mod_id).collect();
     let dependency_map = build_dependency_map(&state, &installed_ids).await;
-    install_state_for_mod(&state, mod_id, &records, &dependency_map, None).await
+    install_state_for_mod(&state, mod_id, &records, &dependency_map, None)
+        .await
+        .map_err(String::from)
 }
 
 #[tauri::command]

@@ -923,13 +923,13 @@ pub(crate) async fn fetch_mod_outcomes_batch(
     outcomes
 }
 
-pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, String> {
+pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, ModioError> {
     match fetch_mod_outcome(state, mod_id).await {
         ModFetchOutcome::Found(mod_) => Ok(mod_),
         ModFetchOutcome::Unavailable => {
-            Err(format!("Mod {mod_id} is no longer available on mod.io."))
+            Err(format!("Mod {mod_id} is no longer available on mod.io.").into())
         }
-        ModFetchOutcome::Failed(error) => Err(error.message),
+        ModFetchOutcome::Failed(error) => Err(error),
     }
 }
 

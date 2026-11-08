@@ -172,3 +172,39 @@ async fn an_expired_token_while_loading_the_user_rating_is_not_reported() {
     assert_eq!(detail.id, 100);
     assert!(state.auth_status().session_expired);
 }
+
+#[tokio::test]
+async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod() {
+    capture_reports();
+    let server = FakeModio::start(private_mods_with_expired_token);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+    for mod_id in PRIVATE_MODS {
+        state.store_latest_file_id(mod_id, 1);
+    }
+
+    let result = install_targets_internal(
+        None,
+        &state,
+        Path::new("/nonexistent-game-dir"),
+        PRIVATE_MODS.to_vec(),
+        &mut Vec::new(),
+        &mut HashMap::new(),
+        false,
+        true,
+        None,
+        None,
+        None,
+        Some(999),
+    )
+    .await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    let error = result.err().expect("the install should stop once the session is rejected");
+    assert!(error.credentials_rejected, "{error}");
+    assert_eq!(
+        server.received().len(),
+        2,
+        "only the first dependency should be read: {:#?}",
+        server.received()
+    );
+}
