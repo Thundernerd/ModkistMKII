@@ -582,18 +582,14 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
     store.save().map_err(|e| e.to_string())
 }
 
-/// Converts an `ApiError` into a user-facing message, preserving the rate-limit
-/// and auth hints we surfaced previously.
-/// True when mod.io refused the request's credentials: HTTP 401, for an
-/// expired or revoked session token or a refused game API key.
-fn credentials_rejected(error: &ApiError) -> bool {
-    error.is_unauthorized()
-}
-
 /// The level for logging `error` from a caller: `level`, or info when mod.io
 /// rejected our credentials (see [`ModioError`]).
 pub(crate) fn caller_log_level(error: &ApiError, level: log::Level) -> log::Level {
-    if credentials_rejected(error) {
+    level_unless_credentials_rejected(error.is_unauthorized(), level)
+}
+
+fn level_unless_credentials_rejected(credentials_rejected: bool, level: log::Level) -> log::Level {
+    if credentials_rejected {
         log::Level::Info
     } else {
         level
@@ -613,7 +609,7 @@ pub(crate) struct ModioError {
 
 impl ModioError {
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
-        let credentials_rejected = credentials_rejected(&error);
+        let credentials_rejected = error.is_unauthorized();
         Self {
             message: format_api_error_logged_in(error, logged_in),
             credentials_rejected,
@@ -631,11 +627,7 @@ impl ModioError {
 
     /// `level` for an ordinary failure; info when mod.io rejected our credentials.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
-        if self.credentials_rejected {
-            log::Level::Info
-        } else {
-            level
-        }
+        level_unless_credentials_rejected(self.credentials_rejected, level)
     }
 }
 
@@ -666,6 +658,8 @@ impl From<ModioError> for String {
     }
 }
 
+/// Converts an `ApiError` into a user-facing message, preserving the rate-limit
+/// and auth hints we surfaced previously.
 pub fn format_api_error(error: ApiError) -> String {
     format_api_error_logged_in(error, false)
 }
@@ -952,12 +946,12 @@ where
 {
     match operation().await {
         Ok(value) => Ok(value),
-        Err(message) if is_rate_limited_message(&message.to_string()) => {
-            log::warn!("mod.io rate limit hit, retrying in 61 seconds: {message}");
+        Err(error) if is_rate_limited_message(&error.to_string()) => {
+            log::warn!("mod.io rate limit hit, retrying in 61 seconds: {error}");
             tokio::time::sleep(Duration::from_secs(61)).await;
             operation().await
         }
-        Err(message) => Err(message),
+        Err(error) => Err(error),
     }
 }
 

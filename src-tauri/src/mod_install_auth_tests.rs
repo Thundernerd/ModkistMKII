@@ -8,7 +8,8 @@ use std::collections::HashSet;
 
 use super::*;
 use crate::modio_api::auth_tests::{
-    capture_reports, sentry_reports, token_expired, FakeModio, Received, TOKEN,
+    capture_reports, error_body, sentry_reports, token_expired, FakeModio, Received, GAME_ID,
+    TOKEN,
 };
 
 const PRIVATE_MODS: [u64; 3] = [101, 102, 103];
@@ -75,7 +76,7 @@ const EMPTY_LIST: &str = r#"{"data":[],"result_total":0}"#;
 /// The `id-in` batch read only returns public mods, so every private mod falls
 /// back to its own read.
 fn batch_omits_private_mods_with_expired_token(request: &Received) -> (u16, Option<u32>, String) {
-    if request.path == "/games/3213/mods" {
+    if request.path == format!("/games/{GAME_ID}/mods") {
         (200, None, EMPTY_LIST.to_string())
     } else {
         private_mods_with_expired_token(request)
@@ -99,7 +100,8 @@ async fn an_expired_token_while_fetching_mods_stops_the_per_mod_fallback() {
         .iter()
         .all(|mod_id| failed_on_rejected_credentials(outcomes.get(mod_id))));
     let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
-    assert_eq!(paths, ["/games/3213/mods", "/games/3213/mods/101", "/games/3213/mods/101"]);
+    let mods = format!("/games/{GAME_ID}/mods");
+    assert_eq!(paths, [mods.clone(), format!("{mods}/101"), format!("{mods}/101")]);
 }
 
 /// mod.io `error_ref` for "api_key supplied is invalid".
@@ -111,7 +113,7 @@ fn api_key_refused_and_mods_gone(request: &Received) -> (u16, Option<u32>, Strin
     if request.bearer {
         (404, None, r#"{"error":{"code":404,"message":"Not Found"}}"#.to_string())
     } else {
-        let body = crate::modio_api::auth_tests::error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid.");
+        let body = error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid.");
         (401, Some(API_KEY_INVALID_ERROR_REF), body)
     }
 }
@@ -214,7 +216,7 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
 /// Public mod 100 depends on the private mods; their dependency reads need the
 /// session token, which has expired.
 fn public_mod_with_private_dependencies(request: &Received) -> (u16, Option<u32>, String) {
-    if request.path == "/games/3213/mods/100/dependencies" && !request.bearer {
+    if request.path == format!("/games/{GAME_ID}/mods/100/dependencies") && !request.bearer {
         let body = r#"{"data":[{"mod_id":101},{"mod_id":102},{"mod_id":103}],"result_total":3}"#;
         (200, None, body.to_string())
     } else {

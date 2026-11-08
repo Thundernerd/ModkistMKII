@@ -1430,6 +1430,8 @@ async fn flush_pending_unsubscribes(app: &AppHandle, state: &ModioState) {
     }
 }
 
+/// Runs a subscription sync and turns its error into what the UI expects,
+/// ending a sync interrupted by a rejected session as cancelled.
 async fn sync_subscribed_mods_inner(
     app: &AppHandle,
     state: &ModioState,
