@@ -13,14 +13,16 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded runs on a PR, but let every push to main finish so each
+  # commit on main keeps its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  ci:
+  checks:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout

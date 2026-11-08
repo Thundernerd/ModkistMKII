@@ -60,7 +60,7 @@ Release builds embed `MODIO_API_KEY`, `MODIO_GAME_ID`, and `SENTRY_DSN` at compi
 | `npm run tauri build` | Build installers for the current platform |
 | `npm run typecheck` | Run the TypeScript type check |
 | `npm run test:scripts` | Run the tests for the release scripts in `.github/scripts/` |
-| `cargo test` (in `src-tauri`) | Run the Rust tests |
+| `cd src-tauri && cargo test` | Run the Rust tests |
 
 ## CI builds
 
