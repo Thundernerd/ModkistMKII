@@ -69,3 +69,35 @@ async fn a_server_error_while_mapping_dependencies_is_still_reported() {
     assert_eq!(caller_warnings.len(), PRIVATE_MODS.len(), "{caller_warnings:#?}");
     assert!(!state.auth_status().session_expired);
 }
+
+const EMPTY_LIST: &str = r#"{"data":[],"result_total":0}"#;
+
+/// The `id-in` batch read only returns public mods, so every private mod falls
+/// back to its own read.
+fn batch_omits_private_mods_with_expired_token(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == "/games/3213/mods" {
+        (200, None, EMPTY_LIST.to_string())
+    } else {
+        private_mods_with_expired_token(request)
+    }
+}
+
+fn failed_on_rejected_credentials(outcome: Option<&ModFetchOutcome>) -> bool {
+    matches!(outcome, Some(ModFetchOutcome::Failed(error)) if error.credentials_rejected)
+}
+
+#[tokio::test]
+async fn an_expired_token_while_fetching_mods_stops_the_per_mod_fallback() {
+    capture_reports();
+    let server = FakeModio::start(batch_omits_private_mods_with_expired_token);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    let outcomes = fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    assert!(PRIVATE_MODS
+        .iter()
+        .all(|mod_id| failed_on_rejected_credentials(outcomes.get(mod_id))));
+    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    assert_eq!(paths, ["/games/3213/mods", "/games/3213/mods/101", "/games/3213/mods/101"]);
+}

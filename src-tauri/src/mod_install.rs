@@ -459,7 +459,7 @@ async fn prepare_installed_records(
             .unwrap_or(ModFetchOutcome::Failed(format!(
                 "Mod {} was not returned by the batch fetch",
                 record.mod_id
-            )));
+            ).into()));
         match outcome {
             ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
                 if game_running {
@@ -1629,7 +1629,7 @@ async fn reconcile_custom_profile_mods_inner(
             .unwrap_or(ModFetchOutcome::Failed(format!(
                 "Mod {} was not returned by the batch fetch",
                 entry.mod_id
-            )));
+            ).into()));
         match outcome {
             ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
                 remove_inaccessible_mod_local(

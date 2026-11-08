@@ -604,6 +604,15 @@ impl ModioError {
         }
     }
 
+    /// The failure of a read skipped because mod.io already rejected the
+    /// session it would have used.
+    pub(crate) fn session_rejected() -> Self {
+        Self {
+            message: "Your mod.io session has expired. Sign in again.".to_string(),
+            credentials_rejected: true,
+        }
+    }
+
     /// `level` for an ordinary failure; info when mod.io rejected our credentials.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
         if self.credentials_rejected {
@@ -735,7 +744,7 @@ pub(crate) fn seed_mod_cache(state: &ModioState, mod_: &ModObject) {
 pub(crate) enum ModFetchOutcome {
     Found(ModObject),
     Unavailable,
-    Failed(String),
+    Failed(ModioError),
 }
 
 pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
@@ -750,11 +759,11 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
 
     let game_id = match state.game_id() {
         Ok(game_id) => game_id,
-        Err(message) => return ModFetchOutcome::Failed(message),
+        Err(message) => return ModFetchOutcome::Failed(message.into()),
     };
     let api = match state.api() {
         Ok(api) => api,
-        Err(message) => return ModFetchOutcome::Failed(message),
+        Err(message) => return ModFetchOutcome::Failed(message.into()),
     };
     let token = state.session_token();
 
@@ -773,7 +782,7 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
                 tokio::time::sleep(Duration::from_secs(61)).await;
                 return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
-                ModFetchOutcome::Failed(format_api_error_logged_in(
+                ModFetchOutcome::Failed(ModioError::from_api(
                     error,
                     state.auth_status().logged_in,
                 ))
@@ -826,7 +835,7 @@ pub(crate) async fn fetch_mod_outcomes_batch(
         Ok(game_id) => game_id,
         Err(message) => {
             for mod_id in pending {
-                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone()));
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone().into()));
             }
             return outcomes;
         }
@@ -835,11 +844,12 @@ pub(crate) async fn fetch_mod_outcomes_batch(
         Ok(api) => api,
         Err(message) => {
             for mod_id in pending {
-                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone()));
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone().into()));
             }
             return outcomes;
         }
     };
+    let session = state.session_token();
 
     for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
         let mut found_ids = HashSet::new();
@@ -873,11 +883,16 @@ pub(crate) async fn fetch_mod_outcomes_batch(
         }
 
         for &mod_id in chunk {
-            if !found_ids.contains(&mod_id) {
-                // fetch_mod_outcome already marks unavailable/caches as needed.
-                let outcome = fetch_mod_outcome(state, mod_id).await;
-                outcomes.insert(mod_id, outcome);
+            if found_ids.contains(&mod_id) {
+                continue;
             }
+            let outcome = if state.session_rejected(session.as_deref()) {
+                ModFetchOutcome::Failed(ModioError::session_rejected())
+            } else {
+                // fetch_mod_outcome already marks unavailable/caches as needed.
+                fetch_mod_outcome(state, mod_id).await
+            };
+            outcomes.insert(mod_id, outcome);
         }
     }
 
@@ -890,7 +905,7 @@ pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<
         ModFetchOutcome::Unavailable => {
             Err(format!("Mod {mod_id} is no longer available on mod.io."))
         }
-        ModFetchOutcome::Failed(message) => Err(message),
+        ModFetchOutcome::Failed(error) => Err(error.message),
     }
 }
 
@@ -1645,18 +1660,18 @@ pub async fn list_mod_dependencies(
             .cloned()
             .unwrap_or(ModFetchOutcome::Failed(format!(
                 "Mod {dependency_id} was not returned by the batch fetch"
-            )));
+            ).into()));
         match outcome {
             ModFetchOutcome::Found(mod_) => mods.push(mod_to_dependency(mod_)),
             ModFetchOutcome::Unavailable => mods.push(unavailable_dependency(
                 dependency_id,
                 format!("Mod {dependency_id} is no longer available on mod.io."),
             )),
-            ModFetchOutcome::Failed(message) => {
+            ModFetchOutcome::Failed(error) => {
                 log::warn!(
-                    "Did not load dependency {dependency_id} for mod {mod_id}: {message}"
+                    "Did not load dependency {dependency_id} for mod {mod_id}: {error}"
                 );
-                mods.push(unavailable_dependency(dependency_id, message));
+                mods.push(unavailable_dependency(dependency_id, error.message));
             }
         }
     }
