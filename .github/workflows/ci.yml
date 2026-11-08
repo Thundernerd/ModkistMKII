@@ -1,0 +1,73 @@
+# Checks every pull request to main, and every push to main.
+#
+# Runs the type check, the node:test suites for the release scripts under
+# .github/scripts/, and the Rust tests in src-tauri. Any failing step fails the run.
+# This workflow does not build installers (see the Build workflow) and needs no secrets.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded runs on a PR, but let every push to main finish so each
+  # commit on main keeps its result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: ci
+          cache-on-failure: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        id: install
+        run: npm ci
+
+      # The three checks below run even if an earlier one fails, so one run reports
+      # every failing check. They are skipped only when setup itself failed.
+      - name: Type check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run typecheck
+
+      - name: Script tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run test:scripts
+
+      - name: Rust tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: src-tauri
+        run: cargo test --locked
