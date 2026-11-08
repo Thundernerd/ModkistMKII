@@ -79,16 +79,18 @@ impl FakeModio {
         Self { base_url, received }
     }
 
-    /// A client whose api-key-refused hook counts its calls, like the hooks
+    /// A client whose api-key-refused hook counts its calls and whose
+    /// token-rejected hook records tokens, like the hooks
     /// `ModioState::install_api_client_hooks` installs in the app.
     fn client_counting_api_key_refusals(&self) -> (ApiClient, Arc<Mutex<u32>>) {
         let refusals = Arc::new(Mutex::new(0));
         let sink = refusals.clone();
+        let (on_token_rejected, _) = recording_token_hook();
         let client = self.client_with_hooks(ApiClientHooks {
+            on_token_rejected: Some(on_token_rejected),
             on_api_key_refused: Some(Arc::new(move || {
                 *sink.lock().unwrap() += 1;
             })),
-            ..ApiClientHooks::default()
         });
         (client, refusals)
     }
@@ -100,12 +102,9 @@ impl FakeModio {
     /// A client whose token-rejected hook records every rejected token, like
     /// the hooks `ModioState::install_api_client_hooks` installs in the app.
     fn client(&self) -> (ApiClient, Arc<Mutex<Vec<String>>>) {
-        let rejected = Arc::new(Mutex::new(Vec::new()));
-        let sink = rejected.clone();
+        let (on_token_rejected, rejected) = recording_token_hook();
         let client = self.client_with_hooks(ApiClientHooks {
-            on_token_rejected: Some(Arc::new(move |token: &str| {
-                sink.lock().unwrap().push(token.to_string());
-            })),
+            on_token_rejected: Some(on_token_rejected),
             ..ApiClientHooks::default()
         });
         (client, rejected)
@@ -117,6 +116,16 @@ impl FakeModio {
             .with_base_url(self.base_url.clone())
             .with_hooks(hooks)
     }
+}
+
+/// A token-rejected hook that records every rejected token it is called with.
+fn recording_token_hook() -> (TokenRejectedHook, Arc<Mutex<Vec<String>>>) {
+    let rejected = Arc::new(Mutex::new(Vec::new()));
+    let sink = rejected.clone();
+    let hook: TokenRejectedHook = Arc::new(move |token: &str| {
+        sink.lock().unwrap().push(token.to_string());
+    });
+    (hook, rejected)
 }
 
 pub(crate) fn error_body(error_ref: u32, message: &str) -> String {
