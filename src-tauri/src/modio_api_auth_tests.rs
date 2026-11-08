@@ -217,3 +217,19 @@ async fn a_refused_api_key_is_reported_to_sentry_once() {
     assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
     assert!(reports[0].contains("API key"), "report should name the cause: {}", reports[0]);
 }
+
+#[tokio::test]
+async fn requests_queued_behind_the_rejection_are_not_sent() {
+    let server = FakeModio::start(|_| token_expired());
+    let (client, _) = server.client();
+
+    let query = ModQuery::default();
+    let (subscribed, own_mods, me) = tokio::join!(
+        client.get_user_subscriptions(TOKEN, GAME_ID, &query),
+        client.get_user_mods(TOKEN, GAME_ID, &query),
+        client.get_authenticated_user(TOKEN),
+    );
+
+    assert!(subscribed.is_err() && own_mods.is_err() && me.is_err());
+    assert_eq!(server.received().len(), 1, "only the first request should reach mod.io");
+}

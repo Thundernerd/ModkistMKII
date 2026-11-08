@@ -637,12 +637,14 @@ impl ApiClient {
         form: Option<&[(&str, &str)]>,
         quiet_on_failure: bool,
     ) -> Result<Vec<u8>, ApiError> {
+        self.pace().await;
+
+        // Checked after pacing so requests queued behind the one that got the
+        // 401 are dropped too, instead of each collecting its own 401.
         if token.is_some_and(|token| self.is_token_rejected(token)) {
             log::debug!("mod.io -> {method} {path} skipped: session token already rejected");
             return Err(ApiError::token_already_rejected());
         }
-
-        self.pace().await;
 
         let method_label = method.as_str().to_string();
         let url = format!("{}{}", self.base_url, path);
