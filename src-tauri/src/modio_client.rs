@@ -11,12 +11,15 @@ use std::collections::{HashMap, HashSet};
 
 use crate::modio_api::{
     is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile,
-    TokenRejectedHook,
+    ApiKeyRefusedHook, TokenRejectedHook,
 };
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
 /// Emitted when mod.io rejects the stored token and the session is cleared.
 pub const SESSION_EXPIRED_EVENT: &str = "modio-session-expired";
+/// Emitted once when mod.io refuses the game API key this build embeds. Only
+/// a newer Modkist release (with a valid key) can fix it.
+pub const API_KEY_REFUSED_EVENT: &str = "modio-api-key-refused";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
 const USERNAME_KEY: &str = "username";
 
@@ -80,6 +83,10 @@ pub struct ModioState {
     /// Set when the session was cleared because mod.io rejected the token, so
     /// the UI can ask the user to sign in again. Cleared on sign-in or logout.
     session_expired: AtomicBool,
+    api_key_refused_hook: OnceLock<ApiKeyRefusedHook>,
+    /// Set when mod.io refused the game API key, so the UI can tell the user
+    /// to update. Stays set for the rest of the run.
+    api_key_refused: AtomicBool,
     /// Serializes OAuth reads/writes so subscription sync and subscribe/unsubscribe
     /// never hit mod.io concurrently (avoids spurious global rate limits).
     oauth_request: tokio::sync::Mutex<()>,
@@ -101,6 +108,8 @@ impl ModioState {
             subscription_sync_cancelled: std::sync::atomic::AtomicBool::new(false),
             token_rejected_hook: OnceLock::new(),
             session_expired: AtomicBool::new(false),
+            api_key_refused_hook: OnceLock::new(),
+            api_key_refused: AtomicBool::new(false),
             oauth_request: tokio::sync::Mutex::new(()),
         }
     }
@@ -327,6 +336,7 @@ impl ModioState {
         if self.api_key.is_none() {
             return ModioStatus {
                 configured: false,
+                api_key_refused: false,
                 message: Some(
                     "Set MODIO_API_KEY in .env (use your game's API key from mod.io).".into(),
                 ),
@@ -336,6 +346,7 @@ impl ModioState {
         if !self.config.has_host() {
             return ModioStatus {
                 configured: false,
+                api_key_refused: false,
                 message: Some(
                     "Set MODIO_GAME_ID in .env (found on your game's mod.io dashboard).".into(),
                 ),
@@ -345,6 +356,7 @@ impl ModioState {
         ModioStatus {
             configured: true,
             message: None,
+            api_key_refused: self.api_key_refused.load(Ordering::Relaxed),
         }
     }
 
@@ -374,6 +386,9 @@ impl ModioState {
         )?;
         if let Some(hook) = self.token_rejected_hook.get() {
             client = client.with_token_rejected_hook(hook.clone());
+        }
+        if let Some(hook) = self.api_key_refused_hook.get() {
+            client = client.with_api_key_refused_hook(hook.clone());
         }
         let client = Arc::new(client);
         *guard = Some(client.clone());
@@ -405,6 +420,24 @@ impl ModioState {
             app.state::<ModioState>().expire_session(&app, token);
         });
         let _ = self.token_rejected_hook.set(hook);
+    }
+
+    /// Makes every API client built from now on report a refused game API key
+    /// back to this state. Call once during setup, before any request is made.
+    pub fn install_api_key_refused_hook(&self, app: &AppHandle) {
+        let app = app.clone();
+        let hook: ApiKeyRefusedHook = Arc::new(move || {
+            app.state::<ModioState>().mark_api_key_refused(&app);
+        });
+        let _ = self.api_key_refused_hook.set(hook);
+    }
+
+    fn mark_api_key_refused(&self, app: &AppHandle) {
+        if self.api_key_refused.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        log::info!("mod.io refused the game API key; asking the user to update Modkist");
+        let _ = app.emit(API_KEY_REFUSED_EVENT, ());
     }
 
     /// Checks the restored token with a cheap `/me` call. A 401 goes through the
@@ -911,6 +944,8 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
 pub struct ModioStatus {
     pub configured: bool,
     pub message: Option<String>,
+    /// mod.io refused the game API key this build embeds; the user must update.
+    pub api_key_refused: bool,
 }
 
 #[derive(Serialize)]
