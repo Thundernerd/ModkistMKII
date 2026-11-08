@@ -101,3 +101,33 @@ async fn an_expired_token_while_fetching_mods_stops_the_per_mod_fallback() {
     let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
     assert_eq!(paths, ["/games/3213/mods", "/games/3213/mods/101", "/games/3213/mods/101"]);
 }
+
+/// mod.io `error_ref` for "api_key supplied is invalid".
+const API_KEY_INVALID_ERROR_REF: u32 = 11002;
+
+/// mod.io refuses the game API key; the session token still works, but these
+/// mods were deleted, so the bearer read finds nothing either.
+fn api_key_refused_and_mods_gone(request: &Received) -> (u16, Option<u32>, String) {
+    if request.bearer {
+        (404, None, r#"{"error":{"code":404,"message":"Not Found"}}"#.to_string())
+    } else {
+        let body = crate::modio_api::auth_tests::error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid.");
+        (401, Some(API_KEY_INVALID_ERROR_REF), body)
+    }
+}
+
+#[tokio::test]
+async fn a_refused_api_key_on_the_batch_mod_fetch_is_reported_once() {
+    capture_reports();
+    let server = FakeModio::start(api_key_refused_and_mods_gone);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    let outcomes = fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
+
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "only the client's own report: {reports:#?}");
+    assert!(reports[0].contains("game API key refused"), "{}", reports[0]);
+    assert!(PRIVATE_MODS
+        .iter()
+        .all(|mod_id| matches!(outcomes.get(mod_id), Some(ModFetchOutcome::Unavailable))));
+}

@@ -584,6 +584,22 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
 
 /// Converts an `ApiError` into a user-facing message, preserving the rate-limit
 /// and auth hints we surfaced previously.
+/// True when mod.io refused the request's credentials: HTTP 401, for an
+/// expired or revoked session token or a refused game API key.
+fn credentials_rejected(error: &ApiError) -> bool {
+    error.is_unauthorized()
+}
+
+/// The level for logging `error` from a caller: `level`, or info when mod.io
+/// rejected our credentials (see [`ModioError`]).
+pub(crate) fn caller_log_level(error: &ApiError, level: log::Level) -> log::Level {
+    if credentials_rejected(error) {
+        log::Level::Info
+    } else {
+        level
+    }
+}
+
 /// A failed mod.io operation as callers see it: the message for the UI, and
 /// whether mod.io rejected our credentials (HTTP 401: an expired or revoked
 /// session token, or a refused game API key). `ApiClient` already handles and
@@ -597,7 +613,7 @@ pub(crate) struct ModioError {
 
 impl ModioError {
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
-        let credentials_rejected = error.is_unauthorized();
+        let credentials_rejected = credentials_rejected(&error);
         Self {
             message: format_api_error_logged_in(error, logged_in),
             credentials_rejected,
@@ -873,12 +889,20 @@ pub(crate) async fn fetch_mod_outcomes_batch(
                         }
                     }
                     Err(error) => {
-                        log::warn!("Batch mod fetch failed after retry: {}", error.message);
+                        log::log!(
+                            caller_log_level(&error, log::Level::Warn),
+                            "Batch mod fetch failed after retry: {}",
+                            error.message
+                        );
                     }
                 }
             }
             Err(error) => {
-                log::warn!("Batch mod fetch failed, falling back to per-mod requests: {}", error.message);
+                log::log!(
+                    caller_log_level(&error, log::Level::Warn),
+                    "Batch mod fetch failed, falling back to per-mod requests: {}",
+                    error.message
+                );
             }
         }
 
