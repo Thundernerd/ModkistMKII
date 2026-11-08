@@ -87,11 +87,13 @@ pub struct ModioState {
 
 impl ModioState {
     pub fn from_env() -> Self {
-        let api_key = crate::modio_env::modio_api_key();
+        Self::new(crate::modio_env::modio_api_key(), ModioConfig::from_env())
+    }
 
+    fn new(api_key: Option<String>, config: ModioConfig) -> Self {
         Self {
             api_key,
-            config: ModioConfig::from_env(),
+            config,
             api_client: Mutex::new(None),
             session: Mutex::new(SessionData {
                 token: None,
@@ -105,10 +107,40 @@ impl ModioState {
         }
     }
 
-    pub(crate) async fn with_oauth_request<T, F, Fut>(&self, label: &str, operation: F) -> Result<T, String>
+    /// A signed-in state whose API client talks to `base_url` (a fake mod.io in
+    /// tests). A rejected token ends the session the way the app's hook does,
+    /// minus the disk and UI side effects that need an `AppHandle`.
+    #[cfg(test)]
+    pub(crate) fn signed_in_against(base_url: String, token: &str) -> Arc<Self> {
+        Arc::new_cyclic(|state: &std::sync::Weak<Self>| {
+            let state = state.clone();
+            let config = ModioConfig {
+                game_id: Some(crate::modio_api::auth_tests::GAME_ID),
+                api_host: None,
+                use_test_env: false,
+            };
+            let client = ApiClient::new("game-key".into(), config.game_id, None, false)
+                .unwrap()
+                .with_base_url(base_url)
+                .with_token_rejected_hook(Arc::new(move |token: &str| {
+                    if let Some(state) = state.upgrade() {
+                        state.end_rejected_session(token);
+                    }
+                }));
+            let state = Self::new(Some("game-key".into()), config);
+            *state.api_client.lock().unwrap() = Some(Arc::new(client));
+            *state.session.lock().unwrap() = SessionData {
+                token: Some(token.to_string()),
+                username: Some("tester".into()),
+            };
+            state
+        })
+    }
+
+    pub(crate) async fn with_oauth_request<T, E, F, Fut>(&self, label: &str, operation: F) -> Result<T, E>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<T, String>>,
+        Fut: std::future::Future<Output = Result<T, E>>,
     {
         let _guard = self.oauth_request.lock().await;
         log::debug!("OAuth request: {label}");
@@ -407,6 +439,15 @@ impl ModioState {
         let _ = self.token_rejected_hook.set(hook);
     }
 
+    /// True when mod.io rejected `token`, the session an operation started
+    /// with, and signed the user out. Loops over mods stop then: every later
+    /// read would go out without the token and fail for private mods.
+    pub(crate) fn session_rejected(&self, token: Option<&str>) -> bool {
+        token.is_some()
+            && self.session_expired.load(Ordering::Relaxed)
+            && self.session_token().as_deref() != token
+    }
+
     /// Checks the restored token with a cheap `/me` call. A 401 goes through the
     /// token-rejected hook, which clears the session; other failures (offline,
     /// rate limit) leave the session alone.
@@ -428,10 +469,22 @@ impl ModioState {
     /// the session already moved on (logged out, or signed in with a new token),
     /// so late responses from in-flight requests cannot end a fresh session.
     fn expire_session(&self, app: &AppHandle, rejected_token: &str) {
+        if !self.end_rejected_session(rejected_token) {
+            return;
+        }
+        if let Err(error) = delete_stored_session(app) {
+            log::warn!("Did not remove expired mod.io session from disk: {error}");
+        }
+        let _ = app.emit(SESSION_EXPIRED_EVENT, ());
+    }
+
+    /// The in-memory part of [`Self::expire_session`]. Returns false when the
+    /// session already moved on and nothing was cleared.
+    fn end_rejected_session(&self, rejected_token: &str) -> bool {
         let username = {
             let mut session = self.session.lock().unwrap();
             if session.token.as_deref() != Some(rejected_token) {
-                return;
+                return false;
             }
             session.token = None;
             session.username.take()
@@ -439,14 +492,11 @@ impl ModioState {
         self.session_expired.store(true, Ordering::Relaxed);
         self.cancel_subscription_sync();
         self.clear_api_cache();
-        if let Err(error) = delete_stored_session(app) {
-            log::warn!("Did not remove expired mod.io session from disk: {error}");
-        }
         log::info!(
             "mod.io rejected the session token for {}; signed out",
             username.as_deref().unwrap_or("user")
         );
-        let _ = app.emit(SESSION_EXPIRED_EVENT, ());
+        true
     }
 
     pub fn restore_from_store(&self, app: &AppHandle) -> Result<(), String> {
@@ -527,6 +577,82 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
     store.save().map_err(|e| e.to_string())
 }
 
+/// The level for logging `error` from a caller: `level`, or info when mod.io
+/// rejected our credentials (see [`ModioError`]).
+pub(crate) fn caller_log_level(error: &ApiError, level: log::Level) -> log::Level {
+    level_unless_credentials_rejected(error.is_unauthorized(), level)
+}
+
+fn level_unless_credentials_rejected(credentials_rejected: bool, level: log::Level) -> log::Level {
+    if credentials_rejected {
+        log::Level::Info
+    } else {
+        level
+    }
+}
+
+/// A failed mod.io operation as callers see it: the message for the UI, and
+/// whether mod.io rejected our credentials (HTTP 401: an expired or revoked
+/// session token, or a refused game API key). `ApiClient` already handles and
+/// reports those once, so callers log them at info instead of warn/error,
+/// which `SentryLogWriter` would forward to Sentry once per mod.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModioError {
+    pub message: String,
+    pub credentials_rejected: bool,
+}
+
+impl ModioError {
+    pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
+        let credentials_rejected = error.is_unauthorized();
+        Self {
+            message: format_api_error_logged_in(error, logged_in),
+            credentials_rejected,
+        }
+    }
+
+    /// The failure of a read skipped because mod.io already rejected the
+    /// session it would have used.
+    pub(crate) fn session_rejected() -> Self {
+        Self {
+            message: "Your mod.io session has expired. Sign in again.".to_string(),
+            credentials_rejected: true,
+        }
+    }
+
+    /// `level` for an ordinary failure; info when mod.io rejected our credentials.
+    pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
+        level_unless_credentials_rejected(self.credentials_rejected, level)
+    }
+}
+
+impl std::fmt::Display for ModioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<String> for ModioError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            credentials_rejected: false,
+        }
+    }
+}
+
+impl From<&str> for ModioError {
+    fn from(message: &str) -> Self {
+        message.to_string().into()
+    }
+}
+
+impl From<ModioError> for String {
+    fn from(error: ModioError) -> Self {
+        error.message
+    }
+}
+
 /// Converts an `ApiError` into a user-facing message, preserving the rate-limit
 /// and auth hints we surfaced previously.
 pub fn format_api_error(error: ApiError) -> String {
@@ -575,14 +701,15 @@ pub fn should_cache_dependency_fetch_failure(error: &ApiError) -> bool {
 pub(crate) async fn fetch_mod_dependency_ids(
     state: &ModioState,
     mod_id: u64,
-) -> Result<Vec<u64>, String> {
+) -> Result<Vec<u64>, ModioError> {
     if let Some(cached) = state.cached_dependencies(mod_id) {
         return Ok(cached);
     }
     if state.cached_dependency_fetch_failed(mod_id) {
         return Err(format!(
             "Dependencies for mod {mod_id} did not load (cached failure)"
-        ));
+        )
+        .into());
     }
 
     let game_id = state.game_id()?;
@@ -602,7 +729,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
             if should_cache_dependency_fetch_failure(&error) {
                 state.mark_dependency_fetch_failed(mod_id);
             }
-            Err(format_api_error_logged_in(error, logged_in))
+            Err(ModioError::from_api(error, logged_in))
         }
     }
 }
@@ -622,7 +749,7 @@ pub(crate) fn seed_mod_cache(state: &ModioState, mod_: &ModObject) {
 pub(crate) enum ModFetchOutcome {
     Found(ModObject),
     Unavailable,
-    Failed(String),
+    Failed(ModioError),
 }
 
 pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
@@ -637,11 +764,11 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
 
     let game_id = match state.game_id() {
         Ok(game_id) => game_id,
-        Err(message) => return ModFetchOutcome::Failed(message),
+        Err(message) => return ModFetchOutcome::Failed(message.into()),
     };
     let api = match state.api() {
         Ok(api) => api,
-        Err(message) => return ModFetchOutcome::Failed(message),
+        Err(message) => return ModFetchOutcome::Failed(message.into()),
     };
     let token = state.session_token();
 
@@ -660,7 +787,7 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
                 tokio::time::sleep(Duration::from_secs(61)).await;
                 return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
-                ModFetchOutcome::Failed(format_api_error_logged_in(
+                ModFetchOutcome::Failed(ModioError::from_api(
                     error,
                     state.auth_status().logged_in,
                 ))
@@ -713,7 +840,7 @@ pub(crate) async fn fetch_mod_outcomes_batch(
         Ok(game_id) => game_id,
         Err(message) => {
             for mod_id in pending {
-                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone()));
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone().into()));
             }
             return outcomes;
         }
@@ -722,11 +849,12 @@ pub(crate) async fn fetch_mod_outcomes_batch(
         Ok(api) => api,
         Err(message) => {
             for mod_id in pending {
-                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone()));
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(message.clone().into()));
             }
             return outcomes;
         }
     };
+    let session = state.session_token();
 
     for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
         let mut found_ids = HashSet::new();
@@ -750,34 +878,47 @@ pub(crate) async fn fetch_mod_outcomes_batch(
                         }
                     }
                     Err(error) => {
-                        log::warn!("Batch mod fetch failed after retry: {}", error.message);
+                        log::log!(
+                            caller_log_level(&error, log::Level::Warn),
+                            "Batch mod fetch failed after retry: {}",
+                            error.message
+                        );
                     }
                 }
             }
             Err(error) => {
-                log::warn!("Batch mod fetch failed, falling back to per-mod requests: {}", error.message);
+                log::log!(
+                    caller_log_level(&error, log::Level::Warn),
+                    "Batch mod fetch failed, falling back to per-mod requests: {}",
+                    error.message
+                );
             }
         }
 
         for &mod_id in chunk {
-            if !found_ids.contains(&mod_id) {
-                // fetch_mod_outcome already marks unavailable/caches as needed.
-                let outcome = fetch_mod_outcome(state, mod_id).await;
-                outcomes.insert(mod_id, outcome);
+            if found_ids.contains(&mod_id) {
+                continue;
             }
+            let outcome = if state.session_rejected(session.as_deref()) {
+                ModFetchOutcome::Failed(ModioError::session_rejected())
+            } else {
+                // fetch_mod_outcome already marks unavailable/caches as needed.
+                fetch_mod_outcome(state, mod_id).await
+            };
+            outcomes.insert(mod_id, outcome);
         }
     }
 
     outcomes
 }
 
-pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, String> {
+pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, ModioError> {
     match fetch_mod_outcome(state, mod_id).await {
         ModFetchOutcome::Found(mod_) => Ok(mod_),
         ModFetchOutcome::Unavailable => {
-            Err(format!("Mod {mod_id} is no longer available on mod.io."))
+            Err(format!("Mod {mod_id} is no longer available on mod.io.").into())
         }
-        ModFetchOutcome::Failed(message) => Err(message),
+        ModFetchOutcome::Failed(error) => Err(error),
     }
 }
 
@@ -792,23 +933,24 @@ pub(crate) fn is_rate_limited_message(message: &str) -> bool {
     lower.contains("429")
 }
 
-pub(crate) async fn with_rate_limit_retry<T, F, Fut>(mut operation: F) -> Result<T, String>
+pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(mut operation: F) -> Result<T, E>
 where
+    E: std::fmt::Display,
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, String>>,
+    Fut: std::future::Future<Output = Result<T, E>>,
 {
     match operation().await {
         Ok(value) => Ok(value),
-        Err(message) if is_rate_limited_message(&message) => {
-            log::warn!("mod.io rate limit hit, retrying in 61 seconds: {message}");
+        Err(error) if is_rate_limited_message(&error.to_string()) => {
+            log::warn!("mod.io rate limit hit, retrying in 61 seconds: {error}");
             tokio::time::sleep(Duration::from_secs(61)).await;
             operation().await
         }
-        Err(message) => Err(message),
+        Err(error) => Err(error),
     }
 }
 
-pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), ModioError> {
     log::info!("Subscribing to mod {mod_id}");
     state
         .with_oauth_request("subscribe_to_mod", || async {
@@ -826,13 +968,13 @@ pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<
                     log::debug!("Mod {mod_id} already subscribed");
                     Ok(())
                 }
-                Err(error) => Err(format_api_error(error)),
+                Err(error) => Err(ModioError::from_api(error, false)),
             }
         })
         .await
 }
 
-pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), ModioError> {
     log::info!("Unsubscribing from mod {mod_id}");
     state
         .with_oauth_request("unsubscribe_from_mod", || async {
@@ -850,13 +992,13 @@ pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Res
                     log::debug!("Mod {mod_id} was not subscribed");
                     Ok(())
                 }
-                Err(error) => Err(format_api_error(error)),
+                Err(error) => Err(ModioError::from_api(error, false)),
             }
         })
         .await
 }
 
-pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {
+pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, ModioError> {
     if let Some(cached) = state.cached_subscribed_mod_ids() {
         return Ok(cached);
     }
@@ -879,7 +1021,7 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
                 let list = api
                     .get_user_subscriptions(&token, game_id, &query)
                     .await
-                    .map_err(format_api_error)?;
+                    .map_err(|error| ModioError::from_api(error, false))?;
                 let count = list.data.len() as u32;
                 let total = list.result_total;
                 // Seed the caches so browse, detail, and install flows can reuse
@@ -897,7 +1039,7 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
 
             mod_ids.sort_unstable();
             mod_ids.dedup();
-            Ok(mod_ids)
+            Ok::<_, ModioError>(mod_ids)
         })
         .await?;
 
@@ -1427,7 +1569,11 @@ pub async fn list_mods(
 
 #[tauri::command]
 pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
-    let mod_ = fetch_mod_object(&state, mod_id).await?;
+    get_mod_inner(&state, mod_id).await
+}
+
+pub(crate) async fn get_mod_inner(state: &ModioState, mod_id: u64) -> Result<ModDetail, String> {
+    let mod_ = fetch_mod_object(state, mod_id).await?;
     let mut detail = mod_to_detail(mod_);
     if let Some(token) = state.session_token() {
         let game_id = state.game_id()?;
@@ -1436,7 +1582,8 @@ pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDet
             Ok(Some(rating)) => detail.user_rating = rating,
             Ok(None) => {}
             Err(error) => {
-                log::warn!(
+                log::log!(
+                    caller_log_level(&error, log::Level::Warn),
                     "Did not load user rating for mod {mod_id}: {}",
                     format_api_error(error)
                 );
@@ -1521,9 +1668,16 @@ pub async fn list_mod_dependencies(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<ModDependencyListResult, String> {
-    let dependency_ids = fetch_mod_dependency_ids(&state, mod_id).await?;
+    list_mod_dependencies_inner(&state, mod_id).await
+}
 
-    let outcomes = fetch_mod_outcomes_batch(&state, &dependency_ids).await;
+pub(crate) async fn list_mod_dependencies_inner(
+    state: &ModioState,
+    mod_id: u64,
+) -> Result<ModDependencyListResult, String> {
+    let dependency_ids = fetch_mod_dependency_ids(state, mod_id).await?;
+
+    let outcomes = fetch_mod_outcomes_batch(state, &dependency_ids).await;
     let mut mods = Vec::with_capacity(dependency_ids.len());
     for dependency_id in dependency_ids {
         let outcome = outcomes
@@ -1531,18 +1685,19 @@ pub async fn list_mod_dependencies(
             .cloned()
             .unwrap_or(ModFetchOutcome::Failed(format!(
                 "Mod {dependency_id} was not returned by the batch fetch"
-            )));
+            ).into()));
         match outcome {
             ModFetchOutcome::Found(mod_) => mods.push(mod_to_dependency(mod_)),
             ModFetchOutcome::Unavailable => mods.push(unavailable_dependency(
                 dependency_id,
                 format!("Mod {dependency_id} is no longer available on mod.io."),
             )),
-            ModFetchOutcome::Failed(message) => {
-                log::warn!(
-                    "Did not load dependency {dependency_id} for mod {mod_id}: {message}"
+            ModFetchOutcome::Failed(error) => {
+                log::log!(
+                    error.log_level(log::Level::Warn),
+                    "Did not load dependency {dependency_id} for mod {mod_id}: {error}"
                 );
-                mods.push(unavailable_dependency(dependency_id, message));
+                mods.push(unavailable_dependency(dependency_id, error.message));
             }
         }
     }
