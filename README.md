@@ -62,12 +62,13 @@ Release builds embed `MODIO_API_KEY`, `MODIO_GAME_ID`, and `SENTRY_DSN` at compi
 
 ## CI builds
 
-GitHub Actions has two workflows:
+GitHub Actions has three workflows:
 
 - **Build** — manual builds for macOS, Windows, and Linux. Bundles appear as workflow artifacts.
 - **Release** — version bump, git tag, GitHub release, installer upload, and updater manifests. Linux releases are AppImage only.
+- **Sentry Issues** — every 30 minutes, opens a GitHub issue (label `sentry`) for each new Sentry issue. Needs the secret `SENTRY_AUTH_TOKEN` (read-only: `project:read`, `event:read`, `org:read`) and the repository variables `SENTRY_ORG` and `SENTRY_PROJECTS`.
 
-Both workflows need the repository secrets `MODIO_API_KEY` and `MODIO_GAME_ID`. `SENTRY_DSN` is optional.
+Build and Release need the repository secrets `MODIO_API_KEY` and `MODIO_GAME_ID`. `SENTRY_DSN` is optional.
 
 App auto-update also needs `TAURI_SIGNING_PRIVATE_KEY`. Generate a minisign keypair with `npm run tauri signer generate -- -w ~/.tauri/modkist.key --ci -p ""`, then paste the private key into that GitHub secret. If the key has a password, also set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The public key is already in `src-tauri/tauri.conf.json`. Losing the private key means existing installs cannot receive updates.
 

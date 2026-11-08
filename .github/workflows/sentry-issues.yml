@@ -1,0 +1,37 @@
+# Files a GitHub issue for each new Sentry issue (deduplicated, with stack trace).
+# https://github.com/caezium/sentry-to-github-issues
+#
+# Required repository secret (Settings → Secrets and variables → Actions → Secrets):
+#   SENTRY_AUTH_TOKEN — read-only Sentry token (project:read, event:read, org:read)
+#
+# Required repository variables (Settings → Secrets and variables → Actions → Variables):
+#   SENTRY_ORG        — Sentry organization slug
+#   SENTRY_PROJECTS   — Sentry project slug(s), space-separated
+#
+# Runs every 30 minutes; also runnable from Actions → Sentry Issues → Run workflow.
+
+name: Sentry Issues
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sentry-issues
+  cancel-in-progress: false
+
+jobs:
+  file:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to v1 (v1.0.0) by commit SHA.
+      - uses: caezium/sentry-to-github-issues@b0c43e78d76f0fe7fbba09f6436feb9885e9575d
+        with:
+          sentry_org: ${{ vars.SENTRY_ORG }}
+          sentry_projects: ${{ vars.SENTRY_PROJECTS }}
+          sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
