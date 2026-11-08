@@ -208,3 +208,32 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
         server.received()
     );
 }
+
+/// Public mod 100 depends on the private mods; their dependency reads need the
+/// session token, which has expired.
+fn public_mod_with_private_dependencies(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == "/games/3213/mods/100/dependencies" && !request.bearer {
+        let body = r#"{"data":[{"mod_id":101},{"mod_id":102},{"mod_id":103}],"result_total":3}"#;
+        (200, None, body.to_string())
+    } else {
+        private_mods_with_expired_token(request)
+    }
+}
+
+#[tokio::test]
+async fn an_expired_token_while_resolving_install_order_stops_reading_dependencies() {
+    capture_reports();
+    let server = FakeModio::start(public_mod_with_private_dependencies);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    let order = collect_install_order(&state, 100).await.expect("install order");
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    assert!(order.contains(&100));
+    assert_eq!(
+        server.received().len(),
+        3,
+        "the root and the first private dependency only: {:#?}",
+        server.received()
+    );
+}

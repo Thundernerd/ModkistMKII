@@ -521,6 +521,7 @@ async fn refresh_dependency_map(
     dependency_map: &mut HashMap<u64, Vec<u64>>,
     records: &[InstalledModRecord],
 ) {
+    let session = state.session_token();
     for record in records {
         if dependency_map.contains_key(&record.mod_id) {
             continue;
@@ -529,6 +530,7 @@ async fn refresh_dependency_map(
             record.mod_id,
             fetch_dependency_ids_or_empty(
                 state,
+                session.as_deref(),
                 record.mod_id,
                 "Refreshing installed mod dependency map",
             )
@@ -541,12 +543,16 @@ async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64
     with_rate_limit_retry(|| async { fetch_mod_dependency_ids(state, mod_id).await }).await
 }
 
+/// Dependencies of `mod_id`, or none when they did not load. `session` is
+/// the token the calling loop started with; once mod.io rejected it, nothing
+/// more is read.
 async fn fetch_dependency_ids_or_empty(
     state: &ModioState,
+    session: Option<&str>,
     mod_id: u64,
     context: &str,
 ) -> Vec<u64> {
-    if state.cached_dependency_fetch_failed(mod_id) {
+    if state.cached_dependency_fetch_failed(mod_id) || state.session_rejected(session) {
         return Vec::new();
     }
     match fetch_dependency_ids(state, mod_id).await {
@@ -565,6 +571,7 @@ async fn collect_install_order(state: &ModioState, root_mod_id: u64) -> Result<V
     let mut nodes = HashSet::new();
     let mut stack = vec![root_mod_id];
     let mut dep_map: HashMap<u64, Vec<u64>> = HashMap::new();
+    let session = state.session_token();
 
     while let Some(mod_id) = stack.pop() {
         if !nodes.insert(mod_id) {
@@ -573,6 +580,7 @@ async fn collect_install_order(state: &ModioState, root_mod_id: u64) -> Result<V
 
         let deps = fetch_dependency_ids_or_empty(
             state,
+            session.as_deref(),
             mod_id,
             &format!("Resolving install order for mod {root_mod_id}"),
         )
@@ -630,13 +638,16 @@ async fn build_dependency_map(
     let mut map = HashMap::with_capacity(installed_ids.len());
     let session = state.session_token();
     for &mod_id in installed_ids {
-        let deps = if state.session_rejected(session.as_deref()) {
-            Vec::new()
-        } else {
-            fetch_dependency_ids_or_empty(state, mod_id, "Building installed mod dependency map")
-                .await
-        };
-        map.insert(mod_id, deps);
+        map.insert(
+            mod_id,
+            fetch_dependency_ids_or_empty(
+                state,
+                session.as_deref(),
+                mod_id,
+                "Building installed mod dependency map",
+            )
+            .await,
+        );
     }
     map
 }
