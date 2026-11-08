@@ -79,6 +79,18 @@ impl FakeModio {
         Self { base_url, received }
     }
 
+    /// A client whose api-key-refused hook counts its calls, like
+    /// `ModioState::install_api_key_refused_hook` does in the app.
+    fn client_counting_api_key_refusals(&self) -> (ApiClient, Arc<Mutex<u32>>) {
+        let refusals = Arc::new(Mutex::new(0));
+        let sink = refusals.clone();
+        let (client, _) = self.client();
+        let client = client.with_api_key_refused_hook(Arc::new(move || {
+            *sink.lock().unwrap() += 1;
+        }));
+        (client, refusals)
+    }
+
     pub(crate) fn received(&self) -> Vec<Received> {
         self.received.lock().unwrap().clone()
     }
@@ -235,4 +247,27 @@ async fn requests_queued_behind_the_rejection_are_not_sent() {
 
     assert!(subscribed.is_err() && own_mods.is_err() && me.is_err());
     assert_eq!(server.received().len(), 1, "only the first request should reach mod.io");
+}
+
+#[tokio::test]
+async fn a_refused_api_key_signals_the_app_once() {
+    let server = FakeModio::start(|_| api_key_invalid());
+    let (client, refusals) = server.client_counting_api_key_refusals();
+
+    let _ = client.get_game_tags(GAME_ID).await;
+    let _ = client.get_mods(GAME_ID, &ModQuery::default()).await;
+    let _ = client.get_game_tags(GAME_ID).await;
+
+    assert_eq!(*refusals.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn an_expired_token_does_not_signal_a_refused_api_key() {
+    let server = FakeModio::start(private_mod_with_expired_token);
+    let (client, refusals) = server.client_counting_api_key_refusals();
+
+    let _ = client.get_mod(GAME_ID, 2400035, Some(TOKEN)).await;
+    let _ = client.get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default()).await;
+
+    assert_eq!(*refusals.lock().unwrap(), 0);
 }
