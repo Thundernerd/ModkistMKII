@@ -6,9 +6,11 @@ const ready = ref(false);
 const { startGameProcessPolling, stopGameProcessPolling } = useGameProcess();
 const { configureWineWinhttp } = useWineWinhttp();
 const { listenForSessionExpiry } = useModioAuth();
+const { listenForApiKeyRefusal } = useModioStatus();
 
 onMounted(async () => {
   listenForSessionExpiry().catch(() => {});
+  listenForApiKeyRefusal().catch(() => {});
   if (!(await ensureGamePath())) {
     return;
   }
@@ -33,6 +35,7 @@ onUnmounted(() => {
       <ProfileSwitchOverlay />
       <AppNotifications />
       <ModioRateLimitBanner />
+      <ModioApiKeyRefusedBanner />
       <ModioSessionExpiredBanner />
       <WinePrefixBanner />
       <slot />

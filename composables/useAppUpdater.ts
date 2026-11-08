@@ -98,6 +98,12 @@ export function useAppUpdater() {
     }
   }
 
+  /** Re-runs the startup update gate, e.g. when this build can no longer reach mod.io. */
+  async function checkForUpdateNow() {
+    gatePassed.value = false;
+    await runUpdateGate();
+  }
+
   return {
     phase,
     version,
@@ -106,6 +112,7 @@ export function useAppUpdater() {
     relaunchFailed,
     gatePassed,
     runUpdateGate,
+    checkForUpdateNow,
     restartNow,
   };
 }
