@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::modio_api::{
     is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile,
-    ApiKeyRefusedHook, TokenRejectedHook,
+    ApiClientHooks,
 };
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
@@ -79,11 +79,11 @@ pub struct ModioState {
     session: Mutex<SessionData>,
     api_cache: Mutex<ApiCache>,
     subscription_sync_cancelled: std::sync::atomic::AtomicBool,
-    token_rejected_hook: OnceLock<TokenRejectedHook>,
+    /// Hooks every API client built from now on reports credential failures to.
+    api_client_hooks: OnceLock<ApiClientHooks>,
     /// Set when the session was cleared because mod.io rejected the token, so
     /// the UI can ask the user to sign in again. Cleared on sign-in or logout.
     session_expired: AtomicBool,
-    api_key_refused_hook: OnceLock<ApiKeyRefusedHook>,
     /// Set when mod.io refused the game API key, so the UI can tell the user
     /// to update. Stays set for the rest of the run.
     api_key_refused: AtomicBool,
@@ -108,9 +108,8 @@ impl ModioState {
             }),
             api_cache: Mutex::new(ApiCache::default()),
             subscription_sync_cancelled: std::sync::atomic::AtomicBool::new(false),
-            token_rejected_hook: OnceLock::new(),
+            api_client_hooks: OnceLock::new(),
             session_expired: AtomicBool::new(false),
-            api_key_refused_hook: OnceLock::new(),
             api_key_refused: AtomicBool::new(false),
             oauth_request: tokio::sync::Mutex::new(()),
         }
@@ -133,16 +132,18 @@ impl ModioState {
             let client = ApiClient::new("game-key".into(), config.game_id, None, false)
                 .unwrap()
                 .with_base_url(base_url)
-                .with_token_rejected_hook(Arc::new(move |token: &str| {
-                    if let Some(state) = state.upgrade() {
-                        state.end_rejected_session(token);
-                    }
-                }))
-                .with_api_key_refused_hook(Arc::new(move || {
-                    if let Some(state) = refused_state.upgrade() {
-                        state.note_api_key_refused();
-                    }
-                }));
+                .with_hooks(ApiClientHooks {
+                    on_token_rejected: Some(Arc::new(move |token: &str| {
+                        if let Some(state) = state.upgrade() {
+                            state.end_rejected_session(token);
+                        }
+                    })),
+                    on_api_key_refused: Some(Arc::new(move || {
+                        if let Some(state) = refused_state.upgrade() {
+                            state.note_api_key_refused();
+                        }
+                    })),
+                });
             let state = Self::new(Some("game-key".into()), config);
             *state.api_client.lock().unwrap() = Some(Arc::new(client));
             *state.session.lock().unwrap() = SessionData {
@@ -423,11 +424,8 @@ impl ModioState {
             self.config.api_host.as_deref(),
             self.config.use_test_env,
         )?;
-        if let Some(hook) = self.token_rejected_hook.get() {
-            client = client.with_token_rejected_hook(hook.clone());
-        }
-        if let Some(hook) = self.api_key_refused_hook.get() {
-            client = client.with_api_key_refused_hook(hook.clone());
+        if let Some(hooks) = self.api_client_hooks.get() {
+            client = client.with_hooks(hooks.clone());
         }
         let client = Arc::new(client);
         *guard = Some(client.clone());
@@ -451,24 +449,22 @@ impl ModioState {
         }
     }
 
-    /// Makes every API client built from now on report rejected tokens back to
-    /// this state. Call once during setup, before any request is made.
-    pub fn install_token_rejected_hook(&self, app: &AppHandle) {
-        let app = app.clone();
-        let hook: TokenRejectedHook = Arc::new(move |token| {
-            app.state::<ModioState>().expire_session(&app, token);
-        });
-        let _ = self.token_rejected_hook.set(hook);
-    }
-
-    /// Makes every API client built from now on report a refused game API key
-    /// back to this state. Call once during setup, before any request is made.
-    pub fn install_api_key_refused_hook(&self, app: &AppHandle) {
-        let app = app.clone();
-        let hook: ApiKeyRefusedHook = Arc::new(move || {
-            app.state::<ModioState>().mark_api_key_refused(&app);
-        });
-        let _ = self.api_key_refused_hook.set(hook);
+    /// Makes every API client built from now on report credential failures
+    /// back to this state: a rejected token expires the session, a refused game
+    /// API key is recorded for the UI. Call once during setup, before any
+    /// request is made.
+    pub fn install_api_client_hooks(&self, app: &AppHandle) {
+        let token_app = app.clone();
+        let key_app = app.clone();
+        let hooks = ApiClientHooks {
+            on_token_rejected: Some(Arc::new(move |token| {
+                token_app.state::<ModioState>().expire_session(&token_app, token);
+            })),
+            on_api_key_refused: Some(Arc::new(move || {
+                key_app.state::<ModioState>().mark_api_key_refused(&key_app);
+            })),
+        };
+        let _ = self.api_client_hooks.set(hooks);
     }
 
     fn mark_api_key_refused(&self, app: &AppHandle) {

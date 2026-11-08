@@ -79,15 +79,17 @@ impl FakeModio {
         Self { base_url, received }
     }
 
-    /// A client whose api-key-refused hook counts its calls, like
-    /// `ModioState::install_api_key_refused_hook` does in the app.
+    /// A client whose api-key-refused hook counts its calls, like the hooks
+    /// `ModioState::install_api_client_hooks` installs in the app.
     fn client_counting_api_key_refusals(&self) -> (ApiClient, Arc<Mutex<u32>>) {
         let refusals = Arc::new(Mutex::new(0));
         let sink = refusals.clone();
-        let (client, _) = self.client();
-        let client = client.with_api_key_refused_hook(Arc::new(move || {
-            *sink.lock().unwrap() += 1;
-        }));
+        let client = self.client_with_hooks(ApiClientHooks {
+            on_api_key_refused: Some(Arc::new(move || {
+                *sink.lock().unwrap() += 1;
+            })),
+            ..ApiClientHooks::default()
+        });
         (client, refusals)
     }
 
@@ -96,17 +98,24 @@ impl FakeModio {
     }
 
     /// A client whose token-rejected hook records every rejected token, like
-    /// `ModioState::install_token_rejected_hook` does in the app.
+    /// the hooks `ModioState::install_api_client_hooks` installs in the app.
     fn client(&self) -> (ApiClient, Arc<Mutex<Vec<String>>>) {
         let rejected = Arc::new(Mutex::new(Vec::new()));
         let sink = rejected.clone();
-        let client = ApiClient::new("game-key".into(), Some(GAME_ID), None, false)
+        let client = self.client_with_hooks(ApiClientHooks {
+            on_token_rejected: Some(Arc::new(move |token: &str| {
+                sink.lock().unwrap().push(token.to_string());
+            })),
+            ..ApiClientHooks::default()
+        });
+        (client, rejected)
+    }
+
+    fn client_with_hooks(&self, hooks: ApiClientHooks) -> ApiClient {
+        ApiClient::new("game-key".into(), Some(GAME_ID), None, false)
             .unwrap()
             .with_base_url(self.base_url.clone())
-            .with_token_rejected_hook(Arc::new(move |token: &str| {
-                sink.lock().unwrap().push(token.to_string());
-            }));
-        (client, rejected)
+            .with_hooks(hooks)
     }
 }
 
