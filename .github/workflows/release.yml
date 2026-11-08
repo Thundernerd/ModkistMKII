@@ -10,15 +10,22 @@
 # Run from Actions → Release → Run workflow.
 #
 # Inputs:
-#   version            — base semver, e.g. 1.2.3 (required)
+#   bump               — manual, patch, minor, or major (default: manual)
+#   version            — base semver, e.g. 1.2.3 (required when bump=manual, otherwise empty)
 #   prerelease_channel — none, alpha, beta, or rc (default: none)
 #   prerelease_number  — iteration when a channel is set, e.g. 1 → 1.2.3-alpha.1
 #
-# Examples:
-#   Stable:    version=1.2.3, channel=none
-#   Alpha:     version=1.2.3, channel=alpha, prerelease_number=1 → v1.2.3-alpha.1
-#   Beta:      version=1.2.3, channel=beta, prerelease_number=2 → v1.2.3-beta.2
-#   RC:        version=1.2.3, channel=rc, prerelease_number=1 → v1.2.3-rc.1
+# patch/minor/major bump the latest stable tag (vX.Y.Z, prerelease tags ignored).
+# With no stable tag, the base version in package.json is used instead.
+#
+# Examples (latest stable tag v1.2.3):
+#   Stable:    bump=manual, version=1.2.4, channel=none        → v1.2.4
+#   Patch:     bump=patch, channel=none                        → v1.2.4
+#   Minor:     bump=minor, channel=none                        → v1.3.0
+#   Major:     bump=major, channel=none                        → v2.0.0
+#   Alpha:     bump=minor, channel=alpha, prerelease_number=1  → v1.3.0-alpha.1
+#   Beta:      bump=minor, channel=beta, prerelease_number=2   → v1.3.0-beta.2
+#   RC:        bump=manual, version=1.3.0, channel=rc, prerelease_number=1 → v1.3.0-rc.1
 #
 # This workflow commits the version bump to main, pushes a git tag, creates a GitHub
 # release, builds Tauri bundles for all platforms, and uploads installers to the release.
@@ -38,10 +45,19 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      bump:
+        description: Version bump (manual uses the version below)
+        type: choice
+        options:
+          - manual
+          - patch
+          - minor
+          - major
+        default: manual
       version:
-        description: Base version (e.g. 1.2.3)
-        required: true
+        description: Base version for manual bump (e.g. 1.2.3)
         type: string
+        default: ""
       prerelease_channel:
         description: Prerelease channel
         type: choice
@@ -57,7 +73,7 @@ on:
         default: "1"
 
 concurrency:
-  group: release-${{ inputs.version }}-${{ inputs.prerelease_channel }}
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -78,15 +94,47 @@ jobs:
       - name: Resolve release version
         id: resolve
         env:
-          BASE_VERSION: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+          MANUAL_VERSION: ${{ inputs.version }}
           PRERELEASE_CHANNEL: ${{ inputs.prerelease_channel }}
           PRERELEASE_NUMBER: ${{ inputs.prerelease_number }}
         run: |
           set -euo pipefail
 
-          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version must be major.minor.patch (e.g. 1.2.3)"
-            exit 1
+          MANUAL_VERSION="${MANUAL_VERSION//[[:space:]]/}"
+
+          if [[ "$BUMP" == "manual" ]]; then
+            if [[ ! "$MANUAL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be major.minor.patch (e.g. 1.2.3) when bump is manual"
+              exit 1
+            fi
+            BASE_VERSION="$MANUAL_VERSION"
+          else
+            if [[ -n "$MANUAL_VERSION" ]]; then
+              echo "::error::Leave version empty when bump is ${BUMP}, or set bump to manual"
+              exit 1
+            fi
+
+            latest_tag="$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+            if [[ -n "$latest_tag" ]]; then
+              current="${latest_tag#v}"
+              echo "Bumping from latest stable tag ${latest_tag}"
+            else
+              current="$(node -p 'require("./package.json").version')"
+              current="${current%%-*}"
+              echo "No stable tag found; bumping from package.json version ${current}"
+            fi
+
+            IFS=. read -r major minor patch <<< "$current"
+            case "$BUMP" in
+              major) BASE_VERSION="$((major + 1)).0.0" ;;
+              minor) BASE_VERSION="${major}.$((minor + 1)).0" ;;
+              patch) BASE_VERSION="${major}.${minor}.$((patch + 1))" ;;
+              *)
+                echo "::error::Unknown bump: ${BUMP}"
+                exit 1
+                ;;
+            esac
           fi
 
           if [[ "$PRERELEASE_CHANNEL" == "none" ]]; then
