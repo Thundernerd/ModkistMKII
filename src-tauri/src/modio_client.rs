@@ -1580,7 +1580,11 @@ pub async fn list_mods(
 
 #[tauri::command]
 pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
-    let mod_ = fetch_mod_object(&state, mod_id).await?;
+    get_mod_inner(&state, mod_id).await
+}
+
+pub(crate) async fn get_mod_inner(state: &ModioState, mod_id: u64) -> Result<ModDetail, String> {
+    let mod_ = fetch_mod_object(state, mod_id).await?;
     let mut detail = mod_to_detail(mod_);
     if let Some(token) = state.session_token() {
         let game_id = state.game_id()?;
@@ -1589,7 +1593,8 @@ pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDet
             Ok(Some(rating)) => detail.user_rating = rating,
             Ok(None) => {}
             Err(error) => {
-                log::warn!(
+                log::log!(
+                    caller_log_level(&error, log::Level::Warn),
                     "Did not load user rating for mod {mod_id}: {}",
                     format_api_error(error)
                 );

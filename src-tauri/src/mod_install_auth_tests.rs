@@ -147,3 +147,28 @@ async fn an_expired_token_while_listing_dependencies_is_not_reported_per_depende
     let ids: Vec<u64> = result.mods.iter().map(|dependency| dependency.id).collect();
     assert_eq!(ids, PRIVATE_MODS);
 }
+
+/// A public mod whose read works with the api_key; the session token that
+/// the rating read needs has expired.
+fn public_mod_with_expired_token(request: &Received) -> (u16, Option<u32>, String) {
+    if request.bearer {
+        token_expired()
+    } else {
+        (200, None, r#"{"id":100,"name":"Public mod"}"#.to_string())
+    }
+}
+
+#[tokio::test]
+async fn an_expired_token_while_loading_the_user_rating_is_not_reported() {
+    capture_reports();
+    let server = FakeModio::start(public_mod_with_expired_token);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    let detail = crate::modio_client::get_mod_inner(&state, 100)
+        .await
+        .expect("mod detail should load without the rating");
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    assert_eq!(detail.id, 100);
+    assert!(state.auth_status().session_expired);
+}
