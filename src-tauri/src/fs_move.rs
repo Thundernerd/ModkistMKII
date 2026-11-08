@@ -7,7 +7,7 @@ fn is_cross_device_error(error: &io::Error) -> bool {
         || error.kind() == io::ErrorKind::CrossesDevices
 }
 
-fn copy_dir_recursive(from: &Path, to: &Path) -> io::Result<()> {
+pub fn copy_dir_recursive(from: &Path, to: &Path) -> io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;

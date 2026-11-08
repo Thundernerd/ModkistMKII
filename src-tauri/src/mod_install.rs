@@ -9,6 +9,7 @@ use tauri::{AppHandle, State};
 use crate::app_settings::auto_update_mods_enabled;
 use crate::bepinex::has_bepinex_structure;
 use crate::game_path::game_directory;
+use crate::fs_move::copy_dir_recursive;
 use crate::game_process::{ensure_game_not_running, is_zeepkist_running};
 use crate::mod_download::download_modfile;
 use crate::mod_folder::{
@@ -246,6 +247,14 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
 
         let name = entry.file_name();
         let name = name.to_string_lossy();
+        if is_stale_staging_dir_name(&name) {
+            // Left behind by an install that failed or crashed in an earlier
+            // run. BepInEx loads plugins from hidden subfolders too, so a
+            // leftover staging dir would load a duplicate copy of the mod.
+            log::warn!("Removing stale mod install staging folder: {}", entry.path().display());
+            let _ = remove_dir_all_with_retry(&entry.path());
+            continue;
+        }
         let Some((mod_id, file_id)) = parse_install_folder_name(&name) else {
             continue;
         };
@@ -781,13 +790,96 @@ async fn reconcile_failed_sync_mods(
     }
 }
 
+const STAGING_DIR_PREFIX: &str = ".modkist-installing-";
+
 /// Unique, non-conflicting staging directory name for an in-progress install.
 /// Deliberately doesn't parse as a valid `mod_id_file_id[_name]` install
 /// folder name so scan_kind_directory's orphan-cleanup ignores it.
 fn staging_dir_name(mod_id: u64, file_id: u64) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!(".modkist-installing-{mod_id}-{file_id}-{}-{counter}", std::process::id())
+    format!("{STAGING_DIR_PREFIX}{mod_id}-{file_id}-{}-{counter}", std::process::id())
+}
+
+/// A staging dir created by a different (earlier) process can't belong to an
+/// install that's still running, so it's safe to delete.
+fn is_stale_staging_dir_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(STAGING_DIR_PREFIX) else {
+        return false;
+    };
+    let mut parts = rest.split('-');
+    let pid = parts.nth(2).and_then(|pid| pid.parse::<u32>().ok());
+    pid != Some(std::process::id())
+}
+
+/// Windows refuses to rename a directory while any file inside it is open
+/// without delete sharing — which is exactly what Defender and other
+/// antivirus do to freshly extracted DLLs for a moment. The rename then fails
+/// with ERROR_ACCESS_DENIED (5) or ERROR_SHARING_VIOLATION (32).
+const MOVE_INTO_PLACE_RETRY_DELAYS_MS: [u64; 6] = [100, 250, 500, 1000, 1500, 2000];
+
+fn is_transient_lock_error(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5) | Some(32))
+}
+
+async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -> Result<(), String> {
+    let mut rename_error = match fs::rename(staging_dir, target_dir) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    for (attempt, delay_ms) in MOVE_INTO_PLACE_RETRY_DELAYS_MS.into_iter().enumerate() {
+        if !is_transient_lock_error(&rename_error) {
+            break;
+        }
+        log::debug!(
+            "Moving {} into place hit a transient lock ({rename_error}), retrying ({}/{})",
+            target_dir.display(),
+            attempt + 1,
+            MOVE_INTO_PLACE_RETRY_DELAYS_MS.len()
+        );
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        let _ = remove_dir_all_with_retry(target_dir);
+        rename_error = match fs::rename(staging_dir, target_dir) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+    }
+
+    if is_transient_lock_error(&rename_error) {
+        // Copying only needs read access to the staged files, which scanners
+        // still share, so it succeeds where the directory rename can't.
+        log::warn!(
+            "Did not rename {} into place ({rename_error}), copying instead",
+            target_dir.display()
+        );
+        let _ = remove_dir_all_with_retry(target_dir);
+        match copy_dir_recursive(staging_dir, target_dir) {
+            Ok(()) => {
+                if let Err(error) = remove_dir_all_with_retry(staging_dir) {
+                    // scan_kind_directory removes it on the next launch.
+                    log::warn!(
+                        "Did not remove mod install staging directory {}: {error}",
+                        staging_dir.display()
+                    );
+                }
+                return Ok(());
+            }
+            Err(copy_error) => {
+                let _ = remove_dir_all_with_retry(target_dir);
+                let _ = remove_dir_all_with_retry(staging_dir);
+                return Err(format!(
+                    "Did not move installed mod into place at {}: {rename_error} (copy fallback: {copy_error})",
+                    target_dir.display()
+                ));
+            }
+        }
+    }
+
+    let _ = remove_dir_all_with_retry(staging_dir);
+    Err(format!(
+        "Did not move installed mod into place at {}: {rename_error}",
+        target_dir.display()
+    ))
 }
 
 async fn install_single_mod(
@@ -870,12 +962,7 @@ async fn install_single_mod(
     // recreating target_dir in between, and rename() onto an existing
     // non-empty directory fails.
     let _ = remove_dir_all_with_retry(&target_dir);
-    fs::rename(&staging_dir, &target_dir).map_err(|e| {
-        format!(
-            "Did not move installed mod into place at {}: {e}",
-            target_dir.display()
-        )
-    })?;
+    move_staged_install_into_place(&staging_dir, &target_dir).await?;
 
     state.invalidate_mod_cache(mod_id);
 
@@ -2018,6 +2105,47 @@ mod tests {
         assert!(!empty.exists());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stale_staging_dirs_are_from_other_processes_only() {
+        let ours = staging_dir_name(3285481, 8137916);
+        assert!(!is_stale_staging_dir_name(&ours));
+        let other_pid = std::process::id().wrapping_add(1);
+        assert!(is_stale_staging_dir_name(&format!(".modkist-installing-1-2-{other_pid}-0")));
+        assert!(!is_stale_staging_dir_name("3285481_8137916_Random Track Mode"));
+    }
+
+    #[test]
+    fn scan_installed_mods_removes_stale_staging_dirs() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let other_pid = std::process::id().wrapping_add(1);
+        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
+        let live = kind_dir.join(staging_dir_name(1, 2));
+        for dir in [&stale, &live] {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("mod.dll"), b"test").unwrap();
+        }
+
+        scan_installed_mods(temp.path()).unwrap();
+
+        assert!(!stale.exists());
+        assert!(live.exists());
+    }
+
+    #[tokio::test]
+    async fn moves_staged_install_into_place() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let staging = temp.path().join(staging_dir_name(1, 2));
+        let target = temp.path().join("1_2_Mod");
+        fs::create_dir_all(staging.join("nested")).unwrap();
+        fs::write(staging.join("nested/mod.dll"), b"test").unwrap();
+
+        move_staged_install_into_place(&staging, &target).await.unwrap();
+
+        assert!(!staging.exists());
+        assert!(target.join("nested/mod.dll").is_file());
     }
 
     #[test]
