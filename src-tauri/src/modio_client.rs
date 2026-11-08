@@ -153,6 +153,17 @@ impl ModioState {
         })
     }
 
+    /// Like [`Self::signed_in_against`], with no session token.
+    #[cfg(test)]
+    pub(crate) fn signed_out_against(base_url: String) -> Arc<Self> {
+        let state = Self::signed_in_against(base_url, "unused");
+        *state.session.lock().unwrap() = SessionData {
+            token: None,
+            username: None,
+        };
+        state
+    }
+
     pub(crate) async fn with_oauth_request<T, E, F, Fut>(&self, label: &str, operation: F) -> Result<T, E>
     where
         F: FnOnce() -> Fut,
@@ -642,19 +653,24 @@ fn level_unless_credentials_rejected(credentials_rejected: bool, level: log::Lev
 /// whether mod.io rejected our credentials (HTTP 401: an expired or revoked
 /// session token, or a refused game API key). `ApiClient` already handles and
 /// reports those once, so callers log them at info instead of warn/error,
-/// which `SentryLogWriter` would forward to Sentry once per mod.
+/// which `SentryLogWriter` would forward to Sentry once per mod. The same goes
+/// for a private mod read while signed out (HTTP 403): the message already asks
+/// the user to sign in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModioError {
     pub message: String,
     pub credentials_rejected: bool,
+    sign_in_required: bool,
 }
 
 impl ModioError {
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
         let credentials_rejected = error.is_unauthorized();
+        let sign_in_required = !logged_in && error.is_forbidden();
         Self {
             message: format_api_error_logged_in(error, logged_in),
             credentials_rejected,
+            sign_in_required,
         }
     }
 
@@ -664,12 +680,14 @@ impl ModioError {
         Self {
             message: "Your mod.io session has expired. Sign in again.".to_string(),
             credentials_rejected: true,
+            sign_in_required: false,
         }
     }
 
-    /// `level` for an ordinary failure; info when mod.io rejected our credentials.
+    /// `level` for an ordinary failure; info when mod.io rejected our
+    /// credentials or the user must sign in to read the mod.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
-        level_unless_credentials_rejected(self.credentials_rejected, level)
+        level_unless_credentials_rejected(self.credentials_rejected || self.sign_in_required, level)
     }
 }
 
@@ -684,6 +702,7 @@ impl From<String> for ModioError {
         Self {
             message,
             credentials_rejected: false,
+            sign_in_required: false,
         }
     }
 }
