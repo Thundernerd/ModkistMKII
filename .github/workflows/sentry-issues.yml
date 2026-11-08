@@ -1,7 +1,5 @@
-# Files a GitHub issue for each new Sentry issue (deduplicated, with stack trace),
-# and comments the latest event's JSON on it with personal data removed.
-# Uses .github/scripts/sentry-issues.sh, vendored from
-# https://github.com/caezium/sentry-to-github-issues and extended.
+# Files a GitHub issue for each new Sentry issue (deduplicated, with stack trace).
+# https://github.com/caezium/sentry-to-github-issues
 #
 # Required repository secret (Settings → Secrets and variables → Actions → Secrets):
 #   SENTRY_AUTH_TOKEN — read-only Sentry token (project:read, event:read, org:read)
@@ -31,23 +29,9 @@ jobs:
   file:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Poll Sentry and file GitHub issues
-        env:
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECTS: ${{ vars.SENTRY_PROJECTS }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-          EVENT_JSON_DIR: sentry-events
-        run: bash .github/scripts/sentry-issues.sh
-
-      - name: Upload event JSON
-        uses: actions/upload-artifact@v7.0.1
+      # Pinned to v1 (v1.0.0) by commit SHA.
+      - uses: caezium/sentry-to-github-issues@b0c43e78d76f0fe7fbba09f6436feb9885e9575d
         with:
-          name: sentry-events
-          path: sentry-events/
-          if-no-files-found: ignore
-          retention-days: 90
+          sentry_org: ${{ vars.SENTRY_ORG }}
+          sentry_projects: ${{ vars.SENTRY_PROJECTS }}
+          sentry_auth_token: ${{ secrets.SENTRY_AUTH_TOKEN }}
