@@ -5,7 +5,35 @@ import { logger } from "~/utils/logger";
 const RELEASES_URL = "https://github.com/Thundernerd/ModkistMKII/releases/latest";
 
 const { modioApiKeyRefused } = useModioStatus();
-const { checkForUpdateNow } = useAppUpdater();
+const { installUpdateNow } = useAppUpdater();
+
+type UpdateCheck = "idle" | "checking" | "none" | "failed";
+const updateCheck = ref<UpdateCheck>("idle");
+
+const updateCheckText = computed(() => {
+  switch (updateCheck.value) {
+    case "checking":
+      return "Checking for updates…";
+    case "none":
+      return "No in-app update is available yet. Download the latest release from GitHub.";
+    case "failed":
+      return "Could not check for updates. Download the latest release from GitHub.";
+    default:
+      return "";
+  }
+});
+
+async function updateNow() {
+  updateCheck.value = "checking";
+  try {
+    const status = await installUpdateNow();
+    // "installed" restarts the app; anything else means nothing to install.
+    updateCheck.value = status === "installed" ? "idle" : "none";
+  } catch (err) {
+    logger.debug("Did not install update from the API key banner", err);
+    updateCheck.value = "failed";
+  }
+}
 
 function openReleases() {
   openUrl(RELEASES_URL).catch((err) => {
@@ -26,9 +54,18 @@ function openReleases() {
         This version of Modkist can no longer reach mod.io. Update Modkist to
         keep browsing and installing mods.
       </p>
+      <p v-if="updateCheckText" class="api-key-refused-banner-text">
+        {{ updateCheckText }}
+      </p>
     </div>
     <div class="api-key-refused-banner-actions">
-      <button type="button" @click="checkForUpdateNow">Update now</button>
+      <button
+        type="button"
+        :disabled="updateCheck === 'checking'"
+        @click="updateNow"
+      >
+        Update now
+      </button>
       <button
         type="button"
         class="api-key-refused-banner-secondary"
@@ -71,6 +108,10 @@ function openReleases() {
   font-size: 0.875rem;
   line-height: 1.45;
   color: var(--modio-text);
+}
+
+.api-key-refused-banner-text + .api-key-refused-banner-text {
+  margin-top: 0.35rem;
 }
 
 .api-key-refused-banner-actions {
