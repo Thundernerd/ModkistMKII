@@ -12,11 +12,12 @@ export interface ModioStatus {
 const API_KEY_REFUSED_EVENT = "modio-api-key-refused";
 
 const configured = ref(false);
-const apiKeyRefused = ref(false);
-let unlistenApiKeyRefused: UnlistenFn | undefined;
 const message = ref("");
 const checked = ref(false);
+/** Only ever turns on during a run: mod.io does not un-refuse a key. */
+const apiKeyRefused = ref(false);
 let checkInFlight: Promise<void> | null = null;
+let unlistenApiKeyRefused: UnlistenFn | undefined;
 
 export async function refreshModioStatus() {
   if (checkInFlight) {
@@ -28,7 +29,8 @@ export async function refreshModioStatus() {
       const status = await invoke<ModioStatus>("modio_status");
       configured.value = status.configured;
       message.value = status.message ?? "";
-      apiKeyRefused.value = status.apiKeyRefused === true;
+      // A status call that started before the refusal must not hide the banner.
+      apiKeyRefused.value ||= status.apiKeyRefused === true;
     } catch {
       configured.value = false;
       message.value = "";
@@ -48,7 +50,9 @@ export async function listenForApiKeyRefusal() {
     logger.info("mod.io refused the game API key");
     apiKeyRefused.value = true;
   });
-  // A refusal can arrive before this listener exists.
+  // A refusal can arrive before this listener exists. Wait out a check that
+  // may have started before it, then ask again.
+  await checkInFlight;
   await refreshModioStatus();
 }
 
