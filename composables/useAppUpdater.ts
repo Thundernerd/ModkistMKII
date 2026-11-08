@@ -98,6 +98,20 @@ export function useAppUpdater() {
     }
   }
 
+  /**
+   * Checks for and installs an update without the startup gate, so the app
+   * stays mounted. Restarts when an update was installed.
+   */
+  async function installUpdateNow(): Promise<AppUpdateCheckResult["status"]> {
+    const result = await invoke<AppUpdateCheckResult>(
+      "check_and_install_app_update",
+    );
+    if (result.status === "installed") {
+      await restartNow();
+    }
+    return result.status;
+  }
+
   return {
     phase,
     version,
@@ -106,6 +120,7 @@ export function useAppUpdater() {
     relaunchFailed,
     gatePassed,
     runUpdateGate,
+    installUpdateNow,
     restartNow,
   };
 }

@@ -14,7 +14,8 @@
 //! re-login) and is not reported to Sentry; later requests with that token fail
 //! locally without calling mod.io. A 401 on an api_key request means the game
 //! API key itself was refused: it is reported once per client, then logged at
-//! info.
+//! info, and the api-key-refused hook is called once so the app can tell the
+//! user to update.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -152,6 +153,12 @@ impl ApiError {
 
     pub fn is_unauthorized(&self) -> bool {
         self.status == Some(401)
+    }
+
+    /// True when mod.io refused the game API key itself (error_ref 11000-11002:
+    /// missing, malformed or invalid), as opposed to a session token.
+    pub fn is_api_key_refused(&self) -> bool {
+        self.is_unauthorized() && matches!(self.error_ref, Some(11000..=11002))
     }
 
     pub fn is_server_error(&self) -> bool {
@@ -523,11 +530,18 @@ impl ModQuery {
 /// 401 (e.g. error_ref 11005: revoked, expired or malformed token).
 pub type TokenRejectedHook = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Called once per client when mod.io refuses the game API key on an api_key
+/// request (error_ref 11000-11002: missing, malformed or invalid key).
+pub type ApiKeyRefusedHook = Arc<dyn Fn() + Send + Sync>;
+
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
     api_key: String,
     on_token_rejected: Option<TokenRejectedHook>,
+    on_api_key_refused: Option<ApiKeyRefusedHook>,
+    /// Set once `on_api_key_refused` was called.
+    api_key_refusal_signalled: AtomicBool,
     /// Tokens mod.io already answered with 401. Later requests carrying one of
     /// them fail locally instead of firing another doomed request.
     rejected_tokens: std::sync::Mutex<HashSet<String>>,
@@ -568,6 +582,8 @@ impl ApiClient {
             base_url: format!("https://{host}/v1"),
             api_key,
             on_token_rejected: None,
+            on_api_key_refused: None,
+            api_key_refusal_signalled: AtomicBool::new(false),
             rejected_tokens: std::sync::Mutex::new(HashSet::new()),
             api_key_rejection_reported: AtomicBool::new(false),
             next_request_at: tokio::sync::Mutex::new(Instant::now()),
@@ -583,6 +599,11 @@ impl ApiClient {
 
     pub fn with_token_rejected_hook(mut self, hook: TokenRejectedHook) -> Self {
         self.on_token_rejected = Some(hook);
+        self
+    }
+
+    pub fn with_api_key_refused_hook(mut self, hook: ApiKeyRefusedHook) -> Self {
+        self.on_api_key_refused = Some(hook);
         self
     }
 
@@ -749,6 +770,13 @@ impl ApiClient {
         } else if token.is_none() && error.is_unauthorized() {
             let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
             error.log_api_key_rejected(path, first);
+            if error.is_api_key_refused()
+                && !self.api_key_refusal_signalled.swap(true, Ordering::Relaxed)
+            {
+                if let Some(hook) = self.on_api_key_refused.as_ref() {
+                    hook();
+                }
+            }
         } else if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
@@ -1209,7 +1237,7 @@ fn log_response(
 
 #[cfg(test)]
 #[path = "modio_api_auth_tests.rs"]
-mod auth_tests;
+pub(crate) mod auth_tests;
 
 #[cfg(test)]
 mod tests {
