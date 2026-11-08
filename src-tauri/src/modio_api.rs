@@ -7,9 +7,17 @@
 //! available, the same request is retried with OAuth (e.g. private subscribed
 //! mods). A failed bearer retry is marked inaccessible unless it is a 5xx, 429,
 //! 401, or transport error. Failures on the api-key attempt are logged at debug
-//! level when a bearer retry is planned. Other OAuth-only endpoints always use
+//! level when a bearer retry is planned, except a 401 (see below). Other OAuth-only endpoints always use
 //! the bearer token.
+//!
+//! A 401 on a bearer request goes to the token-rejected hook (sign out, prompt
+//! re-login) and is not reported to Sentry; later requests with that token fail
+//! locally without calling mod.io. A 401 on an api_key request means the game
+//! API key itself was refused: it is reported once per client, then logged at
+//! info.
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -54,6 +62,9 @@ const MODFILE_NOT_FOUND_ERROR_REF: u32 = 14000;
 /// Logged at info level since callers treat them as "unavailable".
 const NOT_FOUND_ERROR_REFS: [u32; 2] = [MOD_NOT_FOUND_ERROR_REF, MODFILE_NOT_FOUND_ERROR_REF];
 
+/// mod.io `error_ref` for an expired, revoked or malformed access token.
+const TOKEN_REJECTED_ERROR_REF: u32 = 11005;
+
 /// Error returned by any mod.io API call. Captures the HTTP status, the mod.io
 /// `error_ref`, the server message and the `Retry-After` value (seconds) so the
 /// caller can distinguish rate limits, auth failures and missing resources.
@@ -75,6 +86,18 @@ impl ApiError {
             status: None,
             error_ref: None,
             message,
+            retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
+        }
+    }
+
+    /// The error a request fails with, without reaching mod.io, when its
+    /// session token was already rejected earlier.
+    fn token_already_rejected() -> Self {
+        Self {
+            status: Some(401),
+            error_ref: Some(TOKEN_REJECTED_ERROR_REF),
+            message: "Your mod.io session has expired. Sign in again.".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
         }
@@ -175,6 +198,20 @@ impl ApiError {
     fn log_token_rejected(&self, context: &str) {
         log::info!(
             "mod.io API error [{context}] (session token rejected, signing out): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
+        );
+    }
+
+    /// A refused game API key fails every public read the same way, so only
+    /// the first one per client is reported (error); the rest log at info.
+    fn log_api_key_rejected(&self, context: &str, first: bool) {
+        let level = if first { log::Level::Error } else { log::Level::Info };
+        log::log!(
+            level,
+            "mod.io API error [{context}] (game API key refused{}): {} (status={:?}, error_ref={:?})",
+            if first { ", later refusals logged at info" } else { "" },
             self.message,
             self.status,
             self.error_ref
@@ -491,6 +528,12 @@ pub struct ApiClient {
     base_url: String,
     api_key: String,
     on_token_rejected: Option<TokenRejectedHook>,
+    /// Tokens mod.io already answered with 401. Later requests carrying one of
+    /// them fail locally instead of firing another doomed request.
+    rejected_tokens: std::sync::Mutex<HashSet<String>>,
+    /// Set once a 401 on an api_key request was reported. A refused game API
+    /// key fails every public read the same way, so report it only once.
+    api_key_rejection_reported: AtomicBool,
     /// Earliest instant the next request may start. Guards both the steady-state
     /// pacing and the self-healing backoff after a `Retry-After` response.
     next_request_at: tokio::sync::Mutex<Instant>,
@@ -525,13 +568,34 @@ impl ApiClient {
             base_url: format!("https://{host}/v1"),
             api_key,
             on_token_rejected: None,
+            rejected_tokens: std::sync::Mutex::new(HashSet::new()),
+            api_key_rejection_reported: AtomicBool::new(false),
             next_request_at: tokio::sync::Mutex::new(Instant::now()),
         })
+    }
+
+    /// Points the client at another server (tests run against a local fake).
+    #[cfg(test)]
+    pub(crate) fn with_base_url(mut self, base_url: String) -> Self {
+        self.base_url = base_url;
+        self
     }
 
     pub fn with_token_rejected_hook(mut self, hook: TokenRejectedHook) -> Self {
         self.on_token_rejected = Some(hook);
         self
+    }
+
+    fn is_token_rejected(&self, token: &str) -> bool {
+        self.rejected_tokens
+            .lock()
+            .is_ok_and(|rejected| rejected.contains(token))
+    }
+
+    fn remember_rejected_token(&self, token: &str) {
+        if let Ok(mut rejected) = self.rejected_tokens.lock() {
+            rejected.insert(token.to_string());
+        }
     }
 
     /// Waits until this request is allowed to start, then reserves the next slot
@@ -570,6 +634,13 @@ impl ApiClient {
         quiet_on_failure: bool,
     ) -> Result<Vec<u8>, ApiError> {
         self.pace().await;
+
+        // Checked after pacing so requests queued behind the one that got the
+        // 401 are dropped too, instead of each collecting its own 401.
+        if token.is_some_and(|token| self.is_token_rejected(token)) {
+            log::debug!("mod.io -> {method} {path} skipped: session token already rejected");
+            return Err(ApiError::token_already_rejected());
+        }
 
         let method_label = method.as_str().to_string();
         let url = format!("{}{}", self.base_url, path);
@@ -620,7 +691,9 @@ impl ApiClient {
             response.headers(),
             started.elapsed(),
             quiet_on_failure,
-            authenticated && self.on_token_rejected.is_some(),
+            // send_raw logs these 401s itself: a rejected token goes to the
+            // hook, a refused API key is reported once below.
+            !authenticated || self.on_token_rejected.is_some(),
         );
 
         let retry_after = response
@@ -664,14 +737,18 @@ impl ApiClient {
         // An expired or revoked token is routine: the hook signs the user out
         // and the UI prompts them to log in again, so keep it out of Sentry.
         let mut token_rejected = false;
-        if let (Some(token), Some(hook)) = (token, self.on_token_rejected.as_ref()) {
-            if error.is_unauthorized() {
+        if let Some(token) = token.filter(|_| error.is_unauthorized()) {
+            self.remember_rejected_token(token);
+            if let Some(hook) = self.on_token_rejected.as_ref() {
                 hook(token);
                 token_rejected = true;
             }
         }
         if token_rejected {
             error.log_token_rejected(path);
+        } else if token.is_none() && error.is_unauthorized() {
+            let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
+            error.log_api_key_rejected(path, first);
         } else if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
@@ -753,8 +830,15 @@ impl ApiClient {
                         "{context} not accessible with api key ({}) or bearer token ({}); treating as unavailable",
                         api_key_error.message, bearer_error.message
                     );
+                } else if bearer_error.is_unauthorized() {
+                    // The session token was rejected: send_raw already handed it
+                    // to the token-rejected hook (sign out + re-login prompt).
+                    log::info!(
+                        "{context} not accessible with api key ({}); session token rejected ({})",
+                        api_key_error.message, bearer_error.message
+                    );
                 } else {
-                    // 401/429/5xx/transport on the bearer retry is a genuinely
+                    // 429/5xx/transport on the bearer retry is a genuinely
                     // unexpected failure the caller will propagate, so surface it.
                     api_key_error.log(context);
                     bearer_error.log(context);
@@ -1092,7 +1176,7 @@ fn log_response(
     headers: &reqwest::header::HeaderMap,
     elapsed: std::time::Duration,
     quiet_on_failure: bool,
-    handles_token_rejection: bool,
+    handles_unauthorized: bool,
 ) {
     let header_dump: Vec<String> = headers
         .iter()
@@ -1112,9 +1196,9 @@ fn log_response(
 
     let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
-    let token_rejected = handles_token_rejection && status.as_u16() == 401;
+    let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
 
-    if status.is_success() || known_not_found || token_rejected {
+    if status.is_success() || known_not_found || handled_unauthorized {
         log::info!("{line}");
     } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
@@ -1122,6 +1206,10 @@ fn log_response(
         log::warn!("{line}");
     }
 }
+
+#[cfg(test)]
+#[path = "modio_api_auth_tests.rs"]
+mod auth_tests;
 
 #[cfg(test)]
 mod tests {
