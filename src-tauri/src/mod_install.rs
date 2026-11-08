@@ -1076,7 +1076,13 @@ fn record_install_target_failure(
     }
 
     if subscription_sync {
-        if category == "install_state" {
+        // Deleted/hidden mods are an expected outcome, not an app failure; keep
+        // them out of Sentry. The failure is still recorded for the UI below.
+        if message.contains("no longer available") {
+            log::info!(
+                "Skipped mod {target_mod_id} during subscription sync: {message}"
+            );
+        } else if category == "install_state" {
             log::error!(
                 "Failed to resolve install state for mod {target_mod_id} during subscription sync: {message}"
             );
