@@ -43,6 +43,17 @@ const EXPECTED_NO_OP_ERROR_REFS: [u32; 3] = [15005, 15028, 15043];
 /// warn/error to keep it out of Sentry.
 const MOD_NOT_FOUND_ERROR_REF: u32 = 15024;
 
+/// mod.io `error_ref` for "The requested file id could not be found." Returned
+/// (HTTP 404) when a mod author deletes a file that is still installed locally,
+/// e.g. while resolving the installed version label. Callers already handle it
+/// gracefully, so it is logged at info level instead of error to keep it out of
+/// Sentry.
+const MODFILE_NOT_FOUND_ERROR_REF: u32 = 14000;
+
+/// mod.io `error_ref` codes meaning the requested mod or file no longer exists.
+/// Logged at info level since callers treat them as "unavailable".
+const NOT_FOUND_ERROR_REFS: [u32; 2] = [MOD_NOT_FOUND_ERROR_REF, MODFILE_NOT_FOUND_ERROR_REF];
+
 /// Error returned by any mod.io API call. Captures the HTTP status, the mod.io
 /// `error_ref`, the server message and the `Retry-After` value (seconds) so the
 /// caller can distinguish rate limits, auth failures and missing resources.
@@ -83,6 +94,12 @@ impl ApiError {
     /// which it returns as HTTP 403.
     pub fn is_not_found(&self) -> bool {
         self.status == Some(404) || self.error_ref == Some(MOD_NOT_FOUND_ERROR_REF)
+    }
+
+    /// True when mod.io reports, via `error_ref`, that the requested mod or file
+    /// no longer exists.
+    fn is_known_not_found(&self) -> bool {
+        self.error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref))
     }
 
     pub fn is_conflict(&self) -> bool {
@@ -146,9 +163,9 @@ impl ApiError {
         );
     }
 
-    fn log_mod_not_found(&self, context: &str) {
+    fn log_not_found(&self, context: &str) {
         log::info!(
-            "mod.io API error [{context}] (mod not found, treated as unavailable): {} (status={:?}, error_ref={:?})",
+            "mod.io API error [{context}] (not found, treated as unavailable): {} (status={:?}, error_ref={:?})",
             self.message,
             self.status,
             self.error_ref
@@ -643,8 +660,8 @@ impl ApiClient {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
             error.log_expected(path);
-        } else if error.error_ref == Some(MOD_NOT_FOUND_ERROR_REF) {
-            error.log_mod_not_found(path);
+        } else if error.is_known_not_found() {
+            error.log_not_found(path);
         } else {
             error.log(path);
         }
@@ -1076,7 +1093,9 @@ fn log_response(
         .and_then(|value| value.parse::<u32>().ok());
     let expected_no_op = error_ref.is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref));
 
-    if status.is_success() || error_ref == Some(MOD_NOT_FOUND_ERROR_REF) {
+    let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
+
+    if status.is_success() || known_not_found {
         log::info!("{line}");
     } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
@@ -1126,6 +1145,20 @@ mod tests {
         };
         let params = query.to_params();
         assert!(params.contains(&("_sort".to_string(), "name".to_string())));
+    }
+
+    #[test]
+    fn mod_and_file_not_found_error_refs_are_known_not_found() {
+        let error = |status, error_ref| ApiError {
+            status: Some(status),
+            error_ref: Some(error_ref),
+            message: String::new(),
+            retry_after_secs: None,
+            inaccessible_after_bearer_retry: false,
+        };
+        assert!(error(404, MODFILE_NOT_FOUND_ERROR_REF).is_known_not_found());
+        assert!(error(403, MOD_NOT_FOUND_ERROR_REF).is_known_not_found());
+        assert!(!error(404, 14001).is_known_not_found());
     }
 
     #[test]
