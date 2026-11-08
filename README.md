@@ -62,6 +62,8 @@ Release builds embed `MODIO_API_KEY`, `MODIO_GAME_ID`, and `SENTRY_DSN` at compi
 | `npm run test:scripts` | Run the tests for the release scripts in `.github/scripts/` |
 | `cd src-tauri && cargo test` | Run the Rust tests |
 
+`vue-router` is a direct devDependency so that the type check can find the Volar plugin Nuxt adds (`vue-router/volar/sfc-route-blocks`). Keep its version range on the same major as the one Nuxt depends on. When you upgrade Nuxt, update it too. `npm ls vue-router` should show one copy.
+
 ## CI builds
 
 GitHub Actions has four workflows:
