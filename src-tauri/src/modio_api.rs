@@ -161,6 +161,10 @@ impl ApiError {
         self.is_unauthorized() && matches!(self.error_ref, Some(11000..=11002))
     }
 
+    pub fn is_forbidden(&self) -> bool {
+        self.status == Some(403)
+    }
+
     pub fn is_server_error(&self) -> bool {
         self.status.is_some_and(|status| (500..600).contains(&status))
     }
@@ -196,6 +200,15 @@ impl ApiError {
     fn log_not_found(&self, context: &str) {
         log::info!(
             "mod.io API error [{context}] (not found, treated as unavailable): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
+        );
+    }
+
+    fn log_forbidden(&self, context: &str) {
+        log::info!(
+            "mod.io API error [{context}] (forbidden without a session token, private or hidden mod): {} (status={:?}, error_ref={:?})",
             self.message,
             self.status,
             self.error_ref
@@ -652,8 +665,9 @@ impl ApiClient {
         token: Option<&str>,
         query: &[(String, String)],
         form: Option<&[(&str, &str)]>,
-        quiet_on_failure: bool,
+        on_failure: OnFailure,
     ) -> Result<Vec<u8>, ApiError> {
+        let quiet_on_failure = on_failure == OnFailure::Quiet;
         self.pace().await;
 
         // Checked after pacing so requests queued behind the one that got the
@@ -711,7 +725,7 @@ impl ApiClient {
             status,
             response.headers(),
             started.elapsed(),
-            quiet_on_failure,
+            on_failure,
             // send_raw logs these 401s itself: a rejected token goes to the
             // hook, a refused API key is reported once below.
             !authenticated || self.on_token_rejected.is_some(),
@@ -783,6 +797,8 @@ impl ApiClient {
             error.log_expected(path);
         } else if error.is_known_not_found() {
             error.log_not_found(path);
+        } else if on_failure == OnFailure::ExpectForbidden && error.is_forbidden() {
+            error.log_forbidden(path);
         } else {
             error.log(path);
         }
@@ -797,7 +813,7 @@ impl ApiClient {
         query: &[(String, String)],
         form: Option<&[(&str, &str)]>,
     ) -> Result<T, ApiError> {
-        self.send_with_options(method, path, token, query, form, false)
+        self.send_with_options(method, path, token, query, form, OnFailure::Report)
             .await
     }
 
@@ -808,10 +824,10 @@ impl ApiClient {
         token: Option<&str>,
         query: &[(String, String)],
         form: Option<&[(&str, &str)]>,
-        quiet_on_failure: bool,
+        on_failure: OnFailure,
     ) -> Result<T, ApiError> {
         let bytes = self
-            .send_raw(method, path, token, query, form, quiet_on_failure)
+            .send_raw(method, path, token, query, form, on_failure)
             .await?;
         serde_json::from_slice(&bytes).map_err(|e| {
             ApiError::transport(format!("Did not parse mod.io response: {e}"))
@@ -824,9 +840,21 @@ impl ApiClient {
         path: &str,
         token: Option<&str>,
     ) -> Result<(), ApiError> {
-        self.send_raw(method, path, token, &[], None, false)
+        self.send_raw(method, path, token, &[], None, OnFailure::Report)
             .await
             .map(|_| ())
+    }
+
+    /// How the api_key read of a single mod logs a failure. With a session token
+    /// it stays quiet: the bearer retry decides what to report. Without one, a
+    /// private or hidden mod answers 403, which callers turn into "sign in to
+    /// access private mods".
+    fn api_key_read_on_failure(may_retry_with_bearer: bool) -> OnFailure {
+        if may_retry_with_bearer {
+            OnFailure::Quiet
+        } else {
+            OnFailure::ExpectForbidden
+        }
     }
 
     /// When an api-key read fails, retry with OAuth unless mod.io is rate
@@ -923,7 +951,7 @@ impl ApiClient {
                 None,
                 &[],
                 None,
-                may_retry_with_bearer,
+                Self::api_key_read_on_failure(may_retry_with_bearer),
             )
             .await
         {
@@ -936,7 +964,7 @@ impl ApiClient {
                     // itself logs a single, appropriately-leveled summary once
                     // it knows whether this becomes a real failure or just an
                     // inaccessible mod.
-                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, true)
+                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, OnFailure::Quiet)
                 })
                 .await
             }
@@ -986,7 +1014,7 @@ impl ApiClient {
                 None,
                 &[],
                 None,
-                may_retry_with_bearer,
+                Self::api_key_read_on_failure(may_retry_with_bearer),
             )
             .await
         {
@@ -999,7 +1027,7 @@ impl ApiClient {
                     // itself logs a single, appropriately-leveled summary once
                     // it knows whether this becomes a real failure or just an
                     // inaccessible mod.
-                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, true)
+                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, OnFailure::Quiet)
                 })
                 .await
             }
@@ -1196,6 +1224,17 @@ fn log_request(
     );
 }
 
+/// How `ApiClient::send_raw` logs a failed request.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OnFailure {
+    /// warn/error, which `SentryLogWriter` forwards to Sentry.
+    Report,
+    /// debug, except a 429: the caller retries and logs the outcome itself.
+    Quiet,
+    /// Like `Report`, but a 403 is logged at info.
+    ExpectForbidden,
+}
+
 /// Logs the response status, elapsed time and all response headers.
 fn log_response(
     method: &str,
@@ -1203,7 +1242,7 @@ fn log_response(
     status: reqwest::StatusCode,
     headers: &reqwest::header::HeaderMap,
     elapsed: std::time::Duration,
-    quiet_on_failure: bool,
+    on_failure: OnFailure,
     handles_unauthorized: bool,
 ) {
     let header_dump: Vec<String> = headers
@@ -1225,8 +1264,10 @@ fn log_response(
     let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
     let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
+    let expected_forbidden = on_failure == OnFailure::ExpectForbidden && status.as_u16() == 403;
+    let quiet_on_failure = on_failure == OnFailure::Quiet;
 
-    if status.is_success() || known_not_found || handled_unauthorized {
+    if status.is_success() || known_not_found || handled_unauthorized || expected_forbidden {
         log::info!("{line}");
     } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
