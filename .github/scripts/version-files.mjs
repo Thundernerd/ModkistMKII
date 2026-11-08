@@ -11,6 +11,11 @@ export function updateVersionFiles(newVersion) {
   pkg.version = newVersion;
   fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
 
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+  lock.version = newVersion;
+  lock.packages[""].version = newVersion;
+  fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2) + "\n");
+
   const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
   tauri.version = newVersion;
   fs.writeFileSync(
