@@ -289,3 +289,57 @@ async fn an_expired_token_does_not_signal_a_refused_api_key() {
 
     assert_eq!(*refusals.lock().unwrap(), 0);
 }
+
+// --- Private mods read without a session token (issue #68) -------------------
+
+pub(crate) fn forbidden() -> (u16, Option<u32>, String) {
+    (403, None, r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string())
+}
+
+#[tokio::test]
+async fn a_private_mod_read_without_a_token_is_not_reported_to_sentry() {
+    capture_reports();
+    let server = FakeModio::start(|_| forbidden());
+    let (client, _) = server.client();
+
+    let error = client.get_mod(GAME_ID, 2400035, None).await.err().expect("request should fail");
+
+    assert_eq!(error.status, Some(403));
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_private_mod_dependencies_read_without_a_token_is_not_reported_to_sentry() {
+    capture_reports();
+    let server = FakeModio::start(|_| forbidden());
+    let (client, _) = server.client();
+
+    let error = client
+        .get_mod_dependencies(GAME_ID, 2400035, None)
+        .await
+        .err()
+        .expect("request should fail");
+
+    assert_eq!(error.status, Some(403));
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentry() {
+    capture_reports();
+    let server = FakeModio::start(|_| (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string()));
+    let (client, _) = server.client();
+
+    let mod_error = client.get_mod(GAME_ID, 2400035, None).await.err().expect("request should fail");
+    let deps_error = client
+        .get_mod_dependencies(GAME_ID, 2400035, None)
+        .await
+        .err()
+        .expect("request should fail");
+
+    assert!(mod_error.is_server_error() && deps_error.is_server_error());
+    let reports = sentry_reports();
+    for path in ["/games/3213/mods/2400035 ", "/games/3213/mods/2400035/dependencies"] {
+        assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
+    }
+}

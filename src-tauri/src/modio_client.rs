@@ -154,6 +154,17 @@ impl ModioState {
         })
     }
 
+    /// Like [`Self::signed_in_against`], with no session token.
+    #[cfg(test)]
+    pub(crate) fn signed_out_against(base_url: String) -> Arc<Self> {
+        let state = Self::signed_in_against(base_url, "unused");
+        *state.session.lock().unwrap() = SessionData {
+            token: None,
+            username: None,
+        };
+        state
+    }
+
     pub(crate) async fn with_oauth_request<T, E, F, Fut>(&self, label: &str, operation: F) -> Result<T, E>
     where
         F: FnOnce() -> Fut,
@@ -623,11 +634,12 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
 /// The level for logging `error` from a caller: `level`, or info when mod.io
 /// rejected our credentials (see [`ModioError`]).
 pub(crate) fn caller_log_level(error: &ApiError, level: log::Level) -> log::Level {
-    level_unless_credentials_rejected(error.is_unauthorized(), level)
+    level_unless_already_handled(error.is_unauthorized(), level)
 }
 
-fn level_unless_credentials_rejected(credentials_rejected: bool, level: log::Level) -> log::Level {
-    if credentials_rejected {
+/// `level`, or info when `ApiClient` already logged and explained the failure.
+fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log::Level {
+    if already_handled {
         log::Level::Info
     } else {
         level
@@ -638,11 +650,14 @@ fn level_unless_credentials_rejected(credentials_rejected: bool, level: log::Lev
 /// whether mod.io rejected our credentials (HTTP 401: an expired or revoked
 /// session token, or a refused game API key). `ApiClient` already handles and
 /// reports those once, so callers log them at info instead of warn/error,
-/// which `SentryLogWriter` would forward to Sentry once per mod.
+/// which `SentryLogWriter` would forward to Sentry once per mod. The same goes
+/// for a private mod read while signed out (HTTP 403): the message already asks
+/// the user to sign in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModioError {
     pub message: String,
     pub credentials_rejected: bool,
+    sign_in_required: bool,
 }
 
 impl ModioError {
@@ -651,6 +666,18 @@ impl ModioError {
         Self {
             message: format_api_error_logged_in(error, logged_in),
             credentials_rejected,
+            sign_in_required: false,
+        }
+    }
+
+    /// The failure of a single mod's read (`get_mod`, `get_mod_dependencies`).
+    /// Without a session token, a 403 means a private or hidden mod, which
+    /// `ApiClient` already logs at info.
+    pub(crate) fn from_mod_read(error: ApiError, logged_in: bool, token_sent: bool) -> Self {
+        let sign_in_required = !token_sent && error.is_forbidden();
+        Self {
+            sign_in_required,
+            ..Self::from_api(error, logged_in)
         }
     }
 
@@ -660,12 +687,14 @@ impl ModioError {
         Self {
             message: "Your mod.io session has expired. Sign in again.".to_string(),
             credentials_rejected: true,
+            sign_in_required: false,
         }
     }
 
-    /// `level` for an ordinary failure; info when mod.io rejected our credentials.
+    /// `level` for an ordinary failure; info when mod.io rejected our
+    /// credentials or the user must sign in to read the mod.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
-        level_unless_credentials_rejected(self.credentials_rejected, level)
+        level_unless_already_handled(self.credentials_rejected || self.sign_in_required, level)
     }
 }
 
@@ -680,6 +709,7 @@ impl From<String> for ModioError {
         Self {
             message,
             credentials_rejected: false,
+            sign_in_required: false,
         }
     }
 }
@@ -772,7 +802,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
             if should_cache_dependency_fetch_failure(&error) {
                 state.mark_dependency_fetch_failed(mod_id);
             }
-            Err(ModioError::from_api(error, logged_in))
+            Err(ModioError::from_mod_read(error, logged_in, token.is_some()))
         }
     }
 }
@@ -830,9 +860,10 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
                 tokio::time::sleep(Duration::from_secs(61)).await;
                 return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
-                ModFetchOutcome::Failed(ModioError::from_api(
+                ModFetchOutcome::Failed(ModioError::from_mod_read(
                     error,
                     state.auth_status().logged_in,
+                    token.is_some(),
                 ))
             }
         }

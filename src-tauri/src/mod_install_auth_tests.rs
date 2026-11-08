@@ -8,8 +8,8 @@ use std::collections::HashSet;
 
 use super::*;
 use crate::modio_api::auth_tests::{
-    capture_reports, error_body, sentry_reports, token_expired, FakeModio, Received, GAME_ID,
-    TOKEN,
+    capture_reports, error_body, forbidden, sentry_reports, token_expired, FakeModio, Received,
+    GAME_ID, TOKEN,
 };
 
 const PRIVATE_MODS: [u64; 3] = [101, 102, 103];
@@ -279,4 +279,33 @@ async fn an_expired_token_while_subscribing_is_a_rejected_credential() {
     };
     assert!(error.credentials_rejected, "{error}");
     assert_eq!(sentry_reports(), Vec::<String>::new());
+}
+
+// --- Private mods while signed out (issue #68) --------------------------------
+
+/// Private mods read without a session token: mod.io refuses the api_key read.
+fn private_mods_signed_out(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == format!("/games/{GAME_ID}/mods") {
+        (200, None, EMPTY_LIST.to_string())
+    } else {
+        forbidden()
+    }
+}
+
+#[tokio::test]
+async fn private_mods_while_signed_out_are_not_reported_per_mod() {
+    capture_reports();
+    let server = FakeModio::start(private_mods_signed_out);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let outcomes = fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
+    let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
+    let map = build_dependency_map(&state, &installed).await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    assert!(PRIVATE_MODS
+        .iter()
+        .all(|mod_id| matches!(outcomes.get(mod_id), Some(ModFetchOutcome::Failed(_)))));
+    assert!(map.values().all(Vec::is_empty));
+    assert_eq!(bearer_requests(&server), 0);
 }
