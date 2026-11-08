@@ -1674,9 +1674,16 @@ pub async fn list_mod_dependencies(
     state: State<'_, ModioState>,
     mod_id: u64,
 ) -> Result<ModDependencyListResult, String> {
-    let dependency_ids = fetch_mod_dependency_ids(&state, mod_id).await?;
+    list_mod_dependencies_inner(&state, mod_id).await
+}
 
-    let outcomes = fetch_mod_outcomes_batch(&state, &dependency_ids).await;
+pub(crate) async fn list_mod_dependencies_inner(
+    state: &ModioState,
+    mod_id: u64,
+) -> Result<ModDependencyListResult, String> {
+    let dependency_ids = fetch_mod_dependency_ids(state, mod_id).await?;
+
+    let outcomes = fetch_mod_outcomes_batch(state, &dependency_ids).await;
     let mut mods = Vec::with_capacity(dependency_ids.len());
     for dependency_id in dependency_ids {
         let outcome = outcomes
@@ -1692,7 +1699,8 @@ pub async fn list_mod_dependencies(
                 format!("Mod {dependency_id} is no longer available on mod.io."),
             )),
             ModFetchOutcome::Failed(error) => {
-                log::warn!(
+                log::log!(
+                    error.log_level(log::Level::Warn),
                     "Did not load dependency {dependency_id} for mod {mod_id}: {error}"
                 );
                 mods.push(unavailable_dependency(dependency_id, error.message));

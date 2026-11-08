@@ -131,3 +131,19 @@ async fn a_refused_api_key_on_the_batch_mod_fetch_is_reported_once() {
         .iter()
         .all(|mod_id| matches!(outcomes.get(mod_id), Some(ModFetchOutcome::Unavailable))));
 }
+
+#[tokio::test]
+async fn an_expired_token_while_listing_dependencies_is_not_reported_per_dependency() {
+    capture_reports();
+    let server = FakeModio::start(batch_omits_private_mods_with_expired_token);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+    state.store_dependencies(100, PRIVATE_MODS.to_vec());
+
+    let result = crate::modio_client::list_mod_dependencies_inner(&state, 100)
+        .await
+        .expect("dependency list should load");
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    let ids: Vec<u64> = result.mods.iter().map(|dependency| dependency.id).collect();
+    assert_eq!(ids, PRIVATE_MODS);
+}
