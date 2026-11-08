@@ -241,3 +241,32 @@ async fn an_expired_token_while_resolving_install_order_stops_reading_dependenci
         server.received()
     );
 }
+
+#[tokio::test]
+async fn an_expired_token_while_subscribing_is_a_rejected_credential() {
+    capture_reports();
+    let server = FakeModio::start(private_mods_with_expired_token);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    let result = install_targets_internal(
+        None,
+        &state,
+        Path::new("/nonexistent-game-dir"),
+        vec![101],
+        &mut Vec::new(),
+        &mut HashMap::new(),
+        true,
+        true,
+        None,
+        None,
+        None,
+        Some(101),
+    )
+    .await;
+
+    let Err(error) = result else {
+        panic!("subscribing with an expired token should fail");
+    };
+    assert!(error.credentials_rejected, "{error}");
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+}

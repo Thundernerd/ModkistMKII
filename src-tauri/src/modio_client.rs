@@ -142,10 +142,10 @@ impl ModioState {
         })
     }
 
-    pub(crate) async fn with_oauth_request<T, F, Fut>(&self, label: &str, operation: F) -> Result<T, String>
+    pub(crate) async fn with_oauth_request<T, E, F, Fut>(&self, label: &str, operation: F) -> Result<T, E>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<T, String>>,
+        Fut: std::future::Future<Output = Result<T, E>>,
     {
         let _guard = self.oauth_request.lock().await;
         log::debug!("OAuth request: {label}");
@@ -955,7 +955,7 @@ where
     }
 }
 
-pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), ModioError> {
     log::info!("Subscribing to mod {mod_id}");
     state
         .with_oauth_request("subscribe_to_mod", || async {
@@ -973,13 +973,13 @@ pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<
                     log::debug!("Mod {mod_id} already subscribed");
                     Ok(())
                 }
-                Err(error) => Err(format_api_error(error)),
+                Err(error) => Err(ModioError::from_api(error, false)),
             }
         })
         .await
 }
 
-pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), String> {
+pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), ModioError> {
     log::info!("Unsubscribing from mod {mod_id}");
     state
         .with_oauth_request("unsubscribe_from_mod", || async {
@@ -997,13 +997,13 @@ pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Res
                     log::debug!("Mod {mod_id} was not subscribed");
                     Ok(())
                 }
-                Err(error) => Err(format_api_error(error)),
+                Err(error) => Err(ModioError::from_api(error, false)),
             }
         })
         .await
 }
 
-pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, String> {
+pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, ModioError> {
     if let Some(cached) = state.cached_subscribed_mod_ids() {
         return Ok(cached);
     }
@@ -1026,7 +1026,7 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
                 let list = api
                     .get_user_subscriptions(&token, game_id, &query)
                     .await
-                    .map_err(format_api_error)?;
+                    .map_err(|error| ModioError::from_api(error, false))?;
                 let count = list.data.len() as u32;
                 let total = list.result_total;
                 // Seed the caches so browse, detail, and install flows can reuse
@@ -1044,7 +1044,7 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
 
             mod_ids.sort_unstable();
             mod_ids.dedup();
-            Ok(mod_ids)
+            Ok::<_, ModioError>(mod_ids)
         })
         .await?;
 
