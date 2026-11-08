@@ -638,11 +638,12 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
 /// The level for logging `error` from a caller: `level`, or info when mod.io
 /// rejected our credentials (see [`ModioError`]).
 pub(crate) fn caller_log_level(error: &ApiError, level: log::Level) -> log::Level {
-    level_unless_credentials_rejected(error.is_unauthorized(), level)
+    level_unless_already_handled(error.is_unauthorized(), level)
 }
 
-fn level_unless_credentials_rejected(credentials_rejected: bool, level: log::Level) -> log::Level {
-    if credentials_rejected {
+/// `level`, or info when `ApiClient` already logged and explained the failure.
+fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log::Level {
+    if already_handled {
         log::Level::Info
     } else {
         level
@@ -697,7 +698,7 @@ impl ModioError {
     /// `level` for an ordinary failure; info when mod.io rejected our
     /// credentials or the user must sign in to read the mod.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
-        level_unless_credentials_rejected(self.credentials_rejected || self.sign_in_required, level)
+        level_unless_already_handled(self.credentials_rejected || self.sign_in_required, level)
     }
 }
 

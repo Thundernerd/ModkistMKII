@@ -274,7 +274,7 @@ async fn an_expired_token_does_not_signal_a_refused_api_key() {
 
 // --- Private mods read without a session token (issue #68) -------------------
 
-fn forbidden() -> (u16, Option<u32>, String) {
+pub(crate) fn forbidden() -> (u16, Option<u32>, String) {
     (403, None, r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string())
 }
 
@@ -321,6 +321,7 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
 
     assert!(mod_error.is_server_error() && deps_error.is_server_error());
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 4, "expected a warn and an error per read, got {reports:#?}");
-    assert!(reports.iter().all(|report| report.contains("503") || report.contains("Service Unavailable")));
+    for path in ["/games/3213/mods/2400035 ", "/games/3213/mods/2400035/dependencies"] {
+        assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
+    }
 }

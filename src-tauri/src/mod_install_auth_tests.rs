@@ -8,8 +8,8 @@ use std::collections::HashSet;
 
 use super::*;
 use crate::modio_api::auth_tests::{
-    capture_reports, error_body, sentry_reports, token_expired, FakeModio, Received, GAME_ID,
-    TOKEN,
+    capture_reports, error_body, forbidden, sentry_reports, token_expired, FakeModio, Received,
+    GAME_ID, TOKEN,
 };
 
 const PRIVATE_MODS: [u64; 3] = [101, 102, 103];
@@ -288,7 +288,7 @@ fn private_mods_signed_out(request: &Received) -> (u16, Option<u32>, String) {
     if request.path == format!("/games/{GAME_ID}/mods") {
         (200, None, EMPTY_LIST.to_string())
     } else {
-        (403, None, r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string())
+        forbidden()
     }
 }
 

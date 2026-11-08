@@ -667,7 +667,6 @@ impl ApiClient {
         form: Option<&[(&str, &str)]>,
         on_failure: OnFailure,
     ) -> Result<Vec<u8>, ApiError> {
-        let quiet_on_failure = on_failure == OnFailure::Quiet;
         self.pace().await;
 
         // Checked after pacing so requests queued behind the one that got the
@@ -710,7 +709,7 @@ impl ApiClient {
 
         let started = Instant::now();
         let response = request.send().await.map_err(|e| {
-            if quiet_on_failure {
+            if on_failure.is_quiet() {
                 log::debug!("mod.io <- {method_label} {path} transport error: {e}");
             } else {
                 log::error!("mod.io <- {method_label} {path} transport error: {e}");
@@ -791,13 +790,13 @@ impl ApiClient {
                     hook();
                 }
             }
-        } else if quiet_on_failure && !error.is_rate_limited() {
+        } else if on_failure.is_quiet() && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
             error.log_expected(path);
         } else if error.is_known_not_found() {
             error.log_not_found(path);
-        } else if on_failure == OnFailure::ExpectForbidden && error.is_forbidden() {
+        } else if error.status.is_some_and(|status| on_failure.expects(status)) {
             error.log_forbidden(path);
         } else {
             error.log(path);
@@ -1235,6 +1234,17 @@ enum OnFailure {
     ExpectForbidden,
 }
 
+impl OnFailure {
+    fn is_quiet(self) -> bool {
+        self == Self::Quiet
+    }
+
+    /// True when a response with `status` is an expected outcome, logged at info.
+    fn expects(self, status: u16) -> bool {
+        self == Self::ExpectForbidden && status == 403
+    }
+}
+
 /// Logs the response status, elapsed time and all response headers.
 fn log_response(
     method: &str,
@@ -1264,12 +1274,11 @@ fn log_response(
     let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
     let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
-    let expected_forbidden = on_failure == OnFailure::ExpectForbidden && status.as_u16() == 403;
-    let quiet_on_failure = on_failure == OnFailure::Quiet;
+    let expected = on_failure.expects(status.as_u16());
 
-    if status.is_success() || known_not_found || handled_unauthorized || expected_forbidden {
+    if status.is_success() || known_not_found || handled_unauthorized || expected {
         log::info!("{line}");
-    } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
+    } else if expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429) {
         log::debug!("{line}");
     } else {
         log::warn!("{line}");
