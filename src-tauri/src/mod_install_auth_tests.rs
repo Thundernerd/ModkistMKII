@@ -135,6 +135,16 @@ async fn a_refused_api_key_on_the_batch_mod_fetch_is_reported_once() {
 }
 
 #[tokio::test]
+async fn a_refused_api_key_on_the_batch_mod_fetch_tells_the_user_to_update() {
+    let server = FakeModio::start(api_key_refused_and_mods_gone);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
+
+    assert!(state.status().api_key_refused);
+}
+
+#[tokio::test]
 async fn an_expired_token_while_listing_dependencies_is_not_reported_per_dependency() {
     capture_reports();
     let server = FakeModio::start(batch_omits_private_mods_with_expired_token);

@@ -117,11 +117,13 @@ impl ModioState {
     }
 
     /// A signed-in state whose API client talks to `base_url` (a fake mod.io in
-    /// tests). A rejected token ends the session the way the app's hook does,
-    /// minus the disk and UI side effects that need an `AppHandle`.
+    /// tests). A rejected token ends the session and a refused API key is
+    /// recorded the way the app's hooks do, minus the disk and UI side effects
+    /// that need an `AppHandle`.
     #[cfg(test)]
     pub(crate) fn signed_in_against(base_url: String, token: &str) -> Arc<Self> {
         Arc::new_cyclic(|state: &std::sync::Weak<Self>| {
+            let refused_state = state.clone();
             let state = state.clone();
             let config = ModioConfig {
                 game_id: Some(crate::modio_api::auth_tests::GAME_ID),
@@ -134,6 +136,11 @@ impl ModioState {
                 .with_token_rejected_hook(Arc::new(move |token: &str| {
                     if let Some(state) = state.upgrade() {
                         state.end_rejected_session(token);
+                    }
+                }))
+                .with_api_key_refused_hook(Arc::new(move || {
+                    if let Some(state) = refused_state.upgrade() {
+                        state.note_api_key_refused();
                     }
                 }));
             let state = Self::new(Some("game-key".into()), config);
@@ -465,11 +472,18 @@ impl ModioState {
     }
 
     fn mark_api_key_refused(&self, app: &AppHandle) {
+        if self.note_api_key_refused() {
+            let _ = app.emit(API_KEY_REFUSED_EVENT, ());
+        }
+    }
+
+    /// Records that mod.io refused the game API key. True the first time.
+    fn note_api_key_refused(&self) -> bool {
         if self.api_key_refused.swap(true, Ordering::Relaxed) {
-            return;
+            return false;
         }
         log::info!("mod.io refused the game API key; asking the user to update Modkist");
-        let _ = app.emit(API_KEY_REFUSED_EVENT, ());
+        true
     }
 
     /// True when mod.io rejected `token`, the session an operation started
