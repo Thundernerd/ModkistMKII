@@ -105,6 +105,43 @@ impl ModioState {
         }
     }
 
+    /// A signed-in state whose API client talks to `base_url` (a fake mod.io in
+    /// tests). A rejected token ends the session the way the app's hook does,
+    /// minus the disk and UI side effects that need an `AppHandle`.
+    #[cfg(test)]
+    pub(crate) fn signed_in_against(base_url: String, token: &str) -> Arc<Self> {
+        Arc::new_cyclic(|state: &std::sync::Weak<Self>| {
+            let state = state.clone();
+            let config = ModioConfig {
+                game_id: Some(crate::modio_api::auth_tests::GAME_ID),
+                api_host: None,
+                use_test_env: false,
+            };
+            let client = ApiClient::new("game-key".into(), config.game_id, None, false)
+                .unwrap()
+                .with_base_url(base_url)
+                .with_token_rejected_hook(Arc::new(move |token: &str| {
+                    if let Some(state) = state.upgrade() {
+                        state.end_rejected_session(token);
+                    }
+                }));
+            Self {
+                api_key: Some("game-key".into()),
+                config,
+                api_client: Mutex::new(Some(Arc::new(client))),
+                session: Mutex::new(SessionData {
+                    token: Some(token.to_string()),
+                    username: Some("tester".into()),
+                }),
+                api_cache: Mutex::new(ApiCache::default()),
+                subscription_sync_cancelled: AtomicBool::new(false),
+                token_rejected_hook: OnceLock::new(),
+                session_expired: AtomicBool::new(false),
+                oauth_request: tokio::sync::Mutex::new(()),
+            }
+        })
+    }
+
     pub(crate) async fn with_oauth_request<T, F, Fut>(&self, label: &str, operation: F) -> Result<T, String>
     where
         F: FnOnce() -> Fut,
@@ -407,6 +444,15 @@ impl ModioState {
         let _ = self.token_rejected_hook.set(hook);
     }
 
+    /// True when mod.io rejected `token`, the session an operation started
+    /// with, and signed the user out. Loops over mods stop then: every later
+    /// read would go out without the token and fail for private mods.
+    pub(crate) fn session_rejected(&self, token: Option<&str>) -> bool {
+        token.is_some()
+            && self.session_expired.load(Ordering::Relaxed)
+            && self.session_token().as_deref() != token
+    }
+
     /// Checks the restored token with a cheap `/me` call. A 401 goes through the
     /// token-rejected hook, which clears the session; other failures (offline,
     /// rate limit) leave the session alone.
@@ -428,10 +474,22 @@ impl ModioState {
     /// the session already moved on (logged out, or signed in with a new token),
     /// so late responses from in-flight requests cannot end a fresh session.
     fn expire_session(&self, app: &AppHandle, rejected_token: &str) {
+        if !self.end_rejected_session(rejected_token) {
+            return;
+        }
+        if let Err(error) = delete_stored_session(app) {
+            log::warn!("Did not remove expired mod.io session from disk: {error}");
+        }
+        let _ = app.emit(SESSION_EXPIRED_EVENT, ());
+    }
+
+    /// The in-memory part of [`Self::expire_session`]. Returns false when the
+    /// session already moved on and nothing was cleared.
+    fn end_rejected_session(&self, rejected_token: &str) -> bool {
         let username = {
             let mut session = self.session.lock().unwrap();
             if session.token.as_deref() != Some(rejected_token) {
-                return;
+                return false;
             }
             session.token = None;
             session.username.take()
@@ -439,14 +497,11 @@ impl ModioState {
         self.session_expired.store(true, Ordering::Relaxed);
         self.cancel_subscription_sync();
         self.clear_api_cache();
-        if let Err(error) = delete_stored_session(app) {
-            log::warn!("Did not remove expired mod.io session from disk: {error}");
-        }
         log::info!(
             "mod.io rejected the session token for {}; signed out",
             username.as_deref().unwrap_or("user")
         );
-        let _ = app.emit(SESSION_EXPIRED_EVENT, ());
+        true
     }
 
     pub fn restore_from_store(&self, app: &AppHandle) -> Result<(), String> {
@@ -529,6 +584,63 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
 
 /// Converts an `ApiError` into a user-facing message, preserving the rate-limit
 /// and auth hints we surfaced previously.
+/// A failed mod.io operation as callers see it: the message for the UI, and
+/// whether mod.io rejected our credentials (HTTP 401: an expired or revoked
+/// session token, or a refused game API key). `ApiClient` already handles and
+/// reports those once, so callers log them at info instead of warn/error,
+/// which `SentryLogWriter` would forward to Sentry once per mod.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModioError {
+    pub message: String,
+    pub credentials_rejected: bool,
+}
+
+impl ModioError {
+    pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
+        let credentials_rejected = error.is_unauthorized();
+        Self {
+            message: format_api_error_logged_in(error, logged_in),
+            credentials_rejected,
+        }
+    }
+
+    /// `level` for an ordinary failure; info when mod.io rejected our credentials.
+    pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
+        if self.credentials_rejected {
+            log::Level::Info
+        } else {
+            level
+        }
+    }
+}
+
+impl std::fmt::Display for ModioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<String> for ModioError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            credentials_rejected: false,
+        }
+    }
+}
+
+impl From<&str> for ModioError {
+    fn from(message: &str) -> Self {
+        message.to_string().into()
+    }
+}
+
+impl From<ModioError> for String {
+    fn from(error: ModioError) -> Self {
+        error.message
+    }
+}
+
 pub fn format_api_error(error: ApiError) -> String {
     format_api_error_logged_in(error, false)
 }
@@ -575,14 +687,15 @@ pub fn should_cache_dependency_fetch_failure(error: &ApiError) -> bool {
 pub(crate) async fn fetch_mod_dependency_ids(
     state: &ModioState,
     mod_id: u64,
-) -> Result<Vec<u64>, String> {
+) -> Result<Vec<u64>, ModioError> {
     if let Some(cached) = state.cached_dependencies(mod_id) {
         return Ok(cached);
     }
     if state.cached_dependency_fetch_failed(mod_id) {
         return Err(format!(
             "Dependencies for mod {mod_id} did not load (cached failure)"
-        ));
+        )
+        .into());
     }
 
     let game_id = state.game_id()?;
@@ -602,7 +715,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
             if should_cache_dependency_fetch_failure(&error) {
                 state.mark_dependency_fetch_failed(mod_id);
             }
-            Err(format_api_error_logged_in(error, logged_in))
+            Err(ModioError::from_api(error, logged_in))
         }
     }
 }
@@ -792,14 +905,15 @@ pub(crate) fn is_rate_limited_message(message: &str) -> bool {
     lower.contains("429")
 }
 
-pub(crate) async fn with_rate_limit_retry<T, F, Fut>(mut operation: F) -> Result<T, String>
+pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(mut operation: F) -> Result<T, E>
 where
+    E: std::fmt::Display,
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, String>>,
+    Fut: std::future::Future<Output = Result<T, E>>,
 {
     match operation().await {
         Ok(value) => Ok(value),
-        Err(message) if is_rate_limited_message(&message) => {
+        Err(message) if is_rate_limited_message(&message.to_string()) => {
             log::warn!("mod.io rate limit hit, retrying in 61 seconds: {message}");
             tokio::time::sleep(Duration::from_secs(61)).await;
             operation().await

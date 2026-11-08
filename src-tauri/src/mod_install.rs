@@ -33,7 +33,7 @@ use crate::subscription_sync_settings::{
 use crate::modio_client::{
     fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch, fetch_subscribed_mod_ids,
     format_api_error, modfile_version_label, subscribe_to_mod, unsubscribe_from_mod,
-    with_rate_limit_retry, ModFetchOutcome, ModioState,
+    with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -537,7 +537,7 @@ async fn refresh_dependency_map(
     }
 }
 
-async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, String> {
+async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, ModioError> {
     with_rate_limit_retry(|| async { fetch_mod_dependency_ids(state, mod_id).await }).await
 }
 
@@ -551,8 +551,11 @@ async fn fetch_dependency_ids_or_empty(
     }
     match fetch_dependency_ids(state, mod_id).await {
         Ok(deps) => deps,
-        Err(message) => {
-            log::warn!("{context}: could not fetch dependencies for mod {mod_id}: {message}");
+        Err(error) => {
+            log::log!(
+                error.log_level(log::Level::Warn),
+                "{context}: could not fetch dependencies for mod {mod_id}: {error}"
+            );
             Vec::new()
         }
     }
@@ -625,16 +628,15 @@ async fn build_dependency_map(
     installed_ids: &HashSet<u64>,
 ) -> HashMap<u64, Vec<u64>> {
     let mut map = HashMap::with_capacity(installed_ids.len());
+    let session = state.session_token();
     for &mod_id in installed_ids {
-        map.insert(
-            mod_id,
-            fetch_dependency_ids_or_empty(
-                state,
-                mod_id,
-                "Building installed mod dependency map",
-            )
-            .await,
-        );
+        let deps = if state.session_rejected(session.as_deref()) {
+            Vec::new()
+        } else {
+            fetch_dependency_ids_or_empty(state, mod_id, "Building installed mod dependency map")
+                .await
+        };
+        map.insert(mod_id, deps);
     }
     map
 }
@@ -2005,6 +2007,10 @@ pub async fn uninstall_mod(
     log::info!("Uninstalled mod {mod_id}");
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "mod_install_auth_tests.rs"]
+mod auth_tests;
 
 #[cfg(test)]
 mod tests {
