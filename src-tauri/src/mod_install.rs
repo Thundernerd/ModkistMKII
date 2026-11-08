@@ -1319,7 +1319,7 @@ async fn install_mod_internal(
     game_dir: &Path,
     mod_id: u64,
     file_id: Option<u64>,
-) -> Result<InstallModResult, String> {
+) -> Result<InstallModResult, ModioError> {
     log::info!("Installing mod {mod_id}");
     let order = match collect_install_order(state, mod_id).await {
         Ok(order) => order,
@@ -1434,6 +1434,25 @@ async fn sync_subscribed_mods_inner(
     app: &AppHandle,
     state: &ModioState,
 ) -> Result<InstallModResult, String> {
+    let session = state.session_token();
+    match run_subscription_sync(app, state).await {
+        // mod.io rejected the session mid-sync: the user is already signed out
+        // and asked to sign in again, so this is a cancelled sync, not a failure.
+        Err(error)
+            if error.message != SUBSCRIPTION_SYNC_CANCELLED
+                && state.session_rejected(session.as_deref()) =>
+        {
+            log::info!("Subscription sync cancelled: mod.io rejected the session ({error})");
+            Err(SUBSCRIPTION_SYNC_CANCELLED.into())
+        }
+        result => result.map_err(String::from),
+    }
+}
+
+async fn run_subscription_sync(
+    app: &AppHandle,
+    state: &ModioState,
+) -> Result<InstallModResult, ModioError> {
     log::info!("Starting subscription sync");
     if !state.auth_status().logged_in {
         log::debug!("Skipping subscription sync: not logged in");
@@ -1603,7 +1622,10 @@ async fn sync_subscribed_mods_inner(
         Err(error) if error.message == SUBSCRIPTION_SYNC_CANCELLED => {
             log::info!("Subscription sync cancelled");
         }
-        Err(error) => log::error!("Subscription sync failed: {error}"),
+        Err(error) => log::log!(
+            error.log_level(log::Level::Error),
+            "Subscription sync failed: {error}"
+        ),
     }
     state.persist_cache(app);
     match result {
@@ -1615,7 +1637,7 @@ async fn sync_subscribed_mods_inner(
             }
             Ok(summary)
         }
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error),
     }
 }
 
@@ -1706,9 +1728,10 @@ async fn reconcile_custom_profile_mods_inner(
                     installed_ids.insert(mod_id);
                 }
             }
-            Err(message) => {
-                log::warn!(
-                    "Did not reinstall custom-profile mod {}: {message}",
+            Err(error) => {
+                log::log!(
+                    error.log_level(log::Level::Warn),
+                    "Did not reinstall custom-profile mod {}: {error}",
                     entry.mod_id
                 );
                 failed_dependencies.push(entry.mod_id);
@@ -1954,9 +1977,12 @@ pub async fn install_mod(
             summary.installed.len(),
             summary.skipped.len()
         ),
-        Err(message) => log::error!("install_mod failed for {mod_id}: {message}"),
+        Err(error) => log::log!(
+            error.log_level(log::Level::Error),
+            "install_mod failed for {mod_id}: {error}"
+        ),
     }
-    result
+    result.map_err(String::from)
 }
 
 #[tauri::command]

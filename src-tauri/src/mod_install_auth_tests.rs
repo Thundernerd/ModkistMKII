@@ -199,7 +199,9 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
     .await;
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
-    let error = result.err().expect("the install should stop once the session is rejected");
+    let Err(error) = result else {
+        panic!("the install should stop once the session is rejected");
+    };
     assert!(error.credentials_rejected, "{error}");
     assert_eq!(
         server.received().len(),
