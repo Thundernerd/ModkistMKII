@@ -783,8 +783,12 @@ async fn reconcile_failed_sync_mods(
     records: &[InstalledModRecord],
     dependency_map: &HashMap<u64, Vec<u64>>,
     mods_by_id: Option<&HashMap<u64, ModObject>>,
+    session: Option<&str>,
 ) {
     for mod_id in read_failed_sync_mod_ids(app) {
+        if state.session_rejected(session) {
+            return;
+        }
         let Ok(install_state) = install_state_for_mod(
             state,
             mod_id,
@@ -1399,9 +1403,10 @@ async fn unsubscribe_or_schedule(app: &AppHandle, state: &ModioState, mod_id: u6
         Ok(()) => {
             let _ = remove_pending_unsubscribe_mod(app, mod_id);
         }
-        Err(message) => {
-            log::warn!(
-                "Did not unsubscribe from mod {mod_id}, scheduling retry: {message}"
+        Err(error) => {
+            log::log!(
+                error.log_level(log::Level::Warn),
+                "Did not unsubscribe from mod {mod_id}, scheduling retry: {error}"
             );
             let _ = add_pending_unsubscribe_mod(app, mod_id);
         }
@@ -1423,8 +1428,11 @@ async fn flush_pending_unsubscribes(app: &AppHandle, state: &ModioState) {
             Ok(()) => {
                 let _ = remove_pending_unsubscribe_mod(app, mod_id);
             }
-            Err(message) => {
-                log::warn!("Still could not unsubscribe from mod {mod_id}: {message}");
+            Err(error) => {
+                log::log!(
+                    error.log_level(log::Level::Warn),
+                    "Still could not unsubscribe from mod {mod_id}: {error}"
+                );
             }
         }
     }
@@ -1440,9 +1448,7 @@ async fn sync_subscribed_mods_inner(
     match run_subscription_sync(app, state).await {
         // mod.io rejected the session mid-sync: the user is already signed out
         // and asked to sign in again, so this is a cancelled sync, not a failure.
-        Err(error)
-            if error.message != SUBSCRIPTION_SYNC_CANCELLED
-                && state.session_rejected(session.as_deref()) =>
+        Err(error) if error.credentials_rejected && state.session_rejected(session.as_deref()) =>
         {
             log::info!("Subscription sync cancelled: mod.io rejected the session ({error})");
             Err(SUBSCRIPTION_SYNC_CANCELLED.into())
@@ -1456,6 +1462,7 @@ async fn run_subscription_sync(
     state: &ModioState,
 ) -> Result<InstallModResult, ModioError> {
     log::info!("Starting subscription sync");
+    let session = state.session_token();
     if !state.auth_status().logged_in {
         log::debug!("Skipping subscription sync: not logged in");
         return Ok(InstallModResult {
@@ -1518,9 +1525,10 @@ async fn run_subscription_sync(
             ensure_subscription_sync_may_continue(app, state).await?;
             remove_inaccessible_mod_local(app, state, &game_dir, mod_id, reason)?;
             log::info!("Unsubscribing from inaccessible mod {mod_id} ({reason})");
-            if let Err(message) = unsubscribe_from_mod(state, mod_id).await {
-                log::warn!(
-                    "Could not unsubscribe from inaccessible mod {mod_id}, scheduling retry: {message}"
+            if let Err(error) = unsubscribe_from_mod(state, mod_id).await {
+                log::log!(
+                    error.log_level(log::Level::Warn),
+                    "Could not unsubscribe from inaccessible mod {mod_id}, scheduling retry: {error}"
                 );
                 let _ = add_pending_unsubscribe_mod(app, mod_id);
             }
@@ -1613,6 +1621,7 @@ async fn run_subscription_sync(
         &records,
         &dependency_map,
         Some(&mods_by_id),
+        session.as_deref(),
     )
     .await;
     match &result {
