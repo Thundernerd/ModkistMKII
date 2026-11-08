@@ -190,3 +190,30 @@ async fn an_expired_token_on_a_mod_read_retry_is_not_reported_to_sentry() {
     assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()]);
     assert_eq!(sentry_reports(), Vec::<String>::new());
 }
+
+fn api_key_invalid() -> (u16, Option<u32>, String) {
+    (401, Some(11002), error_body(11002, "api_key supplied is invalid."))
+}
+
+#[tokio::test]
+async fn a_refused_api_key_is_reported_to_sentry_once() {
+    capture_reports();
+    let server = FakeModio::start(|_| api_key_invalid());
+    let (client, rejected) = server.client();
+
+    let tags = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+    let mods = client
+        .get_mods(GAME_ID, &ModQuery::default())
+        .await
+        .err()
+        .expect("request should fail");
+    let tags_again = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+
+    assert!(tags.is_unauthorized() && mods.is_unauthorized() && tags_again.is_unauthorized());
+    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    assert_eq!(paths, ["/games/3213/tags", "/games/3213/mods", "/games/3213/tags"]);
+    assert!(rejected.lock().unwrap().is_empty(), "no session token was involved");
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+    assert!(reports[0].contains("API key"), "report should name the cause: {}", reports[0]);
+}

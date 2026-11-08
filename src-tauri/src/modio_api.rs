@@ -9,8 +9,15 @@
 //! 401, or transport error. Failures on the api-key attempt are logged at debug
 //! level when a bearer retry is planned. Other OAuth-only endpoints always use
 //! the bearer token.
+//!
+//! A 401 on a bearer request goes to the token-rejected hook (sign out, prompt
+//! re-login) and is not reported to Sentry; later requests with that token fail
+//! locally without calling mod.io. A 401 on an api_key request means the game
+//! API key itself was refused: it is reported once per client, then logged at
+//! info.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -191,6 +198,24 @@ impl ApiError {
     fn log_token_rejected(&self, context: &str) {
         log::info!(
             "mod.io API error [{context}] (session token rejected, signing out): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
+        );
+    }
+
+    fn log_api_key_rejected(&self, context: &str) {
+        log::error!(
+            "mod.io refused the game API key [{context}]: {} (status={:?}, error_ref={:?}); later API key rejections are logged at info",
+            self.message,
+            self.status,
+            self.error_ref
+        );
+    }
+
+    fn log_api_key_rejected_again(&self, context: &str) {
+        log::info!(
+            "mod.io refused the game API key [{context}]: {} (status={:?}, error_ref={:?})",
             self.message,
             self.status,
             self.error_ref
@@ -510,6 +535,9 @@ pub struct ApiClient {
     /// Tokens mod.io already answered with 401. Later requests carrying one of
     /// them fail locally instead of firing another doomed request.
     rejected_tokens: std::sync::Mutex<HashSet<String>>,
+    /// Set once a 401 on an api_key request was reported. A refused game API
+    /// key fails every public read the same way, so report it only once.
+    api_key_rejection_reported: AtomicBool,
     /// Earliest instant the next request may start. Guards both the steady-state
     /// pacing and the self-healing backoff after a `Retry-After` response.
     next_request_at: tokio::sync::Mutex<Instant>,
@@ -545,6 +573,7 @@ impl ApiClient {
             api_key,
             on_token_rejected: None,
             rejected_tokens: std::sync::Mutex::new(HashSet::new()),
+            api_key_rejection_reported: AtomicBool::new(false),
             next_request_at: tokio::sync::Mutex::new(Instant::now()),
         })
     }
@@ -664,7 +693,9 @@ impl ApiClient {
             response.headers(),
             started.elapsed(),
             quiet_on_failure,
-            authenticated && self.on_token_rejected.is_some(),
+            // send_raw logs these 401s itself: a rejected token goes to the
+            // hook, a refused API key is reported once below.
+            !authenticated || self.on_token_rejected.is_some(),
         );
 
         let retry_after = response
@@ -717,6 +748,12 @@ impl ApiClient {
         }
         if token_rejected {
             error.log_token_rejected(path);
+        } else if token.is_none() && error.is_unauthorized() {
+            if self.api_key_rejection_reported.swap(true, Ordering::Relaxed) {
+                error.log_api_key_rejected_again(path);
+            } else {
+                error.log_api_key_rejected(path);
+            }
         } else if quiet_on_failure && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
@@ -1144,7 +1181,7 @@ fn log_response(
     headers: &reqwest::header::HeaderMap,
     elapsed: std::time::Duration,
     quiet_on_failure: bool,
-    handles_token_rejection: bool,
+    handles_unauthorized: bool,
 ) {
     let header_dump: Vec<String> = headers
         .iter()
@@ -1164,9 +1201,9 @@ fn log_response(
 
     let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
-    let token_rejected = handles_token_rejection && status.as_u16() == 401;
+    let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
 
-    if status.is_success() || known_not_found || token_rejected {
+    if status.is_success() || known_not_found || handled_unauthorized {
         log::info!("{line}");
     } else if expected_no_op || (quiet_on_failure && status.as_u16() != 429) {
         log::debug!("{line}");
