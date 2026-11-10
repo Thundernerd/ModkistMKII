@@ -1,6 +1,6 @@
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pelite::pe32::{Pe as Pe32, PeFile as PeFile32};
 use pelite::pe64::{Pe as Pe64, PeFile as PeFile64};
@@ -8,6 +8,7 @@ use pelite::resources::version_info::VersionInfo;
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::app_settings::custom_wine_prefix_path;
 use crate::game_path::game_directory;
 use crate::wine_prefix::{self, WineWinhttpStatus};
 use crate::zip_extract::extract_zip;
@@ -224,9 +225,10 @@ async fn download_archive(destination: &Path) -> Result<(), String> {
 fn wine_winhttp_for_installed(
     state: BepInExState,
     game_dir: &Path,
+    custom_prefix: Option<&Path>,
 ) -> Option<WineWinhttpStatus> {
     if state == BepInExState::Installed {
-        Some(wine_prefix::configure_winhttp_override(game_dir))
+        Some(wine_prefix::configure_winhttp_override(game_dir, custom_prefix))
     } else {
         None
     }
@@ -237,9 +239,9 @@ fn status_for_game_dir(game_dir: &Path) -> BepInExStatus {
     BepInExStatus::from_detection(state, found_version, None)
 }
 
-fn status_after_install(game_dir: &Path) -> BepInExStatus {
+fn status_after_install(game_dir: &Path, custom_prefix: Option<&Path>) -> BepInExStatus {
     let (state, found_version) = detect_bepinex(game_dir);
-    let wine_winhttp = wine_winhttp_for_installed(state, game_dir);
+    let wine_winhttp = wine_winhttp_for_installed(state, game_dir, custom_prefix);
     BepInExStatus::from_detection(state, found_version, wine_winhttp)
 }
 
@@ -252,8 +254,9 @@ pub fn bepinex_status(app: AppHandle) -> Result<BepInExStatus, String> {
 #[tauri::command]
 pub fn verify_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
     let game_dir = game_directory(&app)?;
+    let custom_prefix = custom_wine_prefix_path(&app);
     let (state, found_version) = detect_bepinex(&game_dir);
-    let wine_winhttp = wine_winhttp_for_installed(state, &game_dir);
+    let wine_winhttp = wine_winhttp_for_installed(state, &game_dir, custom_prefix.as_deref());
     Ok(BepInExStatus::from_detection(
         state,
         found_version,
@@ -264,7 +267,11 @@ pub fn verify_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
 #[tauri::command]
 pub fn configure_wine_winhttp(app: AppHandle) -> Result<WineWinhttpStatus, String> {
     let game_dir = game_directory(&app)?;
-    Ok(wine_prefix::configure_winhttp_override(&game_dir))
+    let custom_prefix = custom_wine_prefix_path(&app);
+    Ok(wine_prefix::configure_winhttp_override(
+        &game_dir,
+        custom_prefix.as_deref(),
+    ))
 }
 
 #[tauri::command]
@@ -284,10 +291,13 @@ pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
         );
     }
 
-    perform_install(&game_dir).await
+    perform_install(&game_dir, custom_wine_prefix_path(&app)).await
 }
 
-async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
+async fn perform_install(
+    game_dir: &Path,
+    custom_prefix: Option<PathBuf>,
+) -> Result<BepInExStatus, String> {
     log::info!("Downloading and extracting BepInEx to {}", game_dir.display());
     let temp_dir = std::env::temp_dir().join("modkist-bepinex");
     fs::create_dir_all(&temp_dir)
@@ -306,7 +316,7 @@ async fn perform_install(game_dir: &Path) -> Result<BepInExStatus, String> {
         );
     }
 
-    Ok(status_after_install(game_dir))
+    Ok(status_after_install(game_dir, custom_prefix.as_deref()))
 }
 
 fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
@@ -337,7 +347,7 @@ pub async fn reinstall_bepinex(app: AppHandle) -> Result<BepInExStatus, String> 
     log::info!("Reinstalling BepInEx");
     let game_dir = game_directory(&app)?;
     remove_bepinex_installation(&game_dir)?;
-    perform_install(&game_dir).await
+    perform_install(&game_dir, custom_wine_prefix_path(&app)).await
 }
 
 #[cfg(test)]

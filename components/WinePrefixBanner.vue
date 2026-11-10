@@ -29,7 +29,7 @@ async function retry() {
         {{
           wineFeedback?.text ||
           wineError ||
-          "Did not find a Wine prefix. Launch Zeepkist one time. Then retry."
+          "Did not find a Wine prefix. Launch Zeepkist one time. Then retry. Or choose the prefix folder in Settings."
         }}
       </p>
     </div>
