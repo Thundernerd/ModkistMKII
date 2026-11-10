@@ -247,17 +247,18 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
 
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if is_stale_staging_dir_name(&name) {
-            // Left behind when an earlier run exited mid-install (the app was
+        if is_stale_install_scratch_dir_name(&name) {
+            // A staging folder, or a previous version an update moved aside,
+            // left behind when an earlier run exited mid-install (the app was
             // closed or restarted for an update). Removing it is routine
             // housekeeping, so it is logged at info and not sent to Sentry.
-            // BepInEx loads plugins from hidden subfolders too, so a staging
-            // dir that can't be removed would load a duplicate copy of the
-            // mod: that is worth a report.
-            log::info!("Removing stale mod install staging folder: {}", entry.path().display());
+            // BepInEx loads plugins from hidden subfolders too, so one that
+            // can't be removed would load a duplicate copy of the mod: that
+            // is worth a report.
+            log::info!("Removing mod install folder left by an earlier run: {}", entry.path().display());
             if let Err(error) = remove_dir_all_with_retry(&entry.path()) {
                 log::warn!(
-                    "Did not remove stale mod install staging folder {}: {error}",
+                    "Did not remove mod install folder left by an earlier run {}: {error}",
                     entry.path().display()
                 );
             }
@@ -343,7 +344,10 @@ fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
     unreachable!("loop always returns on the final attempt")
 }
 
-fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
+/// The install folders of `mod_id`, in both the mods and blueprints folders,
+/// each with the file id its name holds. Mods come before blueprints.
+fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<(PathBuf, u64)>, String> {
+    let mut folders = Vec::new();
     for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
         let kind_dir = kind_root_dir(game_dir, kind);
         if !kind_dir.is_dir() {
@@ -354,7 +358,7 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
             let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let Some((entry_mod_id, _)) = parse_install_folder_name(&name) else {
+            let Some((entry_mod_id, file_id)) = parse_install_folder_name(&name) else {
                 continue;
             };
             if entry_mod_id != mod_id {
@@ -363,14 +367,107 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
 
             let path = entry.path();
             if path.is_dir() {
-                remove_dir_all_with_retry(&path).map_err(|e| {
-                    format!("Did not remove installed mod folder {}: {e}", path.display())
-                })?;
+                folders.push((path, file_id));
             }
         }
     }
 
+    Ok(folders)
+}
+
+fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
+    for (path, _) in installed_mod_folders(game_dir, mod_id)? {
+        remove_dir_all_with_retry(&path)
+            .map_err(|e| format!("Did not remove installed mod folder {}: {e}", path.display()))?;
+    }
+
     Ok(())
+}
+
+/// An install folder moved aside during an update: `original` is where it
+/// was installed, `aside` where it is now.
+struct MovedAsideFolder {
+    original: PathBuf,
+    aside: PathBuf,
+}
+
+/// Moves each install folder of `mod_id` aside, to a name that doesn't parse
+/// as an install folder. Deleting a folder removes its files one by one, so
+/// a delete that fails partway (on Windows, the running game locks the plugin
+/// DLL) leaves an incomplete install behind. A rename either happens or
+/// doesn't: if one fails, the folders already moved are renamed back and the
+/// previous version stays installed (issue #129).
+async fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<MovedAsideFolder>, String> {
+    let mut moved = Vec::new();
+    for (original, file_id) in installed_mod_folders(game_dir, mod_id)? {
+        let aside = original.with_file_name(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
+        if let Err(error) = rename_with_transient_lock_retry(&original, &aside).await {
+            let message = format!(
+                "Did not move installed mod folder {} aside to replace it: {error}",
+                original.display()
+            );
+            return Err(restore_moved_aside_folders(&moved, message));
+        }
+        moved.push(MovedAsideFolder { original, aside });
+    }
+    Ok(moved)
+}
+
+/// Renames `from` to `to`, retrying while antivirus briefly holds a file
+/// inside open (see MOVE_INTO_PLACE_RETRY_DELAYS_MS). The running game's lock
+/// on a plugin DLL outlasts the retries.
+async fn rename_with_transient_lock_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut delays = MOVE_INTO_PLACE_RETRY_DELAYS_MS.into_iter();
+    loop {
+        match fs::rename(from, to) {
+            Err(error) if is_transient_lock_error(&error) => {
+                let Some(delay_ms) = delays.next() else {
+                    return Err(error);
+                };
+                log::debug!(
+                    "Moving {} hit a transient lock ({error}), retrying",
+                    from.display()
+                );
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Moves the folders an update moved aside back into place, after the update
+/// failed with `message`. Returns `message`, plus each folder that couldn't
+/// be moved back: the next launch deletes it as left over.
+fn restore_moved_aside_folders(moved: &[MovedAsideFolder], mut message: String) -> String {
+    for folder in moved {
+        if let Err(error) = fs::rename(&folder.aside, &folder.original) {
+            log::warn!(
+                "Did not move installed mod folder {} back to {}: {error}",
+                folder.aside.display(),
+                folder.original.display()
+            );
+            message.push_str(&format!(
+                "; the previous version is left in {} ({error})",
+                folder.aside.display()
+            ));
+        }
+    }
+    message
+}
+
+/// Deletes the folders an update moved aside. One that can't be deleted is
+/// reported: BepInEx loads plugins from hidden subfolders too, so it would
+/// load the old version alongside the new one until the next launch removes
+/// it at info level.
+fn remove_moved_aside_folders(moved: &[MovedAsideFolder]) {
+    for folder in moved {
+        if let Err(error) = remove_dir_all_with_retry(&folder.aside) {
+            log::warn!(
+                "Did not remove replaced mod folder {}: {error}",
+                folder.aside.display()
+            );
+        }
+    }
 }
 
 async fn normalize_legacy_install_folder_names(
@@ -816,20 +913,31 @@ async fn reconcile_failed_sync_mods(
 }
 
 const STAGING_DIR_PREFIX: &str = ".modkist-installing-";
+/// Prefix of a previous install folder an update moved aside.
+const REPLACED_DIR_PREFIX: &str = ".modkist-replaced-";
 
 /// Unique, non-conflicting staging directory name for an in-progress install.
 /// Deliberately doesn't parse as a valid `mod_id_file_id[_name]` install
 /// folder name so scan_kind_directory's orphan-cleanup ignores it.
 fn staging_dir_name(mod_id: u64, file_id: u64) -> String {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{STAGING_DIR_PREFIX}{mod_id}-{file_id}-{}-{counter}", std::process::id())
+    process_scoped_dir_name(STAGING_DIR_PREFIX, mod_id, file_id)
 }
 
-/// A staging dir created by a different (earlier) process can't belong to an
-/// install that's still running, so it's safe to delete.
-fn is_stale_staging_dir_name(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix(STAGING_DIR_PREFIX) else {
+/// `{prefix}{mod_id}-{file_id}-{pid}-{counter}`: unique within this process,
+/// and marks the directory as this process's until it exits.
+fn process_scoped_dir_name(prefix: &str, mod_id: u64, file_id: u64) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}{mod_id}-{file_id}-{}-{counter}", std::process::id())
+}
+
+/// A staging or moved-aside dir created by a different (earlier) process
+/// can't belong to an install that's still running, so it's safe to delete.
+fn is_stale_install_scratch_dir_name(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix(STAGING_DIR_PREFIX)
+        .or_else(|| name.strip_prefix(REPLACED_DIR_PREFIX))
+    else {
         return false;
     };
     let mut parts = rest.split('-');
@@ -994,19 +1102,26 @@ async fn install_single_mod(
         return Err(message.into());
     }
 
-    // Remove the previous install only now that the new version is staged,
-    // so a failed download or extraction leaves it installed (issue #117).
-    if let Err(message) = remove_installed_mod_folders(game_dir, mod_id) {
-        remove_staging_dir(&staging_dir);
-        return Err(message.into());
-    }
+    // Move the previous install aside only now that the new version is
+    // staged, so a failed download or extraction leaves it installed (issue
+    // #117), and move instead of delete, so a folder that can't be removed
+    // isn't left half-deleted (issue #129).
+    let moved_aside = match move_installed_mod_folders_aside(game_dir, mod_id).await {
+        Ok(moved_aside) => moved_aside,
+        Err(message) => {
+            remove_staging_dir(&staging_dir);
+            return Err(message.into());
+        }
+    };
 
-    // Defensive: remove_installed_mod_folders just cleared any prior install
-    // of this mod, but nothing stops a concurrent operation from recreating
-    // target_dir in between, and rename() onto an existing non-empty
-    // directory fails.
+    // Defensive: the previous install of this mod was just moved aside, but
+    // nothing stops a concurrent operation from recreating target_dir in
+    // between, and rename() onto an existing non-empty directory fails.
     let _ = remove_dir_all_with_retry(&target_dir);
-    move_staged_install_into_place(&staging_dir, &target_dir).await?;
+    if let Err(message) = move_staged_install_into_place(&staging_dir, &target_dir).await {
+        return Err(restore_moved_aside_folders(&moved_aside, message).into());
+    }
+    remove_moved_aside_folders(&moved_aside);
 
     state.invalidate_mod_cache(mod_id);
 
@@ -1108,11 +1223,22 @@ fn record_sync_failure_for_target(
     }
 }
 
-type SyncFailureContext<'a> = (
-    &'a AppHandle,
-    &'a HashSet<u64>,
-    &'a HashMap<u64, HashSet<u64>>,
-);
+/// Where `install_targets_internal` records and clears per-mod sync failures.
+#[derive(Clone, Copy)]
+struct SyncFailureContext<'a> {
+    app: &'a AppHandle,
+    /// The subscribed mods, or the one mod the user asked to install; their own failures are recorded against them.
+    roots: &'a HashSet<u64>,
+    /// For each dependency, the roots that need it; its failures are recorded against them.
+    dependency_to_subscribers: &'a HashMap<u64, HashSet<u64>>,
+}
+
+/// Clears a recorded sync failure for `mod_id`, if failures are being persisted.
+fn clear_sync_failure(sync_failure_context: Option<SyncFailureContext<'_>>, mod_id: u64) {
+    if let Some(SyncFailureContext { app, .. }) = sync_failure_context {
+        maybe_clear_failed_sync_mod(app, mod_id);
+    }
+}
 
 fn record_install_target_failure(
     sync_failure_context: Option<SyncFailureContext<'_>>,
@@ -1159,8 +1285,13 @@ fn record_install_target_failure(
         );
     }
 
-    if let Some((app, roots, subscribers)) = sync_failure_context {
-        if subscribers.is_empty() {
+    if let Some(SyncFailureContext {
+        app,
+        roots,
+        dependency_to_subscribers,
+    }) = sync_failure_context
+    {
+        if dependency_to_subscribers.is_empty() {
             if roots.contains(&target_mod_id) {
                 let _ = record_failed_sync_mod(app, target_mod_id, category, message);
             }
@@ -1171,7 +1302,7 @@ fn record_install_target_failure(
                 category,
                 message,
                 roots,
-                subscribers,
+                dependency_to_subscribers,
             );
         }
         track_sync_dependency_failure(target_mod_id, roots, failed_dependencies);
@@ -1199,15 +1330,25 @@ fn build_manual_install_sync_failure_context(
     (sync_failure_roots, dependency_to_subscribers)
 }
 
+/// A specific file version to install for one mod instead of its latest file.
+#[derive(Clone, Copy)]
+struct FileOverride {
+    mod_id: u64,
+    file_id: u64,
+}
+
 /// How `install_targets_internal` treats each target in its install order.
 #[derive(Default)]
 struct InstallTargetsOptions<'a> {
-    /// Subscribe to each target on mod.io before installing it.
+    /// Subscribe to each target on mod.io before installing it. Production callers
+    /// leave this `false` (`install_mod_internal` subscribes before the call); the test
+    /// `an_expired_token_while_subscribing_is_a_rejected_credential` uses it to reach
+    /// the subscribe-with-expired-token path without an `AppHandle`.
     should_subscribe: bool,
     /// Install a newer version of a target that is already installed.
     auto_update: bool,
-    /// `(mod_id, file_id)`: install this file for that mod instead of its latest.
-    file_override: Option<(u64, u64)>,
+    /// Install this file for that mod instead of its latest.
+    file_override: Option<FileOverride>,
     /// Mod details already fetched, so they are not requested again.
     mods_by_id: Option<&'a HashMap<u64, ModObject>>,
     /// Where to record and clear per-mod sync failures; `None` means they are not persisted.
@@ -1280,37 +1421,25 @@ async fn install_targets_internal(
                 return Err(error);
             }
         };
-        if matches!(state_for_mod.status.as_str(), "upToDate") {
-            if let Some((override_mod, override_file)) = file_override {
-                if override_mod == target_mod_id
-                    && state_for_mod.installed_file_id != Some(override_file)
-                {
-                    // Install a specific older or alternate file version.
-                } else {
-                    log::debug!("Mod {target_mod_id} already up to date, skipping");
-                    if let Some((app, _, _)) = sync_failure_context {
-                        maybe_clear_failed_sync_mod(app, target_mod_id);
-                    }
-                    skipped.push(target_mod_id);
-                    continue;
-                }
-            } else {
-                log::debug!("Mod {target_mod_id} already up to date, skipping");
-                if let Some((app, _, _)) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(app, target_mod_id);
-                }
-                skipped.push(target_mod_id);
-                continue;
-            }
+        let target_file_id = file_override
+            .filter(|file_override| file_override.mod_id == target_mod_id)
+            .map(|file_override| file_override.file_id);
+        // An override for a file other than the installed one still installs, to
+        // switch to a specific older or alternate file version.
+        if matches!(state_for_mod.status.as_str(), "upToDate")
+            && (target_file_id.is_none() || state_for_mod.installed_file_id == target_file_id)
+        {
+            log::debug!("Mod {target_mod_id} already up to date, skipping");
+            clear_sync_failure(sync_failure_context, target_mod_id);
+            skipped.push(target_mod_id);
+            continue;
         }
 
         if state_for_mod.status.as_str() == "updateAvailable" && !auto_update {
             log::debug!(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
-            if let Some((app, _, _)) = sync_failure_context {
-                maybe_clear_failed_sync_mod(app, target_mod_id);
-            }
+            clear_sync_failure(sync_failure_context, target_mod_id);
             skipped.push(target_mod_id);
             continue;
         }
@@ -1321,16 +1450,11 @@ async fn install_targets_internal(
         ensure_session_not_rejected(state, session.as_deref())?;
 
         log::info!("Installing mod {target_mod_id}");
-        let target_file_id = file_override
-            .filter(|(override_mod, _)| *override_mod == target_mod_id)
-            .map(|(_, file_id)| file_id);
         match install_single_mod(state, game_dir, target_mod_id, target_file_id).await {
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
                 installed.push(target_mod_id);
-                if let Some((app, _, _)) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(app, target_mod_id);
-                }
+                clear_sync_failure(sync_failure_context, target_mod_id);
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
             }
@@ -1390,11 +1514,11 @@ async fn install_mod_internal(
     let (sync_failure_roots, mut dependency_to_subscribers) =
         build_manual_install_sync_failure_context(mod_id, &order);
     augment_dependency_subscribers_from_cache(state, &[mod_id], &mut dependency_to_subscribers);
-    let sync_failure_context = (
+    let sync_failure_context = SyncFailureContext {
         app,
-        &sync_failure_roots,
-        &dependency_to_subscribers,
-    );
+        roots: &sync_failure_roots,
+        dependency_to_subscribers: &dependency_to_subscribers,
+    };
 
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
@@ -1417,7 +1541,7 @@ async fn install_mod_internal(
         &mut dependency_map,
         InstallTargetsOptions {
             auto_update: true,
-            file_override: file_id.map(|file_id| (mod_id, file_id)),
+            file_override: file_id.map(|file_id| FileOverride { mod_id, file_id }),
             sync_failure_context: Some(sync_failure_context),
             root_mod_id: Some(mod_id),
             ..Default::default()
@@ -1658,7 +1782,11 @@ async fn run_subscription_sync(
         InstallTargetsOptions {
             auto_update,
             mods_by_id: Some(&mods_by_id),
-            sync_failure_context: Some((app, &subscribed_roots, &dependency_to_subscribers)),
+            sync_failure_context: Some(SyncFailureContext {
+                app,
+                roots: &subscribed_roots,
+                dependency_to_subscribers: &dependency_to_subscribers,
+            }),
             ..Default::default()
         },
     )
@@ -2267,10 +2395,10 @@ mod tests {
     #[test]
     fn stale_staging_dirs_are_from_other_processes_only() {
         let ours = staging_dir_name(3285481, 8137916);
-        assert!(!is_stale_staging_dir_name(&ours));
+        assert!(!is_stale_install_scratch_dir_name(&ours));
         let other_pid = std::process::id().wrapping_add(1);
-        assert!(is_stale_staging_dir_name(&format!(".modkist-installing-1-2-{other_pid}-0")));
-        assert!(!is_stale_staging_dir_name("3285481_8137916_Random Track Mode"));
+        assert!(is_stale_install_scratch_dir_name(&format!(".modkist-installing-1-2-{other_pid}-0")));
+        assert!(!is_stale_install_scratch_dir_name("3285481_8137916_Random Track Mode"));
     }
 
     /// A staging folder with a mod in it, named as an earlier process would.
@@ -2295,6 +2423,27 @@ mod tests {
 
         assert!(!stale.exists());
         assert!(live.exists());
+    }
+
+    /// An update that was interrupted after moving the previous version
+    /// aside leaves it in a hidden folder BepInEx still loads (issue #129).
+    #[test]
+    fn scan_installed_mods_removes_folders_left_moved_aside_by_an_earlier_run() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let other_pid = std::process::id().wrapping_add(1);
+        let stale = kind_dir.join(format!(".modkist-replaced-1-2-{other_pid}-0"));
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("mod.dll"), b"test").unwrap();
+        let live = kind_dir.join(process_scoped_dir_name(REPLACED_DIR_PREFIX, 1, 2));
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("mod.dll"), b"test").unwrap();
+
+        let records = scan_installed_mods(temp.path()).unwrap();
+
+        assert!(records.is_empty(), "{records:#?}");
+        assert!(!stale.exists());
+        assert!(live.exists(), "this run's update may still move it back");
     }
 
     #[test]
@@ -2447,7 +2596,74 @@ mod tests {
         assert_eq!(records.len(), 1, "{records:#?}");
         assert_eq!(records[0].folder_name, "117002_2_Mod");
         assert_eq!(fs::read(kind_dir.join("117002_2_Mod/mod.dll")).unwrap(), b"MZ-new");
-        assert!(!previous.exists());
+        // Nothing else either: BepInEx would also load an old copy from a
+        // hidden folder (issue #129).
+        let mut entries: Vec<String> = fs::read_dir(&kind_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, vec!["117002_2_Mod".to_string()]);
+    }
+
+    /// Deleting a folder removes its files one by one, so a folder that can't
+    /// be removed (on Windows: the running game locks the plugin DLL) used to
+    /// be left half-deleted, and a mod's other install folders already gone
+    /// (issue #129). The mod's second install folder here sits in a read-only
+    /// blueprints folder, which only blocks moving it: the plugin itself
+    /// still stages in the writable mods folder. Mods are moved aside before
+    /// blueprints, so the plugin folder has to be moved back.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_update_whose_previous_folder_cannot_be_moved_keeps_it_complete() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("129001_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        let blueprint_dir = kind_root_dir(temp.path(), InstalledModKind::Blueprint);
+        let locked = blueprint_dir.join("129001_1_Mod");
+        fs::create_dir_all(&locked).unwrap();
+        fs::write(locked.join("mod.zeeplevel"), b"old-level").unwrap();
+        fs::set_permissions(&blueprint_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let (server, _) = fake_modio_serving_mod(129_001, &kind_dir, (200, "MZ-new"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 129_001, None).await;
+
+        fs::set_permissions(&blueprint_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err(), "the previous folder can't be moved, so the update fails");
+        assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
+        assert_eq!(fs::read(locked.join("mod.zeeplevel")).unwrap(), b"old-level");
+        // Nothing else either: no new version, staging folder, or folder
+        // left moved aside.
+        let entries: Vec<String> = fs::read_dir(&kind_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["129001_1_Mod".to_string()]);
+    }
+
+    /// The previous version is only deleted once the new one is in place.
+    #[tokio::test]
+    async fn an_update_that_cannot_move_the_new_version_into_place_keeps_the_previous_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("129002_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        // A file where the new version's folder goes: the folder can't be
+        // moved onto it.
+        fs::write(kind_dir.join("129002_2_Mod"), b"in the way").unwrap();
+        let (server, _) = fake_modio_serving_mod(129_002, &kind_dir, (200, "MZ-new"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 129_002, None).await;
+
+        assert!(result.is_err(), "the new version can't be moved into place, so the update fails");
+        assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
     }
 
     /// The next launch removes a leftover staging folder at info, so a staging

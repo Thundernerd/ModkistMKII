@@ -408,7 +408,7 @@ async fn install_picked_version(state: &ModioState, file_id: u64) -> Result<Inst
         &mut HashMap::new(),
         InstallTargetsOptions {
             auto_update: true,
-            file_override: Some((100, file_id)),
+            file_override: Some(FileOverride { mod_id: 100, file_id }),
             root_mod_id: Some(100),
             ..Default::default()
         },
