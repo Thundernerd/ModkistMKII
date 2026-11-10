@@ -20,6 +20,11 @@ pub(crate) struct Received {
     pub(crate) bearer: bool,
 }
 
+/// Per-response headers real mod.io sends (through Cloudflare), so tests can
+/// check they stay out of Sentry.
+pub(crate) const FAKE_DATE: &str = "Tue, 10 Nov 2026 12:34:56 GMT";
+pub(crate) const FAKE_COOKIE: &str = "__cf_bm=fake-cloudflare-cookie; path=/; HttpOnly";
+
 type Responder = dyn Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync;
 
 /// Minimal HTTP/1.1 server: one response per connection, records every request.
@@ -65,7 +70,7 @@ impl FakeModio {
                 log.lock().unwrap().push(request.clone());
                 let (status, error_ref, body) = respond(&request);
                 let mut response = format!(
-                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\ndate: {FAKE_DATE}\r\nset-cookie: {FAKE_COOKIE}\r\n",
                     body.len()
                 );
                 if let Some(error_ref) = error_ref {
@@ -301,7 +306,7 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
 
     assert!(mod_error.is_server_error() && deps_error.is_server_error());
     let reports = sentry_reports();
-    for path in ["/games/3213/mods/2400035 ", "/games/3213/mods/2400035/dependencies"] {
+    for path in ["/games/{game}/mods/{mod} ", "/games/{game}/mods/{mod}/dependencies"] {
         assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
     }
 }
@@ -387,4 +392,98 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
 
     assert_eq!(original.len(), 1, "{original:#?}");
     assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
+}
+
+// --- Stable Sentry text for failed requests (issue #121) ---------------------
+
+fn service_unavailable() -> (u16, Option<u32>, String) {
+    (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string())
+}
+
+#[tokio::test]
+async fn a_failed_request_reports_no_response_headers() {
+    capture_reports();
+    let server = FakeModio::start(|_| service_unavailable());
+    let (client, _) = server.client();
+
+    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+
+    let reports = sentry_reports();
+    assert!(!reports.is_empty(), "the failure should still be reported");
+    for report in &reports {
+        assert!(!report.contains(FAKE_DATE), "report contains the date header: {report}");
+        assert!(!report.contains(FAKE_COOKIE), "report contains the cookie: {report}");
+    }
+}
+
+/// Sentry groups message events by their text, so the same failure on
+/// different mods must be one issue, not one per mod.
+#[tokio::test]
+async fn the_same_failure_on_different_mods_is_reported_with_the_same_text() {
+    let server = FakeModio::start(|_| service_unavailable());
+    let (client, _) = server.client();
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let first = sentry_reports();
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 1, 2, None).await;
+    let second = sentry_reports();
+
+    assert_eq!(first.len(), 1, "{first:#?}");
+    assert_eq!(first, second, "both failures should file the same Sentry issue");
+    assert!(first[0].contains("GET /games/{game}/mods/{mod}/files/{file} "), "{}", first[0]);
+    assert!(first[0].contains("503"), "the report should keep the status: {}", first[0]);
+}
+
+/// A private mod read with a session token while mod.io rate limits: the
+/// api_key read is refused, and the bearer retry gets a 429.
+fn private_mod_rate_limited_on_retry(request: &Received) -> (u16, Option<u32>, String) {
+    if request.bearer {
+        (429, None, r#"{"error":{"code":429,"message":"Too Many Requests"}}"#.to_string())
+    } else {
+        forbidden()
+    }
+}
+
+#[tokio::test]
+async fn a_rate_limited_bearer_retry_is_reported_once() {
+    capture_reports();
+    let server = FakeModio::start(private_mod_rate_limited_on_retry);
+    let (client, _) = server.client();
+
+    let error = client.get_mod(GAME_ID, 2400035, Some(TOKEN)).await.err().expect("request should fail");
+
+    assert!(error.is_rate_limited());
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report for the failed read, got {reports:#?}");
+    assert!(reports[0].contains("429"), "the report should be the rate limit: {}", reports[0]);
+}
+
+/// A base URL nothing listens on, so every request fails before a response.
+fn unreachable_base_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    drop(listener);
+    base_url
+}
+
+#[tokio::test]
+async fn a_transport_failure_is_reported_with_the_same_text_for_every_mod() {
+    let client = ApiClient::new("game-key".into(), Some(GAME_ID), None, false)
+        .unwrap()
+        .with_base_url(unreachable_base_url());
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let first = sentry_reports();
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 1, 2, None).await;
+    let second = sentry_reports();
+
+    assert_eq!(first.len(), 1, "{first:#?}");
+    assert_eq!(first, second, "both failures should file the same Sentry issue");
+    assert!(!first[0].contains("game-key"), "the report contains the API key: {}", first[0]);
 }
