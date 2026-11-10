@@ -1205,7 +1205,7 @@ struct InstallTargetsOptions<'a> {
     file_override: Option<(u64, u64)>,
     /// Mod details already fetched, so they are not requested again.
     mods_by_id: Option<&'a HashMap<u64, ModObject>>,
-    /// Where to record a failed target instead of aborting the whole install.
+    /// Where to record and clear per-mod sync failures; `None` means they are not persisted.
     sync_failure_context: Option<SyncFailureContext<'a>>,
     /// The mod the user asked to install; the other targets are its dependencies.
     root_mod_id: Option<u64>,
