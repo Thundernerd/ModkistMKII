@@ -248,11 +248,19 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if is_stale_staging_dir_name(&name) {
-            // Left behind by an install that failed or crashed in an earlier
-            // run. BepInEx loads plugins from hidden subfolders too, so a
-            // leftover staging dir would load a duplicate copy of the mod.
-            log::warn!("Removing stale mod install staging folder: {}", entry.path().display());
-            let _ = remove_dir_all_with_retry(&entry.path());
+            // Left behind when an earlier run exited mid-install (the app was
+            // closed or restarted for an update). Removing it is routine
+            // housekeeping, so it is logged at info and not sent to Sentry.
+            // BepInEx loads plugins from hidden subfolders too, so a staging
+            // dir that can't be removed would load a duplicate copy of the
+            // mod: that is worth a report.
+            log::info!("Removing stale mod install staging folder: {}", entry.path().display());
+            if let Err(error) = remove_dir_all_with_retry(&entry.path()) {
+                log::warn!(
+                    "Did not remove stale mod install staging folder {}: {error}",
+                    entry.path().display()
+                );
+            }
             continue;
         }
         let Some((mod_id, file_id)) = parse_install_folder_name(&name) else {
@@ -839,6 +847,19 @@ fn is_transient_lock_error(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5) | Some(32))
 }
 
+/// Removes this run's staging directory after the install is done with it.
+/// A staging directory that can't be removed is reported: BepInEx would load
+/// the mod from it as well, and the next launch removes leftovers at info
+/// level only (issue #80).
+fn remove_staging_dir(staging_dir: &Path) {
+    if let Err(error) = remove_dir_all_with_retry(staging_dir) {
+        log::warn!(
+            "Did not remove mod install staging directory {}: {error}",
+            staging_dir.display()
+        );
+    }
+}
+
 async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -> Result<(), String> {
     let mut rename_error = match fs::rename(staging_dir, target_dir) {
         Ok(()) => return Ok(()),
@@ -872,18 +893,12 @@ async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -
         let _ = remove_dir_all_with_retry(target_dir);
         match copy_dir_recursive(staging_dir, target_dir) {
             Ok(()) => {
-                if let Err(error) = remove_dir_all_with_retry(staging_dir) {
-                    // scan_kind_directory removes it on the next launch.
-                    log::warn!(
-                        "Did not remove mod install staging directory {}: {error}",
-                        staging_dir.display()
-                    );
-                }
+                remove_staging_dir(staging_dir);
                 return Ok(());
             }
             Err(copy_error) => {
                 let _ = remove_dir_all_with_retry(target_dir);
-                let _ = remove_dir_all_with_retry(staging_dir);
+                remove_staging_dir(staging_dir);
                 return Err(format!(
                     "Did not move installed mod into place at {}: {rename_error} (copy fallback: {copy_error})",
                     target_dir.display()
@@ -892,7 +907,7 @@ async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -
         }
     }
 
-    let _ = remove_dir_all_with_retry(staging_dir);
+    remove_staging_dir(staging_dir);
     Err(format!(
         "Did not move installed mod into place at {}: {rename_error}",
         target_dir.display()
@@ -946,6 +961,18 @@ async fn install_single_mod(
         .map_err(|e| format!("Did not create {}: {e}", kind_dir.display()))?;
     let target_dir = kind_dir.join(install_folder_name(mod_id, file_id, &mod_.name));
 
+    // Download before creating the staging directory: the download is the
+    // slowest step, and a staging directory left behind by an app that is
+    // closed mid-install sits in the game's mods folder until the next launch
+    // removes it (issue #80).
+    let temp_dir = std::env::temp_dir().join("modkist-mod-install");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
+    let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
+    if let Err(message) = download_modfile(state, &download_url, &download_path, Some(expected_size)).await {
+        let _ = fs::remove_file(&download_path);
+        return Err(message.into());
+    }
+
     // Extract into a staging directory instead of target_dir directly. Its name
     // doesn't parse as `mod_id_file_id[_name]`, so scan_kind_directory (which
     // runs concurrently whenever anything refreshes the installed-mods list)
@@ -953,34 +980,19 @@ async fn install_single_mod(
     // directory that happens to share the final install folder's name and
     // deleting it out from under this install.
     let staging_dir = kind_dir.join(staging_dir_name(mod_id, file_id));
-    fs::create_dir_all(&staging_dir).map_err(|e| {
-        format!(
-            "Did not create mod install staging directory {}: {e}",
-            staging_dir.display()
-        )
-    })?;
-
-    let temp_dir = std::env::temp_dir().join("modkist-mod-install");
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
-    let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
-
-    let install_result = async {
-        download_modfile(
-            state,
-            &download_url,
-            &download_path,
-            Some(expected_size),
-        )
-        .await?;
-        install_downloaded_mod(&download_path, &staging_dir, &filename)?;
-        Ok::<(), String>(())
-    }
-    .await;
+    let extract_result = fs::create_dir_all(&staging_dir)
+        .map_err(|e| {
+            format!(
+                "Did not create mod install staging directory {}: {e}",
+                staging_dir.display()
+            )
+        })
+        .and_then(|()| install_downloaded_mod(&download_path, &staging_dir, &filename));
 
     let _ = fs::remove_file(&download_path);
 
-    if let Err(message) = install_result {
-        let _ = fs::remove_dir_all(&staging_dir);
+    if let Err(message) = extract_result {
+        remove_staging_dir(&staging_dir);
         return Err(message.into());
     }
 
@@ -2235,22 +2247,159 @@ mod tests {
         assert!(!is_stale_staging_dir_name("3285481_8137916_Random Track Mode"));
     }
 
+    /// A staging folder with a mod in it, named as an earlier process would.
+    fn stale_staging_dir(kind_dir: &Path) -> PathBuf {
+        let other_pid = std::process::id().wrapping_add(1);
+        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("mod.dll"), b"test").unwrap();
+        stale
+    }
+
     #[test]
     fn scan_installed_mods_removes_stale_staging_dirs() {
         let temp = tempfile::tempdir().expect("tempdir");
         let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
-        let other_pid = std::process::id().wrapping_add(1);
-        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
+        let stale = stale_staging_dir(&kind_dir);
         let live = kind_dir.join(staging_dir_name(1, 2));
-        for dir in [&stale, &live] {
-            fs::create_dir_all(dir).unwrap();
-            fs::write(dir.join("mod.dll"), b"test").unwrap();
-        }
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("mod.dll"), b"test").unwrap();
 
         scan_installed_mods(temp.path()).unwrap();
 
         assert!(!stale.exists());
         assert!(live.exists());
+    }
+
+    #[test]
+    fn removing_a_stale_staging_dir_is_not_reported_to_sentry() {
+        use crate::logging::report_capture::{capture_reports, sentry_reports};
+
+        capture_reports();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let stale = stale_staging_dir(&kind_root_dir(temp.path(), InstalledModKind::Plugin));
+
+        scan_installed_mods(temp.path()).unwrap();
+
+        assert!(!stale.exists());
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    /// Names of the staging folders in `kind_dir`.
+    fn staging_dirs_in(kind_dir: &Path) -> Vec<String> {
+        fs::read_dir(kind_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with(STAGING_DIR_PREFIX))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A fake mod.io serving plugin `mod_id` with file 2 (`mod.dll`). The
+    /// download answers `download` and records the staging folders in
+    /// `kind_dir` at the moment it is requested. Tests running in parallel
+    /// need different mod ids: the download goes to a shared temp path.
+    fn fake_modio_serving_mod(
+        mod_id: u64,
+        kind_dir: &Path,
+        download: (u16, &'static str),
+    ) -> (crate::modio_api::auth_tests::FakeModio, std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>) {
+        use std::sync::{Arc, Mutex};
+
+        let seen_during_download = Arc::new(Mutex::new(None));
+        let seen = seen_during_download.clone();
+        let observed_dir = kind_dir.to_path_buf();
+        let base_url = Arc::new(Mutex::new(String::new()));
+        let mod_url = base_url.clone();
+        let server = crate::modio_api::auth_tests::FakeModio::start(move |request| {
+            if request.path == "/download/mod.dll" {
+                *seen.lock().unwrap() = Some(staging_dirs_in(&observed_dir));
+                return (download.0, None, download.1.to_string());
+            }
+            let download_url = format!("{}/download/mod.dll", mod_url.lock().unwrap());
+            let body = format!(
+                r#"{{"id":{mod_id},"status":1,"name":"Mod","tags":[{{"name":"{PLUGIN_TAG}"}}],
+                    "modfile":{{"id":2,"filename":"mod.dll","filesize":{},"download":{{"binary_url":"{download_url}"}}}}}}"#,
+                download.1.len()
+            );
+            (200, None, body)
+        });
+        *base_url.lock().unwrap() = server.base_url.clone();
+        (server, seen_during_download)
+    }
+
+    /// Closing the app mid-download, the slowest step of an install, must not
+    /// leave a staging folder in the game's mods folder for the next launch
+    /// to clean up (issue #80).
+    #[tokio::test]
+    async fn no_staging_folder_exists_while_the_mod_file_downloads() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let (server, seen_during_download) = fake_modio_serving_mod(80_001, &kind_dir, (404, ""));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 80_001, None).await;
+
+        assert!(result.is_err(), "the download is refused, so the install fails");
+        assert_eq!(
+            *seen_during_download.lock().unwrap(),
+            Some(Vec::<String>::new()),
+            "the mods folder should hold no staging folder while the file downloads"
+        );
+        assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_downloaded_mod_is_installed_without_leaving_a_staging_folder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let (server, _) = fake_modio_serving_mod(80_002, &kind_dir, (200, "MZ-plugin"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        install_single_mod(&state, temp.path(), 80_002, None).await.unwrap();
+
+        let records = scan_installed_mods(temp.path()).unwrap();
+        assert_eq!(records.len(), 1);
+        let installed = kind_dir.join(&records[0].folder_name);
+        assert_eq!(fs::read(installed.join("mod.dll")).unwrap(), b"MZ-plugin");
+        assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
+    }
+
+    /// The next launch removes a leftover staging folder at info, so a staging
+    /// folder this run fails to remove must be reported now, or the leak
+    /// (BepInEx loading the mod twice) is never seen.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_staging_folder_left_by_a_failed_move_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::logging::report_capture::{capture_reports, sentry_reports};
+
+        capture_reports();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = temp.path().join("Mods");
+        let staging = kind_dir.join(staging_dir_name(1, 2));
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("mod.dll"), b"test").unwrap();
+        // A read-only mods folder: neither the rename nor the staging
+        // folder's removal can succeed.
+        fs::set_permissions(&kind_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = move_staged_install_into_place(&staging, &kind_dir.join("1_2_Mod")).await;
+
+        fs::set_permissions(&kind_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err());
+        assert!(staging.exists());
+        let reports = sentry_reports();
+        assert!(
+            reports
+                .iter()
+                .any(|report| report.starts_with("WARN") && report.contains(&staging.display().to_string())),
+            "{reports:#?}"
+        );
     }
 
     #[tokio::test]
