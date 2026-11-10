@@ -20,6 +20,11 @@ pub(crate) struct Received {
     pub(crate) bearer: bool,
 }
 
+/// Per-response headers real mod.io sends (through Cloudflare), so tests can
+/// check they stay out of Sentry.
+pub(crate) const FAKE_DATE: &str = "Tue, 10 Nov 2026 12:34:56 GMT";
+pub(crate) const FAKE_COOKIE: &str = "__cf_bm=fake-cloudflare-cookie; path=/; HttpOnly";
+
 type Responder = dyn Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync;
 
 /// Minimal HTTP/1.1 server: one response per connection, records every request.
@@ -65,7 +70,7 @@ impl FakeModio {
                 log.lock().unwrap().push(request.clone());
                 let (status, error_ref, body) = respond(&request);
                 let mut response = format!(
-                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\ndate: {FAKE_DATE}\r\nset-cookie: {FAKE_COOKIE}\r\n",
                     body.len()
                 );
                 if let Some(error_ref) = error_ref {
@@ -301,7 +306,7 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
 
     assert!(mod_error.is_server_error() && deps_error.is_server_error());
     let reports = sentry_reports();
-    for path in ["/games/3213/mods/2400035 ", "/games/3213/mods/2400035/dependencies"] {
+    for path in ["/games/{game}/mods/{mod} ", "/games/{game}/mods/{mod}/dependencies"] {
         assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
     }
 }
@@ -387,4 +392,47 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
 
     assert_eq!(original.len(), 1, "{original:#?}");
     assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
+}
+
+// --- Stable Sentry text for failed requests (issue #121) ---------------------
+
+fn service_unavailable() -> (u16, Option<u32>, String) {
+    (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string())
+}
+
+#[tokio::test]
+async fn a_failed_request_reports_no_response_headers() {
+    capture_reports();
+    let server = FakeModio::start(|_| service_unavailable());
+    let (client, _) = server.client();
+
+    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+
+    let reports = sentry_reports();
+    assert!(!reports.is_empty(), "the failure should still be reported");
+    for report in &reports {
+        assert!(!report.contains(FAKE_DATE), "report contains the date header: {report}");
+        assert!(!report.contains("fake-cloudflare-cookie"), "report contains the cookie: {report}");
+    }
+}
+
+/// Sentry groups message events by their text, so the same failure on
+/// different mods must be one issue, not one per mod.
+#[tokio::test]
+async fn the_same_failure_on_different_mods_is_reported_with_the_same_text() {
+    let server = FakeModio::start(|_| service_unavailable());
+    let (client, _) = server.client();
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let first = sentry_reports();
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 1, 2, None).await;
+    let second = sentry_reports();
+
+    assert_eq!(first.len(), 1, "{first:#?}");
+    assert_eq!(first, second, "both failures should file the same Sentry issue");
+    assert!(first[0].contains("GET /games/{game}/mods/{mod}/files/{file} "), "{}", first[0]);
+    assert!(first[0].contains("503"), "the report should keep the status: {}", first[0]);
 }
