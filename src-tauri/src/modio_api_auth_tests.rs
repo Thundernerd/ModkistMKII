@@ -406,3 +406,23 @@ async fn a_refused_api_key_is_one_sentry_issue_whichever_request_is_refused_firs
     assert_eq!(tags_first.len(), 1, "{tags_first:#?}");
     assert_eq!(tags_first, email_first, "both runs should file the same Sentry issue");
 }
+
+#[tokio::test]
+async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
+    capture_reports();
+    let server = FakeModio::start(|_| api_key_invalid());
+    let reworded = FakeModio::start(|_| {
+        (401, Some(API_KEY_INVALID_ERROR_REF), error_body(API_KEY_INVALID_ERROR_REF, "The api_key you supplied is not valid."))
+    });
+
+    let (first_run, _) = server.client();
+    let _ = first_run.get_game_tags(GAME_ID).await;
+    let original = sentry_reports();
+
+    capture_reports();
+    let (second_run, _) = reworded.client();
+    let _ = second_run.get_game_tags(GAME_ID).await;
+
+    assert_eq!(original.len(), 1, "{original:#?}");
+    assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
+}

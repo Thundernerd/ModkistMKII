@@ -225,9 +225,10 @@ impl ApiError {
     }
 
     /// A refused game API key fails every public read the same way. Every
-    /// refusal logs at info with its path; the first per client is also
-    /// reported (error) without it: Sentry groups message events by their text,
-    /// and the first refused request differs from run to run.
+    /// refusal logs at info with its path and mod.io's message; the first per
+    /// client is also reported (error) with neither: Sentry groups message
+    /// events by their text, and the first refused request differs from run to
+    /// run. The report keeps `error_ref`, which says why the key was refused.
     fn log_api_key_rejected(&self, context: &str, first: bool) {
         log::info!(
             "mod.io API error [{context}] (game API key refused): {} (status={:?}, error_ref={:?})",
@@ -237,8 +238,7 @@ impl ApiError {
         );
         if first {
             log::error!(
-                "mod.io API error (game API key refused, later refusals logged at info): {} (status={:?}, error_ref={:?})",
-                self.message,
+                "mod.io API error (game API key refused, later refusals logged at info): status={:?}, error_ref={:?}",
                 self.status,
                 self.error_ref
             );
