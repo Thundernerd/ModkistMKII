@@ -1155,10 +1155,10 @@ fn ensure_session_not_rejected(state: &ModioState, session: Option<&str>) -> Res
 
 fn track_sync_dependency_failure(
     target_mod_id: u64,
-    sync_failure_roots: &HashSet<u64>,
+    targets: &SyncFailureTargets,
     failed_dependencies: &mut Vec<u64>,
 ) {
-    if sync_failure_roots.contains(&target_mod_id) {
+    if targets.is_root(target_mod_id) {
         return;
     }
     if failed_dependencies.contains(&target_mod_id) {
@@ -1167,59 +1167,90 @@ fn track_sync_dependency_failure(
     failed_dependencies.push(target_mod_id);
 }
 
-fn augment_dependency_subscribers_from_cache(
-    state: &ModioState,
-    subscribed_mod_ids: &[u64],
-    dependency_to_subscribers: &mut HashMap<u64, HashSet<u64>>,
-) {
-    for &mod_id in subscribed_mod_ids {
-        let Some(deps) = state.cached_dependencies(mod_id) else {
-            continue;
-        };
-        for dep_id in deps {
-            if dep_id != mod_id {
-                dependency_to_subscribers
-                    .entry(dep_id)
-                    .or_default()
-                    .insert(mod_id);
-            }
-        }
-    }
-}
-
 fn record_sync_failure_for_target(
     app: &AppHandle,
     target_mod_id: u64,
     category: &str,
     message: &str,
-    sync_failure_roots: &HashSet<u64>,
-    dependency_to_subscribers: &HashMap<u64, HashSet<u64>>,
+    targets: &SyncFailureTargets,
 ) {
     let detail = format!("Required dependency (mod {target_mod_id}): {message}");
+    let is_root = targets.is_root(target_mod_id);
 
-    if sync_failure_roots.contains(&target_mod_id) {
+    if is_root {
         let _ = record_failed_sync_mod(app, target_mod_id, category, message);
     }
 
-    let Some(subscribers) = dependency_to_subscribers.get(&target_mod_id) else {
-        if !sync_failure_roots.contains(&target_mod_id) {
+    let Some(subscribers) = targets
+        .dependency_to_subscribers
+        .get(&target_mod_id)
+        .filter(|subscribers| !subscribers.is_empty())
+    else {
+        if !is_root {
             let _ = record_failed_sync_mod(app, target_mod_id, "dependency", &detail);
         }
         return;
     };
 
-    if subscribers.is_empty() {
-        if !sync_failure_roots.contains(&target_mod_id) {
-            let _ = record_failed_sync_mod(app, target_mod_id, "dependency", &detail);
-        }
-        return;
-    }
-
     for &subscribed_mod_id in subscribers {
-        if subscribed_mod_id == target_mod_id && sync_failure_roots.contains(&target_mod_id) {
+        if subscribed_mod_id == target_mod_id && is_root {
             continue;
         }
         let _ = record_failed_sync_mod(app, subscribed_mod_id, "dependency", &detail);
+    }
+}
+
+/// The mods a sync failure can be recorded against.
+#[derive(Debug)]
+struct SyncFailureTargets {
+    /// The subscribed mods, or the one mod the user asked to install; their own failures are recorded against them.
+    roots: HashSet<u64>,
+    /// For each dependency, the roots that need it; its failures are recorded against them.
+    dependency_to_subscribers: HashMap<u64, HashSet<u64>>,
+}
+
+impl SyncFailureTargets {
+    fn new(roots: impl IntoIterator<Item = u64>) -> Self {
+        Self {
+            roots: roots.into_iter().collect(),
+            dependency_to_subscribers: HashMap::new(),
+        }
+    }
+
+    /// The targets for a manual install of `mod_id`: the mod itself is the root, and every
+    /// other mod in its install `order` is a dependency it needs.
+    fn for_manual_install(mod_id: u64, order: &[u64]) -> Self {
+        let mut targets = Self::new([mod_id]);
+        for &target_mod_id in order {
+            targets.add_dependency(target_mod_id, mod_id);
+        }
+        targets
+    }
+
+    /// Records that `subscriber` needs `dependency`. A mod is never its own dependency.
+    fn add_dependency(&mut self, dependency: u64, subscriber: u64) {
+        if dependency != subscriber {
+            self.dependency_to_subscribers
+                .entry(dependency)
+                .or_default()
+                .insert(subscriber);
+        }
+    }
+
+    /// Adds the dependencies cached for each of `subscribed_mod_ids`.
+    fn add_cached_dependencies(&mut self, state: &ModioState, subscribed_mod_ids: &[u64]) {
+        for &mod_id in subscribed_mod_ids {
+            let Some(deps) = state.cached_dependencies(mod_id) else {
+                continue;
+            };
+            for dep_id in deps {
+                self.add_dependency(dep_id, mod_id);
+            }
+        }
+    }
+
+    fn is_root(&self, mod_id: u64) -> bool {
+        self.roots.contains(&mod_id)
     }
 }
 
@@ -1227,10 +1258,7 @@ fn record_sync_failure_for_target(
 #[derive(Clone, Copy)]
 struct SyncFailureContext<'a> {
     app: &'a AppHandle,
-    /// The subscribed mods, or the one mod the user asked to install; their own failures are recorded against them.
-    roots: &'a HashSet<u64>,
-    /// For each dependency, the roots that need it; its failures are recorded against them.
-    dependency_to_subscribers: &'a HashMap<u64, HashSet<u64>>,
+    targets: &'a SyncFailureTargets,
 }
 
 /// Clears a recorded sync failure for `mod_id`, if failures are being persisted.
@@ -1285,49 +1313,20 @@ fn record_install_target_failure(
         );
     }
 
-    if let Some(SyncFailureContext {
-        app,
-        roots,
-        dependency_to_subscribers,
-    }) = sync_failure_context
-    {
-        if dependency_to_subscribers.is_empty() {
-            if roots.contains(&target_mod_id) {
+    if let Some(SyncFailureContext { app, targets }) = sync_failure_context {
+        if targets.dependency_to_subscribers.is_empty() {
+            if targets.is_root(target_mod_id) {
                 let _ = record_failed_sync_mod(app, target_mod_id, category, message);
             }
         } else {
-            record_sync_failure_for_target(
-                app,
-                target_mod_id,
-                category,
-                message,
-                roots,
-                dependency_to_subscribers,
-            );
+            record_sync_failure_for_target(app, target_mod_id, category, message, targets);
         }
-        track_sync_dependency_failure(target_mod_id, roots, failed_dependencies);
+        track_sync_dependency_failure(target_mod_id, targets, failed_dependencies);
     } else if is_dependency && !failed_dependencies.contains(&target_mod_id) {
         failed_dependencies.push(target_mod_id);
     }
 
     true
-}
-
-fn build_manual_install_sync_failure_context(
-    mod_id: u64,
-    order: &[u64],
-) -> (HashSet<u64>, HashMap<u64, HashSet<u64>>) {
-    let sync_failure_roots: HashSet<u64> = HashSet::from([mod_id]);
-    let mut dependency_to_subscribers: HashMap<u64, HashSet<u64>> = HashMap::new();
-    for &target_mod_id in order {
-        if target_mod_id != mod_id {
-            dependency_to_subscribers
-                .entry(target_mod_id)
-                .or_default()
-                .insert(mod_id);
-        }
-    }
-    (sync_failure_roots, dependency_to_subscribers)
 }
 
 /// A specific file version to install for one mod instead of its latest file.
@@ -1511,13 +1510,11 @@ async fn install_mod_internal(
     let mut dependency_map = HashMap::new();
     refresh_dependency_map(state, &mut dependency_map, &records).await;
 
-    let (sync_failure_roots, mut dependency_to_subscribers) =
-        build_manual_install_sync_failure_context(mod_id, &order);
-    augment_dependency_subscribers_from_cache(state, &[mod_id], &mut dependency_to_subscribers);
+    let mut sync_failure_targets = SyncFailureTargets::for_manual_install(mod_id, &order);
+    sync_failure_targets.add_cached_dependencies(state, &[mod_id]);
     let sync_failure_context = SyncFailureContext {
         app,
-        roots: &sync_failure_roots,
-        dependency_to_subscribers: &dependency_to_subscribers,
+        targets: &sync_failure_targets,
     };
 
     let should_subscribe =
@@ -1709,7 +1706,7 @@ async fn run_subscription_sync(
     }
 
     let subscribed_count = mod_ids.len();
-    let subscribed_roots: HashSet<u64> = mod_ids.iter().copied().collect();
+    let mut sync_failure_targets = SyncFailureTargets::new(mod_ids.iter().copied());
 
     let (mut records, mods_by_id) = prepare_installed_records(app, state, &game_dir).await?;
     let mut dependency_map = HashMap::new();
@@ -1719,7 +1716,6 @@ async fn run_subscription_sync(
     // do not call subscribe_to_mod here (OAuth writes are limited to 60/min).
     let mut install_order = Vec::new();
     let mut seen_targets = HashSet::new();
-    let mut dependency_to_subscribers: HashMap<u64, HashSet<u64>> = HashMap::new();
     for mod_id in &mod_ids {
         ensure_subscription_sync_may_continue(app, state).await?;
         match collect_install_order(state, *mod_id).await {
@@ -1728,12 +1724,7 @@ async fn run_subscription_sync(
                     if drop_reasons.contains_key(&target_mod_id) {
                         continue;
                     }
-                    if *mod_id != target_mod_id {
-                        dependency_to_subscribers
-                            .entry(target_mod_id)
-                            .or_default()
-                            .insert(*mod_id);
-                    }
+                    sync_failure_targets.add_dependency(target_mod_id, *mod_id);
                     if ignored.contains(&target_mod_id) {
                         continue;
                     }
@@ -1763,7 +1754,7 @@ async fn run_subscription_sync(
             }
         }
     }
-    augment_dependency_subscribers_from_cache(state, &mod_ids, &mut dependency_to_subscribers);
+    sync_failure_targets.add_cached_dependencies(state, &mod_ids);
 
     log::info!(
         "Syncing {subscribed_count} subscribed mod(s), {} unique install target(s)",
@@ -1784,8 +1775,7 @@ async fn run_subscription_sync(
             mods_by_id: Some(&mods_by_id),
             sync_failure_context: Some(SyncFailureContext {
                 app,
-                roots: &subscribed_roots,
-                dependency_to_subscribers: &dependency_to_subscribers,
+                targets: &sync_failure_targets,
             }),
             ..Default::default()
         },
