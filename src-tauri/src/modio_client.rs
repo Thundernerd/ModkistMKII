@@ -1112,8 +1112,9 @@ impl MaybeRateLimited for ModioError {
 /// runs it once more, returning that result whatever it is. The retry does not
 /// sleep itself: `operation` must send through the shared `ApiClient`, which
 /// holds every request after a 429 until mod.io's `Retry-After` window ends
-/// (60 s when mod.io sends none). `request` names the request in the log line,
-/// e.g. `Some("batch mod fetch")`.
+/// ([`DEFAULT_RETRY_AFTER_SECS`](crate::modio_api::DEFAULT_RETRY_AFTER_SECS)
+/// when mod.io sends none). `request` names the request in the log line, e.g.
+/// `Some("batch mod fetch")`.
 pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(
     request: Option<&str>,
     mut operation: F,
