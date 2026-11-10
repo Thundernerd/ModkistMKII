@@ -1,7 +1,8 @@
 # Checks every pull request to main, and every push to main.
 #
 # Runs the type check, the node:test suites for the release scripts under
-# .github/scripts/, and the Rust tests in src-tauri. Any failing step fails the run.
+# .github/scripts/, the Rust tests in src-tauri, and clippy on src-tauri with
+# warnings as errors. Any failing step fails the run.
 # This workflow does not build installers (see the Build workflow) and needs no secrets.
 
 name: CI
@@ -36,6 +37,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -57,7 +60,7 @@ jobs:
         id: install
         run: npm ci
 
-      # The three checks below run even if an earlier one fails, so one run reports
+      # The four checks below run even if an earlier one fails, so one run reports
       # every failing check. They are skipped only when setup itself failed.
       - name: Type check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -71,3 +74,8 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo test --locked
+
+      - name: Rust clippy
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
