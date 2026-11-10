@@ -2273,7 +2273,7 @@ mod tests {
 
     #[test]
     fn removing_a_stale_staging_dir_is_not_reported_to_sentry() {
-        use crate::modio_api::auth_tests::{capture_reports, sentry_reports};
+        use crate::logging::report_capture::{capture_reports, sentry_reports};
 
         capture_reports();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -2376,7 +2376,7 @@ mod tests {
     async fn a_staging_folder_left_by_a_failed_move_is_reported() {
         use std::os::unix::fs::PermissionsExt;
 
-        use crate::modio_api::auth_tests::{capture_reports, sentry_reports};
+        use crate::logging::report_capture::{capture_reports, sentry_reports};
 
         capture_reports();
         let temp = tempfile::tempdir().expect("tempdir");
