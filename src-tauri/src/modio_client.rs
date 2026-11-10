@@ -675,31 +675,42 @@ fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModioError {
     pub message: String,
-    pub credentials_rejected: bool,
-    sign_in_required: bool,
-    modfile_deleted: bool,
+    handled: Handled,
+}
+
+/// Why a `ModioError` was already handled (reported or explained to the user)
+/// before it reached the caller, if it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Handled {
+    No,
+    CredentialsRejected,
+    SignInRequired,
+    ModfileDeleted,
 }
 
 impl ModioError {
+    fn new(message: String, handled: Handled) -> Self {
+        Self { message, handled }
+    }
+
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
-        let credentials_rejected = error.is_unauthorized();
-        Self {
-            message: format_api_error_logged_in(error, logged_in),
-            credentials_rejected,
-            sign_in_required: false,
-            modfile_deleted: false,
-        }
+        let handled = if error.is_unauthorized() {
+            Handled::CredentialsRejected
+        } else {
+            Handled::No
+        };
+        Self::new(format_api_error_logged_in(error, logged_in), handled)
     }
 
     /// The version the user picked is gone: its author deleted or replaced
     /// the file on mod.io.
     pub(crate) fn modfile_deleted(mod_name: &str) -> Self {
-        Self {
-            modfile_deleted: true,
-            ..Self::from(format!(
+        Self::new(
+            format!(
                 "This version of {mod_name} is no longer on mod.io. Its author deleted or replaced it. Pick another version, or install the latest one."
-            ))
-        }
+            ),
+            Handled::ModfileDeleted,
+        )
     }
 
     /// The failure of a single mod's read (`get_mod`, `get_mod_dependencies`).
@@ -707,36 +718,39 @@ impl ModioError {
     /// `ApiClient` already logs at info.
     pub(crate) fn from_mod_read(error: ApiError, logged_in: bool, token_sent: bool) -> Self {
         let sign_in_required = !token_sent && error.is_forbidden();
-        Self {
-            sign_in_required,
-            ..Self::from_api(error, logged_in)
+        let error = Self::from_api(error, logged_in);
+        if sign_in_required {
+            Self::new(error.message, Handled::SignInRequired)
+        } else {
+            error
         }
+    }
+
+    /// True when mod.io rejected our credentials (HTTP 401), or the read was
+    /// skipped because it already rejected the session.
+    pub(crate) fn credentials_rejected(&self) -> bool {
+        self.handled == Handled::CredentialsRejected
     }
 
     /// True when the picked version's file was deleted on mod.io.
     pub(crate) fn is_modfile_deleted(&self) -> bool {
-        self.modfile_deleted
+        self.handled == Handled::ModfileDeleted
     }
 
     /// The failure of a read skipped because mod.io already rejected the
     /// session it would have used.
     pub(crate) fn session_rejected() -> Self {
-        Self {
-            message: "Your mod.io session has expired. Sign in again.".to_string(),
-            credentials_rejected: true,
-            sign_in_required: false,
-            modfile_deleted: false,
-        }
+        Self::new(
+            "Your mod.io session has expired. Sign in again.".to_string(),
+            Handled::CredentialsRejected,
+        )
     }
 
-    /// `level` for an ordinary failure; info when mod.io rejected our
-    /// credentials, the user must sign in to read the mod, or the picked
-    /// version was deleted.
+    /// `level` for an ordinary failure; info when the failure was already
+    /// handled: mod.io rejected our credentials, the user must sign in to
+    /// read the mod, or the picked version was deleted.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
-        level_unless_already_handled(
-            self.credentials_rejected || self.sign_in_required || self.modfile_deleted,
-            level,
-        )
+        level_unless_already_handled(self.handled != Handled::No, level)
     }
 }
 
@@ -748,12 +762,7 @@ impl std::fmt::Display for ModioError {
 
 impl From<String> for ModioError {
     fn from(message: String) -> Self {
-        Self {
-            message,
-            credentials_rejected: false,
-            sign_in_required: false,
-            modfile_deleted: false,
-        }
+        Self::new(message, Handled::No)
     }
 }
 
