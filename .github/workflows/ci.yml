@@ -76,15 +76,15 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
-      - name: Rust clippy
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        working-directory: src-tauri
-        run: cargo clippy --all-targets --locked -- -D warnings
-
       - name: Rust fmt
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo fmt --check
+
+      - name: Rust clippy
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
 
   # Clippy only, on the platforms the checks job does not cover, so code behind
   # #[cfg(windows)] or #[cfg(target_os = "macos")] is linted too. Clippy does not
