@@ -247,7 +247,7 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
 
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if is_stale_staging_dir_name(&name) {
+        if is_stale_install_scratch_dir_name(&name) {
             // A staging folder, or a previous version an update moved aside,
             // left behind when an earlier run exited mid-install (the app was
             // closed or restarted for an update). Removing it is routine
@@ -255,10 +255,10 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
             // BepInEx loads plugins from hidden subfolders too, so one that
             // can't be removed would load a duplicate copy of the mod: that
             // is worth a report.
-            log::info!("Removing stale mod install staging folder: {}", entry.path().display());
+            log::info!("Removing mod install folder left by an earlier run: {}", entry.path().display());
             if let Err(error) = remove_dir_all_with_retry(&entry.path()) {
                 log::warn!(
-                    "Did not remove stale mod install staging folder {}: {error}",
+                    "Did not remove mod install folder left by an earlier run {}: {error}",
                     entry.path().display()
                 );
             }
@@ -933,7 +933,7 @@ fn process_scoped_dir_name(prefix: &str, mod_id: u64, file_id: u64) -> String {
 
 /// A staging or moved-aside dir created by a different (earlier) process
 /// can't belong to an install that's still running, so it's safe to delete.
-fn is_stale_staging_dir_name(name: &str) -> bool {
+fn is_stale_install_scratch_dir_name(name: &str) -> bool {
     let Some(rest) = name
         .strip_prefix(STAGING_DIR_PREFIX)
         .or_else(|| name.strip_prefix(REPLACED_DIR_PREFIX))
@@ -2382,10 +2382,10 @@ mod tests {
     #[test]
     fn stale_staging_dirs_are_from_other_processes_only() {
         let ours = staging_dir_name(3285481, 8137916);
-        assert!(!is_stale_staging_dir_name(&ours));
+        assert!(!is_stale_install_scratch_dir_name(&ours));
         let other_pid = std::process::id().wrapping_add(1);
-        assert!(is_stale_staging_dir_name(&format!(".modkist-installing-1-2-{other_pid}-0")));
-        assert!(!is_stale_staging_dir_name("3285481_8137916_Random Track Mode"));
+        assert!(is_stale_install_scratch_dir_name(&format!(".modkist-installing-1-2-{other_pid}-0")));
+        assert!(!is_stale_install_scratch_dir_name("3285481_8137916_Random Track Mode"));
     }
 
     /// A staging folder with a mod in it, named as an earlier process would.
