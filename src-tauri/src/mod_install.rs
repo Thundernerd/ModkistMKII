@@ -1108,11 +1108,15 @@ fn record_sync_failure_for_target(
     }
 }
 
-type SyncFailureContext<'a> = (
-    &'a AppHandle,
-    &'a HashSet<u64>,
-    &'a HashMap<u64, HashSet<u64>>,
-);
+/// Where `install_targets_internal` records and clears per-mod sync failures.
+#[derive(Clone, Copy)]
+struct SyncFailureContext<'a> {
+    app: &'a AppHandle,
+    /// The mods the sync was asked for; their own failures are recorded against them.
+    roots: &'a HashSet<u64>,
+    /// For each dependency, the roots that need it; its failures are recorded against them.
+    dependency_to_subscribers: &'a HashMap<u64, HashSet<u64>>,
+}
 
 fn record_install_target_failure(
     sync_failure_context: Option<SyncFailureContext<'_>>,
@@ -1159,8 +1163,13 @@ fn record_install_target_failure(
         );
     }
 
-    if let Some((app, roots, subscribers)) = sync_failure_context {
-        if subscribers.is_empty() {
+    if let Some(SyncFailureContext {
+        app,
+        roots,
+        dependency_to_subscribers,
+    }) = sync_failure_context
+    {
+        if dependency_to_subscribers.is_empty() {
             if roots.contains(&target_mod_id) {
                 let _ = record_failed_sync_mod(app, target_mod_id, category, message);
             }
@@ -1171,7 +1180,7 @@ fn record_install_target_failure(
                 category,
                 message,
                 roots,
-                subscribers,
+                dependency_to_subscribers,
             );
         }
         track_sync_dependency_failure(target_mod_id, roots, failed_dependencies);
@@ -1295,16 +1304,16 @@ async fn install_targets_internal(
                     // Install a specific older or alternate file version.
                 } else {
                     log::debug!("Mod {target_mod_id} already up to date, skipping");
-                    if let Some((app, _, _)) = sync_failure_context {
-                        maybe_clear_failed_sync_mod(app, target_mod_id);
+                    if let Some(context) = sync_failure_context {
+                        maybe_clear_failed_sync_mod(context.app, target_mod_id);
                     }
                     skipped.push(target_mod_id);
                     continue;
                 }
             } else {
                 log::debug!("Mod {target_mod_id} already up to date, skipping");
-                if let Some((app, _, _)) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(app, target_mod_id);
+                if let Some(context) = sync_failure_context {
+                    maybe_clear_failed_sync_mod(context.app, target_mod_id);
                 }
                 skipped.push(target_mod_id);
                 continue;
@@ -1315,8 +1324,8 @@ async fn install_targets_internal(
             log::debug!(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
-            if let Some((app, _, _)) = sync_failure_context {
-                maybe_clear_failed_sync_mod(app, target_mod_id);
+            if let Some(context) = sync_failure_context {
+                maybe_clear_failed_sync_mod(context.app, target_mod_id);
             }
             skipped.push(target_mod_id);
             continue;
@@ -1335,8 +1344,8 @@ async fn install_targets_internal(
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
                 installed.push(target_mod_id);
-                if let Some((app, _, _)) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(app, target_mod_id);
+                if let Some(context) = sync_failure_context {
+                    maybe_clear_failed_sync_mod(context.app, target_mod_id);
                 }
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
@@ -1397,11 +1406,11 @@ async fn install_mod_internal(
     let (sync_failure_roots, mut dependency_to_subscribers) =
         build_manual_install_sync_failure_context(mod_id, &order);
     augment_dependency_subscribers_from_cache(state, &[mod_id], &mut dependency_to_subscribers);
-    let sync_failure_context = (
+    let sync_failure_context = SyncFailureContext {
         app,
-        &sync_failure_roots,
-        &dependency_to_subscribers,
-    );
+        roots: &sync_failure_roots,
+        dependency_to_subscribers: &dependency_to_subscribers,
+    };
 
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
@@ -1665,7 +1674,11 @@ async fn run_subscription_sync(
         InstallTargetsOptions {
             auto_update,
             mods_by_id: Some(&mods_by_id),
-            sync_failure_context: Some((app, &subscribed_roots, &dependency_to_subscribers)),
+            sync_failure_context: Some(SyncFailureContext {
+                app,
+                roots: &subscribed_roots,
+                dependency_to_subscribers: &dependency_to_subscribers,
+            }),
             ..Default::default()
         },
     )
