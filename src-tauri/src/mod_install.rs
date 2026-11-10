@@ -944,6 +944,18 @@ async fn install_single_mod(
         .map_err(|e| format!("Did not create {}: {e}", kind_dir.display()))?;
     let target_dir = kind_dir.join(install_folder_name(mod_id, file_id, &mod_.name));
 
+    // Download before creating the staging directory: the download is the
+    // slowest step, and a staging directory left behind by an app that is
+    // closed mid-install sits in the game's mods folder until the next launch
+    // removes it (issue #80).
+    let temp_dir = std::env::temp_dir().join("modkist-mod-install");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
+    let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
+    if let Err(message) = download_modfile(state, &download_url, &download_path, Some(expected_size)).await {
+        let _ = fs::remove_file(&download_path);
+        return Err(message.into());
+    }
+
     // Extract into a staging directory instead of target_dir directly. Its name
     // doesn't parse as `mod_id_file_id[_name]`, so scan_kind_directory (which
     // runs concurrently whenever anything refreshes the installed-mods list)
@@ -951,34 +963,19 @@ async fn install_single_mod(
     // directory that happens to share the final install folder's name and
     // deleting it out from under this install.
     let staging_dir = kind_dir.join(staging_dir_name(mod_id, file_id));
-    fs::create_dir_all(&staging_dir).map_err(|e| {
-        format!(
-            "Did not create mod install staging directory {}: {e}",
-            staging_dir.display()
-        )
-    })?;
-
-    let temp_dir = std::env::temp_dir().join("modkist-mod-install");
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
-    let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
-
-    let install_result = async {
-        download_modfile(
-            state,
-            &download_url,
-            &download_path,
-            Some(expected_size),
-        )
-        .await?;
-        install_downloaded_mod(&download_path, &staging_dir, &filename)?;
-        Ok::<(), String>(())
-    }
-    .await;
+    let extract_result = fs::create_dir_all(&staging_dir)
+        .map_err(|e| {
+            format!(
+                "Did not create mod install staging directory {}: {e}",
+                staging_dir.display()
+            )
+        })
+        .and_then(|()| install_downloaded_mod(&download_path, &staging_dir, &filename));
 
     let _ = fs::remove_file(&download_path);
 
-    if let Err(message) = install_result {
-        let _ = fs::remove_dir_all(&staging_dir);
+    if let Err(message) = extract_result {
+        let _ = remove_dir_all_with_retry(&staging_dir);
         return Err(message.into());
     }
 
@@ -2237,6 +2234,61 @@ mod tests {
 
         assert!(!stale.exists());
         assert_eq!(crate::modio_api::auth_tests::sentry_reports(), Vec::<String>::new());
+    }
+
+    /// Names of the staging folders in `kind_dir`.
+    fn staging_dirs_in(kind_dir: &Path) -> Vec<String> {
+        fs::read_dir(kind_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with(STAGING_DIR_PREFIX))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Closing the app mid-download, the slowest step of an install, must not
+    /// leave a staging folder in the game's mods folder for the next launch
+    /// to clean up (issue #80).
+    #[tokio::test]
+    async fn no_staging_folder_exists_while_the_mod_file_downloads() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::modio_api::auth_tests::FakeModio;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let seen_during_download = Arc::new(Mutex::new(None));
+        let seen = seen_during_download.clone();
+        let observed_dir = kind_dir.clone();
+        let base_url = Arc::new(Mutex::new(String::new()));
+        let mod_url = base_url.clone();
+        let server = FakeModio::start(move |request| {
+            if request.path == "/download/1-2.zip" {
+                *seen.lock().unwrap() = Some(staging_dirs_in(&observed_dir));
+                return (404, None, String::new());
+            }
+            let download = format!("{}/download/1-2.zip", mod_url.lock().unwrap());
+            let body = format!(
+                r#"{{"id":1,"status":1,"name":"Mod","tags":[{{"name":"{PLUGIN_TAG}"}}],
+                    "modfile":{{"id":2,"filename":"1-2.zip","filesize":4,"download":{{"binary_url":"{download}"}}}}}}"#
+            );
+            (200, None, body)
+        });
+        *base_url.lock().unwrap() = server.base_url.clone();
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 1, None).await;
+
+        assert!(result.is_err(), "the download is refused, so the install fails");
+        assert_eq!(
+            *seen_during_download.lock().unwrap(),
+            Some(Vec::<String>::new()),
+            "the mods folder should hold no staging folder while the file downloads"
+        );
+        assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
     }
 
     #[tokio::test]
