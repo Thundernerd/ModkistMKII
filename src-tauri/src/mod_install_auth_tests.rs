@@ -309,3 +309,41 @@ async fn private_mods_while_signed_out_are_not_reported_per_mod() {
     assert!(map.values().all(Vec::is_empty));
     assert_eq!(bearer_requests(&server), 0);
 }
+
+// --- Installed mod file deleted on mod.io (issue #75) ------------------------
+
+/// mod.io `error_ref` for "The requested file id could not be found."
+const MODFILE_NOT_FOUND_ERROR_REF: u32 = 14000;
+
+/// Mod 100's installed file 7 was deleted or replaced by its author.
+fn installed_file_deleted(_: &Received) -> (u16, Option<u32>, String) {
+    let body = error_body(MODFILE_NOT_FOUND_ERROR_REF, "The requested file id could not be found.");
+    (404, Some(MODFILE_NOT_FOUND_ERROR_REF), body)
+}
+
+#[tokio::test]
+async fn a_deleted_installed_file_is_not_reported_when_resolving_its_version() {
+    capture_reports();
+    let server = FakeModio::start(installed_file_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let label = resolve_installed_file_version(&state, 100, 7, None).await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    assert_eq!(label, "");
+}
+
+#[tokio::test]
+async fn a_server_error_when_resolving_an_installed_version_is_still_reported() {
+    capture_reports();
+    let server = FakeModio::start(server_error);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    resolve_installed_file_version(&state, 100, 7, None).await;
+
+    let caller_warnings: Vec<String> = sentry_reports()
+        .into_iter()
+        .filter(|report| report.starts_with("WARN: Did not resolve version"))
+        .collect();
+    assert_eq!(caller_warnings.len(), 1, "{caller_warnings:#?}");
+}

@@ -1883,7 +1883,15 @@ async fn resolve_installed_file_version(
             label
         }
         Err(error) => {
-            log::warn!(
+            // The author deleted or replaced the installed file: expected, and
+            // the mod then shows an update to its current file.
+            let level = if error.is_not_found() {
+                log::Level::Info
+            } else {
+                log::Level::Warn
+            };
+            log::log!(
+                level,
                 "Did not resolve version for mod {mod_id} file {file_id}: {}",
                 format_api_error(error)
             );
