@@ -85,7 +85,7 @@ fn batch_omits_private_mods_with_expired_token(request: &Received) -> (u16, Opti
 }
 
 fn failed_on_rejected_credentials(outcome: Option<&ModFetchOutcome>) -> bool {
-    matches!(outcome, Some(ModFetchOutcome::Failed(error)) if error.credentials_rejected)
+    matches!(outcome, Some(ModFetchOutcome::Failed(error)) if error.credentials_rejected())
 }
 
 #[tokio::test]
@@ -202,12 +202,11 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
         PRIVATE_MODS.to_vec(),
         &mut Vec::new(),
         &mut HashMap::new(),
-        false,
-        true,
-        None,
-        None,
-        None,
-        Some(999),
+        InstallTargetsOptions {
+            auto_update: true,
+            root_mod_id: Some(999),
+            ..Default::default()
+        },
     )
     .await;
 
@@ -215,7 +214,7 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
     let Err(error) = result else {
         panic!("the install should stop once the session is rejected");
     };
-    assert!(error.credentials_rejected, "{error}");
+    assert!(error.credentials_rejected(), "{error}");
     assert_eq!(
         server.received().len(),
         2,
@@ -266,19 +265,19 @@ async fn an_expired_token_while_subscribing_is_a_rejected_credential() {
         vec![101],
         &mut Vec::new(),
         &mut HashMap::new(),
-        true,
-        true,
-        None,
-        None,
-        None,
-        Some(101),
+        InstallTargetsOptions {
+            should_subscribe: true,
+            auto_update: true,
+            root_mod_id: Some(101),
+            ..Default::default()
+        },
     )
     .await;
 
     let Err(error) = result else {
         panic!("subscribing with an expired token should fail");
     };
-    assert!(error.credentials_rejected, "{error}");
+    assert!(error.credentials_rejected(), "{error}");
     assert_eq!(sentry_reports(), Vec::<String>::new());
 }
 
@@ -378,12 +377,12 @@ async fn install_picked_version(state: &ModioState, file_id: u64) -> Result<Inst
         vec![100],
         &mut Vec::new(),
         &mut HashMap::new(),
-        false,
-        true,
-        Some((100, file_id)),
-        None,
-        None,
-        Some(100),
+        InstallTargetsOptions {
+            auto_update: true,
+            file_override: Some((100, file_id)),
+            root_mod_id: Some(100),
+            ..Default::default()
+        },
     )
     .await
 }
