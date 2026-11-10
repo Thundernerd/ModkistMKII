@@ -1,6 +1,6 @@
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use pelite::pe32::{Pe as Pe32, PeFile as PeFile32};
 use pelite::pe64::{Pe as Pe64, PeFile as PeFile64};
@@ -291,12 +291,13 @@ pub async fn install_bepinex(app: AppHandle) -> Result<BepInExStatus, String> {
         );
     }
 
-    perform_install(&game_dir, custom_wine_prefix_path(&app)).await
+    let custom_prefix = custom_wine_prefix_path(&app);
+    perform_install(&game_dir, custom_prefix.as_deref()).await
 }
 
 async fn perform_install(
     game_dir: &Path,
-    custom_prefix: Option<PathBuf>,
+    custom_prefix: Option<&Path>,
 ) -> Result<BepInExStatus, String> {
     log::info!("Downloading and extracting BepInEx to {}", game_dir.display());
     let temp_dir = std::env::temp_dir().join("modkist-bepinex");
@@ -316,7 +317,7 @@ async fn perform_install(
         );
     }
 
-    Ok(status_after_install(game_dir, custom_prefix.as_deref()))
+    Ok(status_after_install(game_dir, custom_prefix))
 }
 
 fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
@@ -347,7 +348,8 @@ pub async fn reinstall_bepinex(app: AppHandle) -> Result<BepInExStatus, String> 
     log::info!("Reinstalling BepInEx");
     let game_dir = game_directory(&app)?;
     remove_bepinex_installation(&game_dir)?;
-    perform_install(&game_dir, custom_wine_prefix_path(&app)).await
+    let custom_prefix = custom_wine_prefix_path(&app);
+    perform_install(&game_dir, custom_prefix.as_deref()).await
 }
 
 #[cfg(test)]
