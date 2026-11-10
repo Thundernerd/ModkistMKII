@@ -679,6 +679,7 @@ fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log
 pub(crate) struct ModioError {
     pub message: String,
     handled: Handled,
+    rate_limited: bool,
 }
 
 /// Why a `ModioError` was already handled (reported or explained to the user)
@@ -695,7 +696,7 @@ enum Handled {
 
 impl ModioError {
     fn new(message: String, handled: Handled) -> Self {
-        Self { message, handled }
+        Self { message, handled, rate_limited: false }
     }
 
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
@@ -712,7 +713,16 @@ impl ModioError {
         } else {
             handled
         };
-        Self::new(format_api_error_logged_in(error, logged_in), handled)
+        Self {
+            rate_limited: error.is_rate_limited(),
+            message: format_api_error_logged_in(error, logged_in),
+            handled,
+        }
+    }
+
+    /// True when mod.io rate limited the request.
+    pub(crate) fn is_rate_limited(&self) -> bool {
+        self.rate_limited
     }
 
     /// The version the user picked is gone: its author deleted or replaced
@@ -911,9 +921,10 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
     };
     let token = state.session_token();
 
-    let outcome = match api
-        .get_mod(game_id, mod_id, token.as_deref())
-        .await
+    let outcome = match with_rate_limit_retry(Some("mod fetch"), || {
+        api.get_mod(game_id, mod_id, token.as_deref())
+    })
+    .await
     {
         Ok(mod_) => {
             seed_mod_cache(state, &mod_);
@@ -922,9 +933,6 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
         Err(error) => {
             if is_mod_unavailable(&error) {
                 ModFetchOutcome::Unavailable
-            } else if error.is_rate_limited() {
-                tokio::time::sleep(Duration::from_secs(61)).await;
-                return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
                 ModFetchOutcome::Failed(ModioError::from_mod_read(
                     error,
@@ -998,32 +1006,12 @@ pub(crate) async fn fetch_mod_outcomes_batch(
 
     for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
         let mut found_ids = HashSet::new();
-        match api.get_mods_by_id(game_id, chunk).await {
+        match with_rate_limit_retry(Some("batch mod fetch"), || api.get_mods_by_id(game_id, chunk)).await {
             Ok(list) => {
                 for mod_ in list.data {
                     found_ids.insert(mod_.id);
                     seed_mod_cache(state, &mod_);
                     outcomes.insert(mod_.id, ModFetchOutcome::Found(mod_));
-                }
-            }
-            Err(error) if error.is_rate_limited() => {
-                log::info!("mod.io rate limit hit on batch mod fetch, retrying in 61 seconds");
-                tokio::time::sleep(Duration::from_secs(61)).await;
-                match api.get_mods_by_id(game_id, chunk).await {
-                    Ok(list) => {
-                        for mod_ in list.data {
-                            found_ids.insert(mod_.id);
-                            seed_mod_cache(state, &mod_);
-                            outcomes.insert(mod_.id, ModFetchOutcome::Found(mod_));
-                        }
-                    }
-                    Err(error) => {
-                        log::log!(
-                            caller_log_level(&error, log::Level::Warn),
-                            "Batch mod fetch failed after retry: {}",
-                            error.message
-                        );
-                    }
                 }
             }
             Err(error) => {
@@ -1062,31 +1050,51 @@ pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<
     }
 }
 
-pub(crate) fn is_rate_limited_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    if lower.contains("rate limit") || lower.contains("too many requests") {
-        return true;
-    }
-    if lower.contains("error_ref 11008") || lower.contains("error_ref 11009") {
-        return true;
-    }
-    lower.contains("429")
+/// How long to wait before retrying a request mod.io rate limited. Its limits
+/// reset after a minute.
+const RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(61);
+
+/// An error that can say whether mod.io rate limited the request.
+pub(crate) trait MaybeRateLimited: std::fmt::Display {
+    fn is_rate_limited(&self) -> bool;
 }
 
-pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(mut operation: F) -> Result<T, E>
+impl MaybeRateLimited for ApiError {
+    fn is_rate_limited(&self) -> bool {
+        ApiError::is_rate_limited(self)
+    }
+}
+
+impl MaybeRateLimited for ModioError {
+    fn is_rate_limited(&self) -> bool {
+        ModioError::is_rate_limited(self)
+    }
+}
+
+/// Runs `operation`; when mod.io rate limits it, logs the retry at info, waits
+/// [`RATE_LIMIT_RETRY_DELAY`] and runs it once more, returning that result
+/// whatever it is. `request` names the request in the log line, e.g.
+/// `Some("batch mod fetch")`.
+pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(
+    request: Option<&str>,
+    mut operation: F,
+) -> Result<T, E>
 where
-    E: std::fmt::Display,
+    E: MaybeRateLimited,
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
 {
     match operation().await {
-        Ok(value) => Ok(value),
-        Err(error) if is_rate_limited_message(&error.to_string()) => {
-            log::info!("mod.io rate limit hit, retrying in 61 seconds: {error}");
-            tokio::time::sleep(Duration::from_secs(61)).await;
+        Err(error) if error.is_rate_limited() => {
+            let on_request = request.map(|request| format!(" on {request}")).unwrap_or_default();
+            log::info!(
+                "mod.io rate limit hit{on_request}, retrying in {} seconds: {error}",
+                RATE_LIMIT_RETRY_DELAY.as_secs()
+            );
+            tokio::time::sleep(RATE_LIMIT_RETRY_DELAY).await;
             operation().await
         }
-        Err(error) => Err(error),
+        result => result,
     }
 }
 
@@ -1922,20 +1930,6 @@ mod format_api_error_tests {
         assert!(message.contains("private"));
         assert!(message.contains("not subscribed"));
         assert!(!message.contains("Sign in to mod.io"));
-    }
-
-    #[test]
-    fn rate_limited_formatted_message_is_detected() {
-        let error = ApiError {
-            status: Some(400),
-            error_ref: Some(11008),
-            message: "You have made too many requests in a short period of time, please wait and try again soon.".to_string(),
-            retry_after_secs: Some(60),
-            inaccessible_after_bearer_retry: false,
-            reported: false,
-        };
-        let message = format_api_error_logged_in(error, true);
-        assert!(is_rate_limited_message(&message));
     }
 }
 
