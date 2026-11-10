@@ -48,6 +48,10 @@ const wineFeedback = computed(
 );
 
 const savingWinePrefix = ref(false);
+const wineActionsDisabled = computed(
+  () =>
+    loading.value || installing.value || wineChecking.value || savingWinePrefix.value,
+);
 
 const winePrefixInUse = computed(() => {
   if (customWinePrefixPath.value) {
@@ -223,20 +227,11 @@ async function setupWinePrefix() {
   }
 }
 
-async function chooseWinePrefixFolder() {
-  const selected = await open({
-    directory: true,
-    multiple: false,
-    title: "Select the Wine prefix folder (contains user.reg and drive_c)",
-  });
-  if (typeof selected !== "string") {
-    return;
-  }
-
+async function saveWinePrefixSetting(save: () => Promise<unknown>) {
   savingWinePrefix.value = true;
   wineSetupMessage.value = "";
   try {
-    await setCustomWinePrefixPath(selected);
+    await save();
   } catch (err) {
     wineSetupTone.value = "error";
     wineSetupMessage.value = String(err);
@@ -247,19 +242,20 @@ async function chooseWinePrefixFolder() {
   await setupWinePrefix();
 }
 
-async function useWinePrefixAutoDetection() {
-  savingWinePrefix.value = true;
-  wineSetupMessage.value = "";
-  try {
-    await clearCustomWinePrefixPath();
-  } catch (err) {
-    wineSetupTone.value = "error";
-    wineSetupMessage.value = String(err);
+async function chooseWinePrefixFolder() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Select the Wine prefix folder (contains user.reg and drive_c)",
+  });
+  if (typeof selected !== "string") {
     return;
-  } finally {
-    savingWinePrefix.value = false;
   }
-  await setupWinePrefix();
+  await saveWinePrefixSetting(() => setCustomWinePrefixPath(selected));
+}
+
+async function useWinePrefixAutoDetection() {
+  await saveWinePrefixSetting(clearCustomWinePrefixPath);
 }
 
 onMounted(async () => {
@@ -569,7 +565,7 @@ function profileKindLabel(kind: string) {
           <button
             type="button"
             class="btn-secondary"
-            :disabled="loading || installing || wineChecking || savingWinePrefix"
+            :disabled="wineActionsDisabled"
             @click="setupWinePrefix"
           >
             {{ wineChecking ? "Wait…" : "Configure Wine prefix" }}
@@ -577,7 +573,7 @@ function profileKindLabel(kind: string) {
           <button
             type="button"
             class="btn-secondary"
-            :disabled="loading || installing || wineChecking || savingWinePrefix"
+            :disabled="wineActionsDisabled"
             @click="chooseWinePrefixFolder"
           >
             Choose prefix folder…
@@ -586,7 +582,7 @@ function profileKindLabel(kind: string) {
             v-if="customWinePrefixPath"
             type="button"
             class="btn-secondary"
-            :disabled="loading || installing || wineChecking || savingWinePrefix"
+            :disabled="wineActionsDisabled"
             @click="useWinePrefixAutoDetection"
           >
             Use auto-detection
