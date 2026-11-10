@@ -252,21 +252,21 @@ impl ModioState {
         }
     }
 
-    pub(crate) fn cached_mod_file_missing(&self, mod_id: u64, file_id: u64) -> bool {
+    pub(crate) fn cached_mod_file_deleted(&self, mod_id: u64, file_id: u64) -> bool {
         let hit = self
             .api_cache
             .lock()
             .ok()
-            .is_some_and(|cache| cache.is_mod_file_missing(mod_id, file_id));
+            .is_some_and(|cache| cache.is_mod_file_deleted(mod_id, file_id));
         if hit {
             log::info!("Cache hit: mod {mod_id} file {file_id} deleted on mod.io");
         }
         hit
     }
 
-    pub(crate) fn mark_mod_file_missing(&self, mod_id: u64, file_id: u64) {
+    pub(crate) fn mark_mod_file_deleted(&self, mod_id: u64, file_id: u64) {
         if let Ok(mut cache) = self.api_cache.lock() {
-            cache.mark_mod_file_missing(mod_id, file_id);
+            cache.mark_mod_file_deleted(mod_id, file_id);
         }
     }
 

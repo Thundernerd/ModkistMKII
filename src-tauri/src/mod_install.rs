@@ -31,9 +31,9 @@ use crate::subscription_sync_settings::{
     remove_pending_unsubscribe_mod, remove_sync_mod_tracking, FailedSyncModList,
 };
 use crate::modio_client::{
-    fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch, fetch_subscribed_mod_ids,
-    format_api_error, modfile_version_label, subscribe_to_mod, unsubscribe_from_mod,
-    with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
+    caller_log_level, fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch,
+    fetch_subscribed_mod_ids, format_api_error, modfile_version_label, subscribe_to_mod,
+    unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -1879,7 +1879,7 @@ async fn resolve_installed_file_version(
         }
     }
 
-    if state.cached_mod_file_missing(mod_id, file_id) {
+    if state.cached_mod_file_deleted(mod_id, file_id) {
         return String::new();
     }
 
@@ -1907,11 +1907,14 @@ async fn resolve_installed_file_version(
         Err(error) => {
             // The author deleted or replaced the installed file: expected, and
             // the mod then shows an update to its current file.
-            let level = if error.is_not_found() {
-                state.mark_mod_file_missing(mod_id, file_id);
+            let file_deleted = error.is_not_found();
+            if file_deleted {
+                state.mark_mod_file_deleted(mod_id, file_id);
+            }
+            let level = if file_deleted {
                 log::Level::Info
             } else {
-                log::Level::Warn
+                caller_log_level(&error, log::Level::Warn)
             };
             log::log!(
                 level,
