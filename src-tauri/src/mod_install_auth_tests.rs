@@ -15,7 +15,7 @@ use crate::modio_api::auth_tests::{
     error_body, forbidden, token_expired, FakeModio, Received, GAME_ID, TOKEN,
 };
 
-const PRIVATE_MODS: [u64; 3] = [101, 102, 103];
+const PRIVATE_MODS: [ModId; 3] = [ModId(101), ModId(102), ModId(103)];
 
 /// Private mods: an api_key read is refused (403), and the bearer retry is
 /// rejected because the session token expired.
@@ -37,7 +37,7 @@ async fn an_expired_token_while_mapping_dependencies_is_not_reported_per_mod() {
     let server = FakeModio::start(private_mods_with_expired_token);
     let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
 
-    let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
+    let installed: HashSet<ModId> = PRIVATE_MODS.into_iter().collect();
     let map = build_dependency_map(&state, &installed).await;
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
@@ -59,7 +59,7 @@ fn server_error(_: &Received) -> (u16, Option<u32>, String) {
 
 /// True when `report` names any of `ids`: ids in a report would make Sentry
 /// open one issue per mod.
-fn names_an_id(report: &str, ids: &[u64]) -> bool {
+fn names_an_id(report: &str, ids: &[impl ToString]) -> bool {
     ids.iter().any(|id| report.contains(&id.to_string()))
 }
 
@@ -68,7 +68,7 @@ fn names_an_id(report: &str, ids: &[u64]) -> bool {
 /// returns that text.
 async fn the_one_id_free_report_per_dependency_read(state: &ModioState) -> String {
     capture_reports();
-    let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
+    let installed: HashSet<ModId> = PRIVATE_MODS.into_iter().collect();
     build_dependency_map(state, &installed).await;
 
     let reports = sentry_reports();
@@ -183,14 +183,14 @@ async fn an_expired_token_while_listing_dependencies_is_not_reported_per_depende
     capture_reports();
     let server = FakeModio::start(batch_omits_private_mods_with_expired_token);
     let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
-    state.store_dependencies(100, PRIVATE_MODS.to_vec());
+    state.store_dependencies(ModId(100), PRIVATE_MODS.to_vec());
 
-    let result = crate::modio_client::list_mod_dependencies_inner(&state, 100)
+    let result = crate::modio_client::list_mod_dependencies_inner(&state, ModId(100))
         .await
         .expect("dependency list should load");
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
-    let ids: Vec<u64> = result.mods.iter().map(|dependency| dependency.id).collect();
+    let ids: Vec<ModId> = result.mods.iter().map(|dependency| dependency.id).collect();
     assert_eq!(ids, PRIVATE_MODS);
 }
 
@@ -210,12 +210,12 @@ async fn an_expired_token_while_loading_the_user_rating_is_not_reported() {
     let server = FakeModio::start(public_mod_with_expired_token);
     let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
 
-    let detail = crate::modio_client::get_mod_inner(&state, 100)
+    let detail = crate::modio_client::get_mod_inner(&state, ModId(100))
         .await
         .expect("mod detail should load without the rating");
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
-    assert_eq!(detail.id, 100);
+    assert_eq!(detail.id, ModId(100));
     assert!(state.auth_status().session_expired);
 }
 
@@ -225,7 +225,7 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
     let server = FakeModio::start(private_mods_with_expired_token);
     let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
     for mod_id in PRIVATE_MODS {
-        state.store_latest_file_id(mod_id, 1);
+        state.store_latest_file_id(mod_id, FileId(1));
     }
 
     let result = install_targets_internal(
@@ -237,7 +237,7 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
         &mut HashMap::new(),
         InstallTargetsOptions {
             auto_update: true,
-            root_mod_id: Some(999),
+            root_mod_id: Some(ModId(999)),
             ..Default::default()
         },
     )
@@ -273,10 +273,10 @@ async fn an_expired_token_while_resolving_install_order_stops_reading_dependenci
     let server = FakeModio::start(public_mod_with_private_dependencies);
     let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
 
-    let order = collect_install_order(&state, 100).await.expect("install order");
+    let order = collect_install_order(&state, ModId(100)).await.expect("install order");
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
-    assert!(order.contains(&100));
+    assert!(order.contains(&ModId(100)));
     assert_eq!(
         server.received().len(),
         3,
@@ -295,13 +295,13 @@ async fn an_expired_token_while_subscribing_is_a_rejected_credential() {
         None,
         &state,
         Path::new("/nonexistent-game-dir"),
-        vec![101],
+        vec![ModId(101)],
         &mut Vec::new(),
         &mut HashMap::new(),
         InstallTargetsOptions {
             should_subscribe: true,
             auto_update: true,
-            root_mod_id: Some(101),
+            root_mod_id: Some(ModId(101)),
             ..Default::default()
         },
     )
@@ -332,7 +332,7 @@ async fn private_mods_while_signed_out_are_not_reported_per_mod() {
     let state = ModioState::signed_out_against(server.base_url.clone());
 
     let outcomes = fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
-    let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
+    let installed: HashSet<ModId> = PRIVATE_MODS.into_iter().collect();
     let map = build_dependency_map(&state, &installed).await;
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
@@ -360,7 +360,7 @@ async fn a_deleted_installed_file_is_not_reported_when_resolving_its_version() {
     let server = FakeModio::start(installed_file_deleted);
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    let label = resolve_installed_file_version(&state, 100, 7, None).await;
+    let label = resolve_installed_file_version(&state, ModId(100), FileId(7), None).await;
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
     assert_eq!(label, "");
@@ -372,7 +372,7 @@ async fn a_server_error_when_resolving_an_installed_version_is_reported_once_wit
     let server = FakeModio::start(server_error);
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    resolve_installed_file_version(&state, 100, 70_707, None).await;
+    resolve_installed_file_version(&state, ModId(100), FileId(70_707), None).await;
 
     let reports = sentry_reports();
     assert_eq!(reports.len(), 1, "{reports:#?}");
@@ -384,8 +384,8 @@ async fn a_deleted_installed_file_is_not_requested_again_on_the_next_refresh() {
     let server = FakeModio::start(installed_file_deleted);
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    resolve_installed_file_version(&state, 100, 7, None).await;
-    let label = resolve_installed_file_version(&state, 100, 7, None).await;
+    resolve_installed_file_version(&state, ModId(100), FileId(7), None).await;
+    let label = resolve_installed_file_version(&state, ModId(100), FileId(7), None).await;
 
     assert_eq!(label, "");
     assert_eq!(server.received().len(), 1, "{:#?}", server.received());
@@ -400,18 +400,18 @@ fn picked_version_deleted(request: &Received) -> (u16, Option<u32>, String) {
     }
 }
 
-async fn install_picked_version(state: &ModioState, file_id: u64) -> Result<InstallModResult, ModioError> {
+async fn install_picked_version(state: &ModioState, file_id: FileId) -> Result<InstallModResult, ModioError> {
     install_targets_internal(
         None,
         state,
         Path::new("/nonexistent-game-dir"),
-        vec![100],
+        vec![ModId(100)],
         &mut Vec::new(),
         &mut HashMap::new(),
         InstallTargetsOptions {
             auto_update: true,
-            file_override: Some(FileOverride { mod_id: 100, file_id }),
-            root_mod_id: Some(100),
+            file_override: Some(FileOverride { mod_id: ModId(100), file_id }),
+            root_mod_id: Some(ModId(100)),
             ..Default::default()
         },
     )
@@ -422,12 +422,12 @@ async fn install_picked_version(state: &ModioState, file_id: u64) -> Result<Inst
 async fn installing_a_deleted_version_drops_the_stale_version_list() {
     let server = FakeModio::start(picked_version_deleted);
     let state = ModioState::signed_out_against(server.base_url.clone());
-    state.store_latest_file_id(100, 8);
-    state.store_mod_files(100, Vec::new());
+    state.store_latest_file_id(ModId(100), FileId(8));
+    state.store_mod_files(ModId(100), Vec::new());
 
-    let _ = install_picked_version(&state, 7).await;
+    let _ = install_picked_version(&state, FileId(7)).await;
 
-    assert!(state.cached_mod_files(100).is_none(), "the versions list should be fetched again");
+    assert!(state.cached_mod_files(ModId(100)).is_none(), "the versions list should be fetched again");
 }
 
 #[tokio::test]
@@ -435,9 +435,9 @@ async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
     capture_reports();
     let server = FakeModio::start(picked_version_deleted);
     let state = ModioState::signed_out_against(server.base_url.clone());
-    state.store_latest_file_id(100, 8);
+    state.store_latest_file_id(ModId(100), FileId(8));
 
-    let result = install_picked_version(&state, 7).await;
+    let result = install_picked_version(&state, FileId(7)).await;
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
     let Err(error) = result else {
@@ -496,7 +496,7 @@ async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
     let server = FakeModio::start(rate_limited_once(EMPTY_LIST));
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    let installed: HashSet<u64> = [100].into_iter().collect();
+    let installed: HashSet<ModId> = [ModId(100)].into_iter().collect();
     let map = build_dependency_map(&state, &installed).await;
 
     assert_reported_once_and_retried(
@@ -504,7 +504,7 @@ async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
         "/games/{game}/mods/{mod}/dependencies",
         "mod.io rate limit hit, retrying in 61 seconds",
     );
-    assert_eq!(map.get(&100), Some(&Vec::new()));
+    assert_eq!(map.get(&ModId(100)), Some(&Vec::new()));
 }
 
 #[tokio::test(start_paused = true)]
@@ -513,14 +513,14 @@ async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
     let server = FakeModio::start(rate_limited_once(r#"{"data":[{"id":100,"name":"Some mod"}],"result_total":1}"#));
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    let outcomes = fetch_mod_outcomes_batch(&state, &[100]).await;
+    let outcomes = fetch_mod_outcomes_batch(&state, &[ModId(100)]).await;
 
     assert_reported_once_and_retried(
         &server,
         "/games/{game}/mods",
         "mod.io rate limit hit on batch mod fetch, retrying in 61 seconds",
     );
-    assert!(matches!(outcomes.get(&100), Some(ModFetchOutcome::Found(_))));
+    assert!(matches!(outcomes.get(&ModId(100)), Some(ModFetchOutcome::Found(_))));
 }
 
 // --- Bounded rate-limit retries (issue #143) ----------------------------------
@@ -538,7 +538,7 @@ async fn a_mod_read_under_a_sustained_rate_limit_fails_after_one_retry() {
     let server = FakeModio::start(always_rate_limited);
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    let outcome = crate::modio_client::fetch_mod_outcome(&state, 100).await;
+    let outcome = crate::modio_client::fetch_mod_outcome(&state, ModId(100)).await;
 
     assert!(matches!(outcome, ModFetchOutcome::Failed(_)), "the read should give up");
     assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());

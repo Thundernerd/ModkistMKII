@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 use crate::fs_move::move_dir;
+use crate::mod_ids::{FileId, ModId};
 use crate::game_path::game_directory;
 use crate::mod_folder::{
     is_valid_install_folder_name, parse_install_folder_name, sanitize_mod_name,
@@ -93,8 +94,8 @@ pub enum ManifestModKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestModEntry {
-    pub mod_id: u64,
-    pub file_id: u64,
+    pub mod_id: ModId,
+    pub file_id: FileId,
     pub kind: ManifestModKind,
 }
 
@@ -378,7 +379,7 @@ pub fn upsert_active_profile_manifest_entries(
 pub fn remove_active_profile_manifest_mod(
     app: &AppHandle,
     modio_state: &ModioState,
-    mod_id: u64,
+    mod_id: ModId,
 ) -> Result<(), String> {
     let info = active_profile_info(app, modio_state)?;
     if info.kind == ProfileKind::Vanilla {
@@ -1392,13 +1393,13 @@ mod tests {
         let manifest = ProfileModsManifest {
             mods: vec![
                 ManifestModEntry {
-                    mod_id: 10,
-                    file_id: 20,
+                    mod_id: ModId(10),
+                    file_id: FileId(20),
                     kind: ManifestModKind::Plugin,
                 },
                 ManifestModEntry {
-                    mod_id: 30,
-                    file_id: 40,
+                    mod_id: ModId(30),
+                    file_id: FileId(40),
                     kind: ManifestModKind::Blueprint,
                 },
             ],
@@ -1410,6 +1411,30 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_manifest_with_plain_number_ids_is_rewritten_byte_for_byte() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let archive_root = temp.path().join("profile");
+        fs::create_dir_all(&archive_root).unwrap();
+        let stored = r#"{
+  "mods": [
+    {
+      "modId": 10,
+      "fileId": 20,
+      "kind": "plugin"
+    }
+  ]
+}"#;
+        fs::write(profile_manifest_path(&archive_root), stored).unwrap();
+
+        let manifest = read_profile_mods_manifest(&archive_root).unwrap();
+        write_profile_mods_manifest(&archive_root, &manifest).unwrap();
+
+        assert_eq!(manifest.mods[0].mod_id, ModId(10));
+        assert_eq!(manifest.mods[0].file_id, FileId(20));
+        assert_eq!(fs::read_to_string(profile_manifest_path(&archive_root)).unwrap(), stored);
+    }
+
+    #[test]
     fn scan_managed_mods_skips_empty_folders() {
         let (_temp, game_dir, _archives_root) = temp_game_and_archives();
         let empty = live_kind_dir(&game_dir, MODS_DIR).join("10_20");
@@ -1418,7 +1443,7 @@ mod tests {
 
         let mods = scan_managed_mods_at_live(&game_dir).unwrap();
         assert_eq!(mods.len(), 1);
-        assert_eq!(mods[0].mod_id, 30);
+        assert_eq!(mods[0].mod_id, ModId(30));
         assert!(!empty.exists());
     }
 

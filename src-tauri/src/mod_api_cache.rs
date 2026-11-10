@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::mod_ids::{FileId, ModId};
 use crate::modio_api::{ModObject, Modfile};
 
 const CACHE_TTL: Duration = Duration::from_secs(300);
@@ -42,22 +43,22 @@ impl<T: Clone> Timed<T> {
 /// detection and subscription state stay fresh after a restart.
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct PersistedCache {
-    pub dependencies: HashMap<u64, Vec<u64>>,
+    pub dependencies: HashMap<ModId, Vec<ModId>>,
     #[serde(default)]
-    pub dependency_fetch_failures: Vec<u64>,
+    pub dependency_fetch_failures: Vec<ModId>,
 }
 
 #[derive(Default)]
 pub(crate) struct ApiCache {
-    unavailable_mods: HashMap<u64, Timed<()>>,
+    unavailable_mods: HashMap<ModId, Timed<()>>,
     /// `(mod_id, file_id)` pairs mod.io reported as deleted (404).
-    deleted_mod_files: HashMap<(u64, u64), Timed<()>>,
-    failed_dependency_fetches: HashMap<u64, Timed<()>>,
-    dependencies: HashMap<u64, Timed<Vec<u64>>>,
-    latest_file_ids: HashMap<u64, Timed<u64>>,
-    mod_files: HashMap<u64, Timed<Vec<Modfile>>>,
-    mods: HashMap<u64, Timed<ModObject>>,
-    subscribed_mod_ids: Option<Timed<Vec<u64>>>,
+    deleted_mod_files: HashMap<(ModId, FileId), Timed<()>>,
+    failed_dependency_fetches: HashMap<ModId, Timed<()>>,
+    dependencies: HashMap<ModId, Timed<Vec<ModId>>>,
+    latest_file_ids: HashMap<ModId, Timed<FileId>>,
+    mod_files: HashMap<ModId, Timed<Vec<Modfile>>>,
+    mods: HashMap<ModId, Timed<ModObject>>,
+    subscribed_mod_ids: Option<Timed<Vec<ModId>>>,
 }
 
 impl ApiCache {
@@ -72,37 +73,37 @@ impl ApiCache {
         self.subscribed_mod_ids = None;
     }
 
-    pub(crate) fn is_mod_unavailable(&self, mod_id: u64) -> bool {
+    pub(crate) fn is_mod_unavailable(&self, mod_id: ModId) -> bool {
         self.unavailable_mods
             .get(&mod_id)
             .is_some_and(|entry| entry.is_valid())
     }
 
-    pub(crate) fn mark_mod_unavailable(&mut self, mod_id: u64) {
+    pub(crate) fn mark_mod_unavailable(&mut self, mod_id: ModId) {
         self.unavailable_mods.insert(mod_id, Timed::new(()));
     }
 
-    pub(crate) fn is_mod_file_deleted(&self, mod_id: u64, file_id: u64) -> bool {
+    pub(crate) fn is_mod_file_deleted(&self, mod_id: ModId, file_id: FileId) -> bool {
         self.deleted_mod_files
             .get(&(mod_id, file_id))
             .is_some_and(|entry| entry.is_valid())
     }
 
-    pub(crate) fn mark_mod_file_deleted(&mut self, mod_id: u64, file_id: u64) {
+    pub(crate) fn mark_mod_file_deleted(&mut self, mod_id: ModId, file_id: FileId) {
         self.deleted_mod_files.insert((mod_id, file_id), Timed::new(()));
     }
 
-    pub(crate) fn is_dependency_fetch_failed(&self, mod_id: u64) -> bool {
+    pub(crate) fn is_dependency_fetch_failed(&self, mod_id: ModId) -> bool {
         self.failed_dependency_fetches
             .get(&mod_id)
             .is_some_and(|entry| entry.is_valid())
     }
 
-    pub(crate) fn mark_dependency_fetch_failed(&mut self, mod_id: u64) {
+    pub(crate) fn mark_dependency_fetch_failed(&mut self, mod_id: ModId) {
         self.failed_dependency_fetches.insert(mod_id, Timed::new(()));
     }
 
-    pub(crate) fn invalidate_mod(&mut self, mod_id: u64) {
+    pub(crate) fn invalidate_mod(&mut self, mod_id: ModId) {
         self.unavailable_mods.remove(&mod_id);
         self.deleted_mod_files.retain(|(deleted_mod_id, _), _| *deleted_mod_id != mod_id);
         self.failed_dependency_fetches.remove(&mod_id);
@@ -111,7 +112,7 @@ impl ApiCache {
         self.mods.remove(&mod_id);
     }
 
-    pub(crate) fn get_mod(&self, mod_id: u64) -> Option<ModObject> {
+    pub(crate) fn get_mod(&self, mod_id: ModId) -> Option<ModObject> {
         self.mods
             .get(&mod_id)
             .filter(|entry| entry.is_valid())
@@ -132,52 +133,52 @@ impl ApiCache {
         self.mods.insert(mod_id, Timed::new(merged));
     }
 
-    pub(crate) fn get_mod_files(&self, mod_id: u64) -> Option<Vec<Modfile>> {
+    pub(crate) fn get_mod_files(&self, mod_id: ModId) -> Option<Vec<Modfile>> {
         self.mod_files
             .get(&mod_id)
             .filter(|entry| entry.is_valid())
             .map(|entry| entry.value.clone())
     }
 
-    pub(crate) fn store_mod_files(&mut self, mod_id: u64, files: Vec<Modfile>) {
+    pub(crate) fn store_mod_files(&mut self, mod_id: ModId, files: Vec<Modfile>) {
         self.mod_files.insert(mod_id, Timed::new(files));
     }
 
-    pub(crate) fn get_latest_file_id(&self, mod_id: u64) -> Option<u64> {
+    pub(crate) fn get_latest_file_id(&self, mod_id: ModId) -> Option<FileId> {
         self.latest_file_ids
             .get(&mod_id)
             .filter(|entry| entry.is_valid())
             .map(|entry| entry.value)
     }
 
-    pub(crate) fn store_latest_file_id(&mut self, mod_id: u64, file_id: u64) {
+    pub(crate) fn store_latest_file_id(&mut self, mod_id: ModId, file_id: FileId) {
         self.latest_file_ids.insert(mod_id, Timed::new(file_id));
     }
 
-    pub(crate) fn get_dependencies(&self, mod_id: u64) -> Option<Vec<u64>> {
+    pub(crate) fn get_dependencies(&self, mod_id: ModId) -> Option<Vec<ModId>> {
         self.dependencies
             .get(&mod_id)
             .filter(|entry| entry.is_valid())
             .map(|entry| entry.value.clone())
     }
 
-    pub(crate) fn store_dependencies(&mut self, mod_id: u64, dependencies: Vec<u64>) {
+    pub(crate) fn store_dependencies(&mut self, mod_id: ModId, dependencies: Vec<ModId>) {
         self.dependencies
             .insert(mod_id, Timed::with_ttl(dependencies, DEPENDENCY_CACHE_TTL));
     }
 
-    pub(crate) fn get_subscribed_mod_ids(&self) -> Option<Vec<u64>> {
+    pub(crate) fn get_subscribed_mod_ids(&self) -> Option<Vec<ModId>> {
         self.subscribed_mod_ids
             .as_ref()
             .filter(|entry| entry.is_valid())
             .map(|entry| entry.value.clone())
     }
 
-    pub(crate) fn store_subscribed_mod_ids(&mut self, mod_ids: Vec<u64>) {
+    pub(crate) fn store_subscribed_mod_ids(&mut self, mod_ids: Vec<ModId>) {
         self.subscribed_mod_ids = Some(Timed::new(mod_ids));
     }
 
-    pub(crate) fn add_subscribed_mod_id(&mut self, mod_id: u64) {
+    pub(crate) fn add_subscribed_mod_id(&mut self, mod_id: ModId) {
         let mut ids = self.get_subscribed_mod_ids().unwrap_or_default();
         if ids.binary_search(&mod_id).is_err() {
             ids.push(mod_id);
@@ -186,7 +187,7 @@ impl ApiCache {
         }
     }
 
-    pub(crate) fn remove_subscribed_mod_id(&mut self, mod_id: u64) {
+    pub(crate) fn remove_subscribed_mod_id(&mut self, mod_id: ModId) {
         let Some(mut ids) = self.get_subscribed_mod_ids() else {
             return;
         };
@@ -228,5 +229,22 @@ impl ApiCache {
                 .entry(mod_id)
                 .or_insert_with(|| Timed::new(()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mod_ids::ModId;
+
+    #[test]
+    fn a_persisted_cache_file_with_plain_number_ids_round_trips_unchanged() {
+        let stored = r#"{"dependencies":{"12":[34,56]},"dependency_fetch_failures":[78]}"#;
+
+        let cache: PersistedCache = serde_json::from_str(stored).unwrap();
+
+        assert_eq!(cache.dependencies[&ModId(12)], vec![ModId(34), ModId(56)]);
+        assert_eq!(cache.dependency_fetch_failures, vec![ModId(78)]);
+        assert_eq!(serde_json::to_string(&cache).unwrap(), stored);
     }
 }
