@@ -397,11 +397,11 @@ struct MovedAsideFolder {
 /// DLL) leaves an incomplete install behind. A rename either happens or
 /// doesn't: if one fails, the folders already moved are renamed back and the
 /// previous version stays installed (issue #129).
-fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<MovedAsideFolder>, String> {
+async fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<MovedAsideFolder>, String> {
     let mut moved = Vec::new();
     for (original, file_id) in installed_mod_folders(game_dir, mod_id)? {
         let aside = original.with_file_name(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
-        if let Err(error) = fs::rename(&original, &aside) {
+        if let Err(error) = rename_with_transient_lock_retry(&original, &aside).await {
             let message = format!(
                 "Did not move installed mod folder {} aside to replace it: {error}",
                 original.display()
@@ -411,6 +411,28 @@ fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<
         moved.push(MovedAsideFolder { original, aside });
     }
     Ok(moved)
+}
+
+/// Renames `from` to `to`, retrying while antivirus briefly holds a file
+/// inside open (see MOVE_INTO_PLACE_RETRY_DELAYS_MS). The running game's lock
+/// on a plugin DLL outlasts the retries.
+async fn rename_with_transient_lock_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut delays = MOVE_INTO_PLACE_RETRY_DELAYS_MS.into_iter();
+    loop {
+        match fs::rename(from, to) {
+            Err(error) if is_transient_lock_error(&error) => {
+                let Some(delay_ms) = delays.next() else {
+                    return Err(error);
+                };
+                log::debug!(
+                    "Moving {} hit a transient lock ({error}), retrying",
+                    from.display()
+                );
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            result => return result,
+        }
+    }
 }
 
 /// Moves the folders an update moved aside back into place, after the update
@@ -1084,7 +1106,7 @@ async fn install_single_mod(
     // staged, so a failed download or extraction leaves it installed (issue
     // #117), and move instead of delete, so a folder that can't be removed
     // isn't left half-deleted (issue #129).
-    let moved_aside = match move_installed_mod_folders_aside(game_dir, mod_id) {
+    let moved_aside = match move_installed_mod_folders_aside(game_dir, mod_id).await {
         Ok(moved_aside) => moved_aside,
         Err(message) => {
             remove_staging_dir(&staging_dir);
