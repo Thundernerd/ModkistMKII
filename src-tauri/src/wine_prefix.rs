@@ -91,7 +91,7 @@ pub(crate) struct WineLaunchInfo {
 }
 
 /// `Ok(None)` means no prefix was found by detection; `Err` means the custom
-/// prefix from Settings is not valid.
+/// prefix from Settings is not valid, or no wine binary was found for the prefix.
 pub(crate) fn wine_launch_info(
     game_dir: &Path,
     custom_prefix: Option<&Path>,
@@ -104,7 +104,12 @@ pub(crate) fn wine_launch_info(
         .clone()
         .or_else(|| find_wine_binary_for_kind(&prefix.launch_kind))
     else {
-        return Ok(None);
+        return Err(format!(
+            "Found the Wine prefix {}, but did not find a wine binary to launch \
+             Zeepkist with. Install Wine or CrossOver, or make sure that wine is on \
+             your PATH.",
+            prefix.path.display()
+        ));
     };
     Ok(Some(WineLaunchInfo {
         prefix: prefix.path,
