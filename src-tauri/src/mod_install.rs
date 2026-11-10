@@ -918,6 +918,10 @@ async fn install_single_mod(
                 .await
                 .map_err(|error| {
                     if error.is_not_found() {
+                        // The mod changed on mod.io: drop its cached versions
+                        // so the versions list stops offering this file.
+                        state.invalidate_mod_cache(mod_id);
+                        state.mark_mod_file_deleted(mod_id, file_id);
                         ModioError::modfile_deleted(&mod_.name)
                     } else {
                         ModioError::from_api(error, false)
