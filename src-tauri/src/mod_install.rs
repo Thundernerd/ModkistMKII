@@ -248,11 +248,19 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if is_stale_staging_dir_name(&name) {
-            // Left behind by an install that failed or crashed in an earlier
-            // run. BepInEx loads plugins from hidden subfolders too, so a
-            // leftover staging dir would load a duplicate copy of the mod.
-            log::warn!("Removing stale mod install staging folder: {}", entry.path().display());
-            let _ = remove_dir_all_with_retry(&entry.path());
+            // Left behind when an earlier run exited mid-install (the app was
+            // closed or restarted for an update). Removing it is routine
+            // housekeeping, so it is logged at info and not sent to Sentry.
+            // BepInEx loads plugins from hidden subfolders too, so a staging
+            // dir that can't be removed would load a duplicate copy of the
+            // mod: that is worth a report.
+            log::info!("Removing stale mod install staging folder: {}", entry.path().display());
+            if let Err(error) = remove_dir_all_with_retry(&entry.path()) {
+                log::warn!(
+                    "Did not remove stale mod install staging folder {}: {error}",
+                    entry.path().display()
+                );
+            }
             continue;
         }
         let Some((mod_id, file_id)) = parse_install_folder_name(&name) else {
@@ -2213,6 +2221,22 @@ mod tests {
 
         assert!(!stale.exists());
         assert!(live.exists());
+    }
+
+    #[test]
+    fn removing_a_stale_staging_dir_is_not_reported_to_sentry() {
+        crate::modio_api::auth_tests::capture_reports();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let other_pid = std::process::id().wrapping_add(1);
+        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("mod.dll"), b"test").unwrap();
+
+        scan_installed_mods(temp.path()).unwrap();
+
+        assert!(!stale.exists());
+        assert_eq!(crate::modio_api::auth_tests::sentry_reports(), Vec::<String>::new());
     }
 
     #[tokio::test]
