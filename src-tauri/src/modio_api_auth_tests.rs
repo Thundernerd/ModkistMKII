@@ -346,6 +346,8 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
 
 // --- A whole session refused by mod.io (issue #74) ---------------------------
 
+const EMAIL: &str = "player@example.com";
+
 /// mod.io refuses both credentials: the game api_key (11002) and the session
 /// token (11005), as in the sessions behind #74 and its duplicates.
 fn every_credential_refused(request: &Received) -> (u16, Option<u32>, String) {
@@ -357,7 +359,7 @@ fn every_credential_refused(request: &Received) -> (u16, Option<u32>, String) {
 }
 
 /// Every request from the #74 cluster, in the order a session makes them.
-async fn make_every_request_from_the_74_cluster(client: &ApiClient) {
+async fn make_every_request_a_refused_session_made(client: &ApiClient) {
     let query = ModQuery::default();
     let _ = client.get_authenticated_user(TOKEN).await;
     let _ = client.get_user_mods(TOKEN, GAME_ID, &query).await;
@@ -368,7 +370,7 @@ async fn make_every_request_from_the_74_cluster(client: &ApiClient) {
         let _ = client.get_mod(GAME_ID, mod_id, Some(TOKEN)).await;
         let _ = client.get_mod_dependencies(GAME_ID, mod_id, Some(TOKEN)).await;
     }
-    let _ = client.request_email_code("player@example.com").await;
+    let _ = client.request_email_code(EMAIL).await;
 }
 
 #[tokio::test]
@@ -377,11 +379,12 @@ async fn a_session_refused_on_every_request_is_reported_to_sentry_once() {
     let server = FakeModio::start(every_credential_refused);
     let (client, rejected) = server.client();
 
-    make_every_request_from_the_74_cluster(&client).await;
+    make_every_request_a_refused_session_made(&client).await;
 
     assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()], "the token should be rejected once");
     let reports = sentry_reports();
     assert_eq!(reports.len(), 1, "expected one report for the whole session, got {reports:#?}");
+    assert!(reports[0].contains("game API key refused"), "the one report should be the API key: {}", reports[0]);
 }
 
 /// Sentry groups message events by their text, so the report for a refused
@@ -397,7 +400,7 @@ async fn a_refused_api_key_is_one_sentry_issue_whichever_request_is_refused_firs
 
     capture_reports();
     let (second_run, _) = server.client();
-    let _ = second_run.request_email_code("player@example.com").await;
+    let _ = second_run.request_email_code(EMAIL).await;
     let email_first = sentry_reports();
 
     assert_eq!(tags_first.len(), 1, "{tags_first:#?}");

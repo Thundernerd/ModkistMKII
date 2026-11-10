@@ -224,10 +224,10 @@ impl ApiError {
         );
     }
 
-    /// A refused game API key fails every public read the same way, so only
-    /// the first one per client is reported (error); the rest log at info.
-    /// The report leaves out the request path: Sentry groups message events by
-    /// their text, and the first refused request differs from run to run.
+    /// A refused game API key fails every public read the same way. Every
+    /// refusal logs at info with its path; the first per client is also
+    /// reported (error) without it: Sentry groups message events by their text,
+    /// and the first refused request differs from run to run.
     fn log_api_key_rejected(&self, context: &str, first: bool) {
         log::info!(
             "mod.io API error [{context}] (game API key refused): {} (status={:?}, error_ref={:?})",
