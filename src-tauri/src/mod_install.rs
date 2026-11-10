@@ -1299,28 +1299,20 @@ async fn install_targets_internal(
                 return Err(error);
             }
         };
-        if matches!(state_for_mod.status.as_str(), "upToDate") {
-            if let Some(file_override) = file_override {
-                if file_override.mod_id == target_mod_id
-                    && state_for_mod.installed_file_id != Some(file_override.file_id)
-                {
-                    // Install a specific older or alternate file version.
-                } else {
-                    log::debug!("Mod {target_mod_id} already up to date, skipping");
-                    if let Some(context) = sync_failure_context {
-                        maybe_clear_failed_sync_mod(context.app, target_mod_id);
-                    }
-                    skipped.push(target_mod_id);
-                    continue;
-                }
-            } else {
-                log::debug!("Mod {target_mod_id} already up to date, skipping");
-                if let Some(context) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(context.app, target_mod_id);
-                }
-                skipped.push(target_mod_id);
-                continue;
+        let target_file_id = file_override
+            .filter(|file_override| file_override.mod_id == target_mod_id)
+            .map(|file_override| file_override.file_id);
+        // An override for a file other than the installed one still installs, to
+        // switch to a specific older or alternate file version.
+        if matches!(state_for_mod.status.as_str(), "upToDate")
+            && (target_file_id.is_none() || state_for_mod.installed_file_id == target_file_id)
+        {
+            log::debug!("Mod {target_mod_id} already up to date, skipping");
+            if let Some(context) = sync_failure_context {
+                maybe_clear_failed_sync_mod(context.app, target_mod_id);
             }
+            skipped.push(target_mod_id);
+            continue;
         }
 
         if state_for_mod.status.as_str() == "updateAvailable" && !auto_update {
@@ -1340,9 +1332,6 @@ async fn install_targets_internal(
         ensure_session_not_rejected(state, session.as_deref())?;
 
         log::info!("Installing mod {target_mod_id}");
-        let target_file_id = file_override
-            .filter(|file_override| file_override.mod_id == target_mod_id)
-            .map(|file_override| file_override.file_id);
         match install_single_mod(state, game_dir, target_mod_id, target_file_id).await {
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
