@@ -954,8 +954,6 @@ async fn install_single_mod(
     let tags: Vec<String> = mod_.tags.into_iter().map(|tag| tag.name).collect();
     let kind = mod_kind_from_tags(&tags)?;
 
-    remove_installed_mod_folders(game_dir, mod_id)?;
-
     let kind_dir = kind_root_dir(game_dir, kind);
     fs::create_dir_all(&kind_dir)
         .map_err(|e| format!("Did not create {}: {e}", kind_dir.display()))?;
@@ -996,10 +994,17 @@ async fn install_single_mod(
         return Err(message.into());
     }
 
-    // Defensive: remove_installed_mod_folders already cleared any prior
-    // install of this mod, but nothing stops a concurrent operation from
-    // recreating target_dir in between, and rename() onto an existing
-    // non-empty directory fails.
+    // Remove the previous install only now that the new version is staged,
+    // so a failed download or extraction leaves it installed (issue #117).
+    if let Err(message) = remove_installed_mod_folders(game_dir, mod_id) {
+        remove_staging_dir(&staging_dir);
+        return Err(message.into());
+    }
+
+    // Defensive: remove_installed_mod_folders just cleared any prior install
+    // of this mod, but nothing stops a concurrent operation from recreating
+    // target_dir in between, and rename() onto an existing non-empty
+    // directory fails.
     let _ = remove_dir_all_with_retry(&target_dir);
     move_staged_install_into_place(&staging_dir, &target_dir).await?;
 
@@ -2366,6 +2371,44 @@ mod tests {
         let installed = kind_dir.join(&records[0].folder_name);
         assert_eq!(fs::read(installed.join("mod.dll")).unwrap(), b"MZ-plugin");
         assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
+    }
+
+    /// A failed update must leave the previous version installed: until a
+    /// later sync installs the mod again, the user would have no copy of it
+    /// (issue #117).
+    #[tokio::test]
+    async fn a_failed_download_during_an_update_keeps_the_previous_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("117001_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        let (server, _) = fake_modio_serving_mod(117_001, &kind_dir, (404, ""));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 117_001, None).await;
+
+        assert!(result.is_err(), "the download is refused, so the update fails");
+        assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
+    }
+
+    #[tokio::test]
+    async fn a_successful_update_replaces_the_previous_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("117002_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        let (server, _) = fake_modio_serving_mod(117_002, &kind_dir, (200, "MZ-new"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        install_single_mod(&state, temp.path(), 117_002, None).await.unwrap();
+
+        let records = scan_installed_mods(temp.path()).unwrap();
+        assert_eq!(records.len(), 1, "{records:#?}");
+        assert_eq!(records[0].folder_name, "117002_2_Mod");
+        assert_eq!(fs::read(kind_dir.join("117002_2_Mod/mod.dll")).unwrap(), b"MZ-new");
+        assert!(!previous.exists());
     }
 
     /// The next launch removes a leftover staging folder at info, so a staging
