@@ -607,10 +607,9 @@ async fn a_batch_still_rate_limited_after_its_retry_fails_the_later_chunks_witho
 
 const ONE_MOD: &str = r#"{"id":100,"name":"Some mod"}"#;
 
-#[tokio::test(start_paused = true)]
-async fn a_rate_limited_mod_read_is_retried_once_its_retry_after_window_ends() {
-    capture_reports();
-    let server = FakeModio::start_with_retry_after(5, rate_limited_once(ONE_MOD));
+/// Reads mod 100 from `server`, which rate limits the first request, checks
+/// that the one retry found it, and returns how long the read took.
+async fn time_the_retried_mod_read(server: &FakeModio) -> Duration {
     let state = ModioState::signed_out_against(server.base_url.clone());
 
     let started = tokio::time::Instant::now();
@@ -619,6 +618,16 @@ async fn a_rate_limited_mod_read_is_retried_once_its_retry_after_window_ends() {
 
     assert!(matches!(outcome, ModFetchOutcome::Found(_)), "the retry should find the mod");
     assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
+    waited
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_mod_read_is_retried_once_its_retry_after_window_ends() {
+    capture_reports();
+    let server = FakeModio::start_with_retry_after(5, rate_limited_once(ONE_MOD));
+
+    let waited = time_the_retried_mod_read(&server).await;
+
     assert!(
         waited >= Duration::from_secs(5) && waited < Duration::from_secs(10),
         "the retry should wait out the 5 s Retry-After, not 61 s: waited {waited:?}"
@@ -635,14 +644,9 @@ async fn a_rate_limited_mod_read_is_retried_once_its_retry_after_window_ends() {
 async fn a_rate_limited_mod_read_without_retry_after_is_retried_after_a_minute() {
     capture_reports();
     let server = FakeModio::start(rate_limited_once(ONE_MOD));
-    let state = ModioState::signed_out_against(server.base_url.clone());
 
-    let started = tokio::time::Instant::now();
-    let outcome = crate::modio_client::fetch_mod_outcome(&state, ModId(100)).await;
-    let waited = started.elapsed();
+    let waited = time_the_retried_mod_read(&server).await;
 
-    assert!(matches!(outcome, ModFetchOutcome::Found(_)), "the retry should find the mod");
-    assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
     assert!(
         waited >= Duration::from_secs(60) && waited < Duration::from_secs(65),
         "with no Retry-After the retry should wait about a minute: waited {waited:?}"

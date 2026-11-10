@@ -35,7 +35,7 @@ pub(crate) struct FakeModio {
 
 impl FakeModio {
     pub(crate) fn start(respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static) -> Self {
-        Self::start_with(None, respond)
+        Self::start_with_optional_retry_after(None, respond)
     }
 
     /// Like [`FakeModio::start`], but every 429 response carries
@@ -44,10 +44,10 @@ impl FakeModio {
         retry_after_secs: u64,
         respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static,
     ) -> Self {
-        Self::start_with(Some(retry_after_secs), respond)
+        Self::start_with_optional_retry_after(Some(retry_after_secs), respond)
     }
 
-    fn start_with(
+    fn start_with_optional_retry_after(
         retry_after_secs: Option<u64>,
         respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static,
     ) -> Self {
