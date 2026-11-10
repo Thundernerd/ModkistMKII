@@ -67,8 +67,9 @@ const NOT_FOUND_ERROR_REFS: [u32; 2] = [MOD_NOT_FOUND_ERROR_REF, MODFILE_NOT_FOU
 const TOKEN_REJECTED_ERROR_REF: u32 = 11005;
 
 /// mod.io `error_ref` codes meaning the game API key itself was refused
-/// (missing, malformed or invalid).
-const API_KEY_REFUSED_ERROR_REFS: std::ops::RangeInclusive<u32> = 11000..=11002;
+/// (missing, malformed or invalid). Every public read then fails the same way,
+/// so the first refusal per client is reported and later ones logged at info.
+const API_KEY_REFUSED_ERROR_REFS: [u32; 3] = [11000, 11001, 11002];
 
 /// mod.io `error_ref` codes `/oauth/emailexchange` returns (HTTP 401) for a
 /// security code the user got wrong: already redeemed (11011), expired (11012),
@@ -165,8 +166,8 @@ impl ApiError {
         self.status == Some(401)
     }
 
-    /// True when mod.io refused the game API key itself (error_ref 11000-11002:
-    /// missing, malformed or invalid), as opposed to a session token.
+    /// True when mod.io refused the game API key itself (see
+    /// `API_KEY_REFUSED_ERROR_REFS`), as opposed to a session token.
     pub fn is_api_key_refused(&self) -> bool {
         self.is_unauthorized()
             && self.error_ref.is_some_and(|error_ref| API_KEY_REFUSED_ERROR_REFS.contains(&error_ref))
@@ -578,7 +579,7 @@ impl ModQuery {
 pub type TokenRejectedHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Called once per client when mod.io refuses the game API key on an api_key
-/// request (error_ref 11000-11002: missing, malformed or invalid key).
+/// request (see `API_KEY_REFUSED_ERROR_REFS`).
 pub type ApiKeyRefusedHook = Arc<dyn Fn() + Send + Sync>;
 
 /// How an `ApiClient` reports credential failures back to the app. Every hook
@@ -594,13 +595,12 @@ pub struct ApiClient {
     base_url: String,
     api_key: String,
     hooks: ApiClientHooks,
-    /// Set once `hooks.on_api_key_refused` was called.
-    api_key_refusal_signalled: AtomicBool,
     /// Tokens mod.io already answered with 401. Later requests carrying one of
     /// them fail locally instead of firing another doomed request.
     rejected_tokens: std::sync::Mutex<HashSet<String>>,
-    /// Set once a refused game API key (error_ref 11000-11002) was reported. A
-    /// refused key fails every public read the same way, so report it only once.
+    /// Set once a refused game API key (see `API_KEY_REFUSED_ERROR_REFS`) was
+    /// reported and `hooks.on_api_key_refused` called. A refused key fails
+    /// every public read the same way, so both happen only once.
     api_key_rejection_reported: AtomicBool,
     /// Earliest instant the next request may start. Guards both the steady-state
     /// pacing and the self-healing backoff after a `Retry-After` response.
@@ -636,7 +636,6 @@ impl ApiClient {
             base_url: format!("https://{host}/v1"),
             api_key,
             hooks: ApiClientHooks::default(),
-            api_key_refusal_signalled: AtomicBool::new(false),
             rejected_tokens: std::sync::Mutex::new(HashSet::new()),
             api_key_rejection_reported: AtomicBool::new(false),
             next_request_at: tokio::sync::Mutex::new(Instant::now()),
@@ -820,10 +819,8 @@ impl ApiClient {
         } else if token.is_none() && error.is_api_key_refused() {
             let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
             error.log_api_key_rejected(path, first);
-            if !self.api_key_refusal_signalled.swap(true, Ordering::Relaxed) {
-                if let Some(hook) = self.hooks.on_api_key_refused.as_ref() {
-                    hook();
-                }
+            if let Some(hook) = self.hooks.on_api_key_refused.as_ref().filter(|_| first) {
+                hook();
             }
         } else if token.is_none() && error.is_security_code_refused() {
             error.log_security_code_refused(path);

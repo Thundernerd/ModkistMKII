@@ -416,13 +416,15 @@ async fn a_refused_api_key_is_reported_once_after_another_tokenless_401() {
     let code = client.exchange_email_code("12345").await.err().expect("request should fail");
     let tags = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
 
-    assert!(code.is_unauthorized() && tags.is_api_key_refused());
+    assert!(code.is_unauthorized(), "the email code should be refused: {code:?}");
+    assert!(tags.is_api_key_refused(), "the API key should be refused: {tags:?}");
     let refused: Vec<String> = sentry_reports()
         .into_iter()
         .filter(|report| report.contains("game API key refused"))
         .collect();
     assert_eq!(refused.len(), 1, "expected one refused-key report, got {refused:#?}");
-    assert!(refused[0].contains("error_ref=Some(11002)"), "the report should be the 11002: {}", refused[0]);
+    let api_key_invalid = format!("error_ref=Some({API_KEY_INVALID_ERROR_REF})");
+    assert!(refused[0].contains(&api_key_invalid), "the report should be the 11002: {}", refused[0]);
     assert_eq!(*refusals.lock().unwrap(), 1);
 }
 
