@@ -144,39 +144,37 @@ fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
     spawn_detached(&mut command)
 }
 
+#[cfg(windows)]
 fn launch_game_at(game_dir: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        if launch_via_steam().is_ok() {
-            log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
-            return Ok(());
-        }
-
-        log::warn!("Steam launch failed, falling back to direct executable");
-        launch_direct_exe(game_dir)?;
-        log::info!("Launched Zeepkist directly from {}", game_dir.display());
+    if launch_via_steam().is_ok() {
+        log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
         return Ok(());
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        if launch_via_steam().is_ok() {
-            log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
-            return Ok(());
-        }
+    log::warn!("Steam launch failed, falling back to direct executable");
+    launch_direct_exe(game_dir)?;
+    log::info!("Launched Zeepkist directly from {}", game_dir.display());
+    Ok(())
+}
 
-        log::warn!("Steam launch failed, falling back to Wine");
-        launch_via_wine(game_dir)?;
-        log::info!("Launched Zeepkist via Wine from {}", game_dir.display());
+#[cfg(target_os = "linux")]
+fn launch_game_at(game_dir: &Path) -> Result<(), String> {
+    if launch_via_steam().is_ok() {
+        log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
         return Ok(());
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        launch_via_wine(game_dir)?;
-        log::info!("Launched Zeepkist via CrossOver/GameHub/Wine from {}", game_dir.display());
-        return Ok(());
-    }
+    log::warn!("Steam launch failed, falling back to Wine");
+    launch_via_wine(game_dir)?;
+    log::info!("Launched Zeepkist via Wine from {}", game_dir.display());
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_game_at(game_dir: &Path) -> Result<(), String> {
+    launch_via_wine(game_dir)?;
+    log::info!("Launched Zeepkist via CrossOver/GameHub/Wine from {}", game_dir.display());
+    Ok(())
 }
 
 #[tauri::command]

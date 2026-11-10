@@ -791,7 +791,7 @@ async fn uninstall_blockers_for(
         });
     }
 
-    blockers.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    blockers.sort_by_key(|blocker| blocker.name.to_lowercase());
     Ok(blockers)
 }
 
@@ -2153,7 +2153,7 @@ async fn list_installed_mods_inner(
         });
     }
 
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|entry| entry.name.to_lowercase());
     Ok(entries)
 }
 

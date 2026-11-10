@@ -895,6 +895,8 @@ pub(crate) fn seed_mod_cache(state: &ModioState, mod_: &ModObject) {
     state.store_mod(mod_.clone());
 }
 
+// Short-lived and rarely moved; boxing `Found` would touch every call site for no gain.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub(crate) enum ModFetchOutcome {
     Found(ModObject),
@@ -1774,7 +1776,7 @@ pub async fn rate_mod(
     mod_id: ModId,
     rating: i8,
 ) -> Result<(), String> {
-    if !matches!(rating, -1 | 0 | 1) {
+    if !matches!(rating, -1..=1) {
         return Err("Rating must be 1 (positive), -1 (negative), or 0 (clear)".to_string());
     }
 

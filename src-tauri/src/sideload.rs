@@ -659,7 +659,7 @@ fn list_all_entries(root: &Path) -> Result<Vec<SideloadedEntry>, String> {
     let mut entries = scan_kind_entries(root, SideloadTargetKind::Plugins)?;
     entries.extend(scan_kind_entries(root, SideloadTargetKind::Blueprints)?);
     entries.extend(scan_legacy_entries(root)?);
-    entries.sort_by(|left, right| left.name.to_ascii_lowercase().cmp(&right.name.to_ascii_lowercase()));
+    entries.sort_by_key(|entry| entry.name.to_ascii_lowercase());
     Ok(entries)
 }
 
@@ -1467,7 +1467,7 @@ mod tests {
             ArchiveContentKind::PluginsOnly
         );
         assert_eq!(
-            classify_loose_files(&[level.clone()]).unwrap(),
+            classify_loose_files(std::slice::from_ref(&level)).unwrap(),
             ArchiveContentKind::BlueprintsOnly
         );
         assert_eq!(

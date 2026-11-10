@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn count_dependency_sync_failures_only_counts_dependency_type() {
-        let records = vec![
+        let records = [
             FailedSyncModRecord {
                 mod_id: ModId(101),
                 error_type: "dependency".to_string(),
