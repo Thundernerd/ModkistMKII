@@ -1475,7 +1475,7 @@ async fn sync_subscribed_mods_inner(
     match run_subscription_sync(app, state).await {
         // mod.io rejected the session mid-sync: the user is already signed out
         // and asked to sign in again, so this is a cancelled sync, not a failure.
-        Err(error) if error.credentials_rejected && state.session_rejected(session.as_deref()) =>
+        Err(error) if error.credentials_rejected() && state.session_rejected(session.as_deref()) =>
         {
             log::info!("Subscription sync cancelled: mod.io rejected the session ({error})");
             Err(SUBSCRIPTION_SYNC_CANCELLED.into())

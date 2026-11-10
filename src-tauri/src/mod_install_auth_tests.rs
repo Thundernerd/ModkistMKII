@@ -85,7 +85,7 @@ fn batch_omits_private_mods_with_expired_token(request: &Received) -> (u16, Opti
 }
 
 fn failed_on_rejected_credentials(outcome: Option<&ModFetchOutcome>) -> bool {
-    matches!(outcome, Some(ModFetchOutcome::Failed(error)) if error.credentials_rejected)
+    matches!(outcome, Some(ModFetchOutcome::Failed(error)) if error.credentials_rejected())
 }
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn an_expired_token_while_installing_dependencies_is_not_reported_per_mod(
     let Err(error) = result else {
         panic!("the install should stop once the session is rejected");
     };
-    assert!(error.credentials_rejected, "{error}");
+    assert!(error.credentials_rejected(), "{error}");
     assert_eq!(
         server.received().len(),
         2,
@@ -278,7 +278,7 @@ async fn an_expired_token_while_subscribing_is_a_rejected_credential() {
     let Err(error) = result else {
         panic!("subscribing with an expired token should fail");
     };
-    assert!(error.credentials_rejected, "{error}");
+    assert!(error.credentials_rejected(), "{error}");
     assert_eq!(sentry_reports(), Vec::<String>::new());
 }
 
