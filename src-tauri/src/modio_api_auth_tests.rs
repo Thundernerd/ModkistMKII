@@ -343,3 +343,43 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
         assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
     }
 }
+
+// --- A whole session refused by mod.io (issue #74) ---------------------------
+
+/// mod.io refuses both credentials: the game api_key (11002) and the session
+/// token (11005), as in the sessions behind #74 and its duplicates.
+fn every_credential_refused(request: &Received) -> (u16, Option<u32>, String) {
+    if request.bearer {
+        token_expired()
+    } else {
+        api_key_invalid()
+    }
+}
+
+/// Every request from the #74 cluster, in the order a session makes them.
+async fn make_every_request_from_the_74_cluster(client: &ApiClient) {
+    let query = ModQuery::default();
+    let _ = client.get_authenticated_user(TOKEN).await;
+    let _ = client.get_user_mods(TOKEN, GAME_ID, &query).await;
+    let _ = client.get_user_subscriptions(TOKEN, GAME_ID, &query).await;
+    let _ = client.get_mods(GAME_ID, &query).await;
+    let _ = client.get_game_tags(GAME_ID).await;
+    for mod_id in [2400035, 6315836, 3137985] {
+        let _ = client.get_mod(GAME_ID, mod_id, Some(TOKEN)).await;
+        let _ = client.get_mod_dependencies(GAME_ID, mod_id, Some(TOKEN)).await;
+    }
+    let _ = client.request_email_code("player@example.com").await;
+}
+
+#[tokio::test]
+async fn a_session_refused_on_every_request_is_reported_to_sentry_once() {
+    capture_reports();
+    let server = FakeModio::start(every_credential_refused);
+    let (client, rejected) = server.client();
+
+    make_every_request_from_the_74_cluster(&client).await;
+
+    assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()], "the token should be rejected once");
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report for the whole session, got {reports:#?}");
+}
