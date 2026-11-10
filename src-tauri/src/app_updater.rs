@@ -45,6 +45,20 @@ fn skipped_result() -> AppUpdateCheckResult {
     }
 }
 
+/// Log a failed update check. A check that could not reach a manifest is
+/// expected now and then (offline, captive portal, GitHub hiccup, the manifest
+/// being replaced mid-release) and the next launch retries, so it stays in the
+/// log file. Anything else means the published manifest or update is broken,
+/// which is reported.
+fn log_check_failure(error: &tauri_plugin_updater::Error) {
+    use tauri_plugin_updater::Error;
+
+    match error {
+        Error::ReleaseNotFound | Error::Reqwest(_) => log::info!("App update check failed: {error}"),
+        _ => log::warn!("App update check failed: {error}"),
+    }
+}
+
 #[tauri::command]
 pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateCheckResult, String> {
     if cfg!(debug_assertions) {
@@ -101,7 +115,7 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
             version: None,
         }),
         Err(error) => {
-            log::warn!("App update check failed: {error}");
+            log_check_failure(&error);
             Err(error.to_string())
         }
     }
@@ -110,6 +124,53 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modio_api::auth_tests::{capture_reports, sentry_reports};
+    use tauri_plugin_updater::Error as UpdaterError;
+
+    #[test]
+    fn an_unreachable_update_endpoint_is_not_reported_to_sentry() {
+        capture_reports();
+
+        // A non-2xx response from every endpoint (GitHub hiccup, captive portal,
+        // proxy, manifest briefly replaced during a release).
+        log_check_failure(&UpdaterError::ReleaseNotFound);
+
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    /// A `reqwest::Error` of the major tauri-plugin-updater uses. Building a real
+    /// client needs a rustls crypto provider, so convert a response instead.
+    fn failed_request() -> updater_reqwest::Error {
+        let response = tauri::http::Response::builder()
+            .status(503)
+            .body(Vec::<u8>::new())
+            .unwrap();
+        updater_reqwest::Response::from(response)
+            .error_for_status()
+            .expect_err("a 503 is an error status")
+    }
+
+    #[test]
+    fn a_failed_update_request_is_not_reported_to_sentry() {
+        capture_reports();
+
+        // Offline, DNS, TLS or a cut-off body while fetching the manifest.
+        log_check_failure(&UpdaterError::Reqwest(failed_request()));
+
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_manifest_without_this_platform_is_still_reported_to_sentry() {
+        capture_reports();
+
+        log_check_failure(&UpdaterError::TargetNotFound("windows-x86_64".into()));
+
+        let reports = sentry_reports();
+        assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+        assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
+        assert!(reports[0].contains("windows-x86_64"), "report should name the platform: {}", reports[0]);
+    }
 
     #[test]
     fn stable_versions_use_stable_manifest() {
