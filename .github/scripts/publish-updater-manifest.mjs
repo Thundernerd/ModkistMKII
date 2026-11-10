@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const UPDATER_TAG = "updater";
+const TEMP_SUFFIX = ".next";
 const REQUIRED_PLATFORMS = [
   "darwin-aarch64",
   "darwin-x86_64",
@@ -101,15 +102,30 @@ export function buildManifest(version, platforms, pubDate = new Date()) {
   };
 }
 
-const TEMP_SUFFIX = ".next";
-
-function deleteAsset(gh, repo, id) {
-  gh(["api", "-X", "DELETE", `repos/${repo}/releases/assets/${id}`]);
+function tempName(name) {
+  return `${name}${TEMP_SUFFIX}`;
 }
 
-function listAssets(gh, repo, tag) {
-  const release = JSON.parse(gh(["api", `repos/${repo}/releases/tags/${tag}`]));
+function listAssets(runGh, repo, tag) {
+  const release = JSON.parse(
+    runGh(["api", `repos/${repo}/releases/tags/${tag}`]),
+  );
   return release.assets ?? [];
+}
+
+function deleteAsset(runGh, repo, id) {
+  runGh(["api", "-X", "DELETE", `repos/${repo}/releases/assets/${id}`]);
+}
+
+function renameAsset(runGh, repo, id, name) {
+  runGh([
+    "api",
+    "-X",
+    "PATCH",
+    `repos/${repo}/releases/assets/${id}`,
+    "-f",
+    `name=${name}`,
+  ]);
 }
 
 /**
@@ -121,44 +137,35 @@ function listAssets(gh, repo, tag) {
  * A failed upload throws before anything is deleted, so the previous manifest
  * stays downloadable.
  *
- * `gh` runs the gh CLI with the given arguments and returns its stdout.
+ * `runGh` runs the gh CLI with the given arguments and returns its stdout.
  */
-export function replaceManifests({ gh, repo, tag, dir, manifests }) {
-  const tempNames = new Set(
-    manifests.map(({ name }) => `${name}${TEMP_SUFFIX}`),
-  );
-  for (const stale of listAssets(gh, repo, tag)) {
+export function replaceManifests({ runGh, repo, tag, dir, manifests }) {
+  const tempNames = new Set(manifests.map(({ name }) => tempName(name)));
+  for (const stale of listAssets(runGh, repo, tag)) {
     if (tempNames.has(stale.name)) {
-      deleteAsset(gh, repo, stale.id);
+      deleteAsset(runGh, repo, stale.id);
     }
   }
 
   for (const { name, content } of manifests) {
-    const file = path.join(dir, `${name}${TEMP_SUFFIX}`);
+    const file = path.join(dir, tempName(name));
     fs.writeFileSync(file, content);
-    gh(["release", "upload", tag, file]);
+    runGh(["release", "upload", tag, file]);
   }
 
-  const assets = listAssets(gh, repo, tag);
+  const assets = listAssets(runGh, repo, tag);
   for (const { name } of manifests) {
     const old = assets.find((asset) => asset.name === name);
-    const next = assets.find((asset) => asset.name === `${name}${TEMP_SUFFIX}`);
+    const next = assets.find((asset) => asset.name === tempName(name));
     if (!next) {
       throw new Error(
-        `Uploaded ${name}${TEMP_SUFFIX} is missing from release ${tag}`,
+        `Uploaded ${tempName(name)} is missing from release ${tag}`,
       );
     }
     if (old) {
-      deleteAsset(gh, repo, old.id);
+      deleteAsset(runGh, repo, old.id);
     }
-    gh([
-      "api",
-      "-X",
-      "PATCH",
-      `repos/${repo}/releases/assets/${next.id}`,
-      "-f",
-      `name=${name}`,
-    ]);
+    renameAsset(runGh, repo, next.id, name);
   }
 }
 
@@ -218,7 +225,7 @@ function main() {
 
   ensureUpdaterRelease();
   replaceManifests({
-    gh: ghOutput,
+    runGh: ghOutput,
     repo,
     tag: UPDATER_TAG,
     dir: tmpDir,

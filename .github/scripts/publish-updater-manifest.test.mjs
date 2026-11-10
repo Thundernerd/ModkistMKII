@@ -74,6 +74,46 @@ test("writes version and platform map into the manifest", () => {
 
 const REPO = "Thundernerd/ModkistMKII";
 
+// Reads a gh argv as the operation it performs on the release's assets.
+function parseGhCall(args) {
+  const [cmd, sub] = args;
+  if (cmd === "release" && sub === "upload") {
+    return { kind: "upload", file: args[3], name: path.basename(args[3]) };
+  }
+  if (cmd === "api" && args.includes("-X")) {
+    const method = args[args.indexOf("-X") + 1];
+    const id = Number(
+      args
+        .find((a) => a.includes("/assets/"))
+        .split("/")
+        .pop(),
+    );
+    if (method === "PATCH") {
+      const name = args[args.indexOf("-f") + 1].replace(/^name=/, "");
+      return { kind: "rename", id, name };
+    }
+    return { kind: "delete", id };
+  }
+  if (cmd === "api") {
+    return { kind: "list" };
+  }
+  throw new Error(`unexpected gh call: ${args.join(" ")}`);
+}
+
+function describeCall(args) {
+  const call = parseGhCall(args);
+  switch (call.kind) {
+    case "upload":
+      return `upload ${call.name}`;
+    case "rename":
+      return `rename ${call.id} -> ${call.name}`;
+    case "delete":
+      return `delete ${call.id}`;
+    default:
+      return call.kind;
+  }
+}
+
 // A fake `gh` runner that keeps the updater release's assets in memory and
 // records every call, so tests can check both the order of operations and
 // what a client would be able to download afterwards.
@@ -81,64 +121,46 @@ function fakeGh({ assets = [], failUploadOf = [] } = {}) {
   let nextId = 1000;
   const state = new Map(assets.map((asset) => [asset.name, { ...asset }]));
   const calls = [];
+  const findById = (id) => {
+    const entry = [...state.values()].find((asset) => asset.id === id);
+    if (!entry) {
+      throw new Error(`no asset ${id}`);
+    }
+    return entry;
+  };
   const run = (args) => {
     calls.push(args);
-    const [cmd, sub] = args;
-    if (cmd === "api" && args.includes("-X")) {
-      const method = args[args.indexOf("-X") + 1];
-      const id = Number(
-        args
-          .find((a) => a.includes("/assets/"))
-          .split("/")
-          .pop(),
-      );
-      const entry = [...state.values()].find((asset) => asset.id === id);
-      if (!entry) throw new Error(`no asset ${id}`);
-      state.delete(entry.name);
-      if (method === "PATCH") {
-        const name = args[args.indexOf("-f") + 1].replace(/^name=/, "");
-        state.set(name, { ...entry, name, content: entry.content });
+    const call = parseGhCall(args);
+    switch (call.kind) {
+      case "list":
+        return JSON.stringify({
+          assets: [...state.values()].map(({ id, name }) => ({ id, name })),
+        });
+      case "upload":
+        if (failUploadOf.includes(call.name)) {
+          throw new Error(`upload of ${call.name} failed`);
+        }
+        if (state.has(call.name)) {
+          throw new Error(`asset ${call.name} already exists`);
+        }
+        state.set(call.name, {
+          id: nextId++,
+          name: call.name,
+          content: fs.readFileSync(call.file, "utf8"),
+        });
+        return "";
+      case "delete":
+        state.delete(findById(call.id).name);
+        return "";
+      case "rename": {
+        const entry = findById(call.id);
+        state.delete(entry.name);
+        state.set(call.name, { ...entry, name: call.name });
+        return "";
       }
-      return "";
     }
-    if (cmd === "api") {
-      return JSON.stringify({
-        assets: [...state.values()].map(({ id, name }) => ({ id, name })),
-      });
-    }
-    if (cmd === "release" && sub === "upload") {
-      const file = args[3];
-      const name = path.basename(file);
-      if (failUploadOf.includes(name))
-        throw new Error(`upload of ${name} failed`);
-      if (state.has(name)) throw new Error(`asset ${name} already exists`);
-      state.set(name, {
-        id: nextId++,
-        name,
-        content: fs.readFileSync(file, "utf8"),
-      });
-      return "";
-    }
-    throw new Error(`unexpected gh call: ${args.join(" ")}`);
   };
   return { run, calls, state };
-}
-
-function describeCall(args) {
-  if (args[0] === "release" && args[1] === "upload") {
-    return `upload ${path.basename(args[3])}`;
-  }
-  if (args[0] === "api" && args.includes("-X")) {
-    const method = args[args.indexOf("-X") + 1];
-    const id = args
-      .find((a) => a.includes("/assets/"))
-      .split("/")
-      .pop();
-    return method === "PATCH"
-      ? `rename ${id} -> ${args[args.indexOf("-f") + 1].replace(/^name=/, "")}`
-      : `delete ${id}`;
-  }
-  return "list";
 }
 
 function tempDir() {
@@ -151,7 +173,7 @@ test("replaces a manifest by uploading a temp asset, then deleting the old one, 
   });
 
   replaceManifests({
-    gh: gh.run,
+    runGh: gh.run,
     repo: REPO,
     tag: "updater",
     dir: tempDir(),
@@ -184,7 +206,7 @@ test("a failed upload throws without deleting any live manifest", () => {
   assert.throws(
     () =>
       replaceManifests({
-        gh: gh.run,
+        runGh: gh.run,
         repo: REPO,
         tag: "updater",
         dir: tempDir(),
@@ -213,7 +235,7 @@ test("replaces both manifests only after both temp uploads succeed", () => {
   });
 
   replaceManifests({
-    gh: gh.run,
+    runGh: gh.run,
     repo: REPO,
     tag: "updater",
     dir: tempDir(),
@@ -243,7 +265,7 @@ test("creates a manifest that did not exist yet", () => {
   const gh = fakeGh();
 
   replaceManifests({
-    gh: gh.run,
+    runGh: gh.run,
     repo: REPO,
     tag: "updater",
     dir: tempDir(),
@@ -263,7 +285,7 @@ test("removes a leftover temp asset from an earlier failed run before uploading"
   });
 
   replaceManifests({
-    gh: gh.run,
+    runGh: gh.run,
     repo: REPO,
     tag: "updater",
     dir: tempDir(),
