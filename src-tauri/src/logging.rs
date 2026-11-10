@@ -18,12 +18,37 @@ const MAX_LOG_FILES: usize = 5;
 
 struct SentryLogWriter;
 
+/// Crates whose own warnings and errors stay in the log file. The app logs the
+/// outcome it gets back from them and decides there whether to report it.
+const UNREPORTED_TARGETS: &[&str] = &[
+    // Logs `error` on every failed update check, with no status code or URL;
+    // app_updater reports the returned error when it is worth reporting.
+    "tauri_plugin_updater",
+];
+
+/// The Sentry level a log record is reported at, or `None` to keep it out of Sentry.
+fn sentry_level(record: &Record) -> Option<sentry::Level> {
+    let target = record.target();
+    let unreported = UNREPORTED_TARGETS.iter().any(|crate_name| {
+        target
+            .strip_prefix(crate_name)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+    });
+    if unreported {
+        return None;
+    }
+
+    match record.level() {
+        log::Level::Error => Some(sentry::Level::Error),
+        log::Level::Warn => Some(sentry::Level::Warning),
+        _ => None,
+    }
+}
+
 impl LogWriter for SentryLogWriter {
     fn write(&self, _now: &mut DeferredNow, record: &Record) -> std::io::Result<()> {
-        let level = match record.level() {
-            log::Level::Error => sentry::Level::Error,
-            log::Level::Warn => sentry::Level::Warning,
-            _ => return Ok(()),
+        let Some(level) = sentry_level(record) else {
+            return Ok(());
         };
 
         let message = record.args().to_string();
@@ -112,4 +137,44 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn log_directory_path(app: AppHandle) -> Result<String, String> {
     log_directory(&app).map(|path| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record_level(level: log::Level, target: &str, message: &str) -> Option<sentry::Level> {
+        sentry_level(
+            &Record::builder()
+                .level(level)
+                .target(target)
+                .module_path(Some(target))
+                .args(format_args!("{message}"))
+                .build(),
+        )
+    }
+
+    #[test]
+    fn the_updater_plugins_own_errors_are_not_reported_to_sentry() {
+        // Logged by the plugin on every failed check, before it returns the
+        // error that app_updater reports or keeps quiet.
+        let level = record_level(
+            log::Level::Error,
+            "tauri_plugin_updater::updater",
+            "update endpoint did not respond with a successful status code",
+        );
+
+        assert_eq!(level, None);
+    }
+
+    #[test]
+    fn app_warnings_and_errors_are_still_reported_to_sentry() {
+        let warn = record_level(log::Level::Warn, "modkistmkii_lib::app_updater", "App update check failed");
+        let error = record_level(log::Level::Error, "modkistmkii_lib::modio_api", "mod.io API error");
+        let info = record_level(log::Level::Info, "modkistmkii_lib::app_updater", "App update check failed");
+
+        assert_eq!(warn, Some(sentry::Level::Warning));
+        assert_eq!(error, Some(sentry::Level::Error));
+        assert_eq!(info, None);
+    }
 }
