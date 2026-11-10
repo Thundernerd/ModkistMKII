@@ -49,7 +49,9 @@ pub struct SideloadedEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum AddSideloadedModResult {
-    Added { entry: SideloadedEntry },
+    Added {
+        entry: SideloadedEntry,
+    },
     #[serde(rename_all = "camelCase")]
     NeedsTargetChoice {
         folder_name: String,
@@ -140,9 +142,7 @@ fn is_safe_entry_id(entry_id: &str) -> bool {
 
     let parts: Vec<&str> = entry_id.split('/').collect();
     match parts.as_slice() {
-        [name] => {
-            is_safe_path_segment(name) && *name != PLUGINS_DIR && *name != BLUEPRINTS_DIR
-        }
+        [name] => is_safe_path_segment(name) && *name != PLUGINS_DIR && *name != BLUEPRINTS_DIR,
         [kind, name]
             if (*kind == PLUGINS_DIR || *kind == BLUEPRINTS_DIR) && is_safe_path_segment(name) =>
         {
@@ -197,7 +197,10 @@ fn root_loose_file_kind(path: &Path) -> Option<(SideloadTargetKind, SideloadSour
     if is_dll_path(path) {
         Some((SideloadTargetKind::Plugins, SideloadSourceType::Dll))
     } else if is_zeeplevel_path(path) {
-        Some((SideloadTargetKind::Blueprints, SideloadSourceType::Zeeplevel))
+        Some((
+            SideloadTargetKind::Blueprints,
+            SideloadSourceType::Zeeplevel,
+        ))
     } else {
         None
     }
@@ -255,9 +258,7 @@ fn classify_loose_files(source_paths: &[PathBuf]) -> Result<ArchiveContentKind, 
         } else if is_zeeplevel_path(path) {
             has_zeeplevel = true;
         } else {
-            return Err(
-                "Only .dll and .zeeplevel files can be sideloaded together.".into(),
-            );
+            return Err("Only .dll and .zeeplevel files can be sideloaded together.".into());
         }
     }
 
@@ -359,7 +360,9 @@ fn scan_archive_contents(dir: &Path) -> Result<ArchiveContentKind, String> {
         has_non_zeeplevel: &mut bool,
         file_count: &mut usize,
     ) -> Result<(), String> {
-        for entry in fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))? {
+        for entry in
+            fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))?
+        {
             let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let path = entry.path();
             let file_type = entry
@@ -381,7 +384,12 @@ fn scan_archive_contents(dir: &Path) -> Result<ArchiveContentKind, String> {
         Ok(())
     }
 
-    walk(dir, &mut has_zeeplevel, &mut has_non_zeeplevel, &mut file_count)?;
+    walk(
+        dir,
+        &mut has_zeeplevel,
+        &mut has_non_zeeplevel,
+        &mut file_count,
+    )?;
 
     if file_count == 0 {
         return Err("Archive contains no files.".into());
@@ -418,7 +426,9 @@ fn detect_source_type(entry_dir: &Path) -> Result<SideloadSourceType, String> {
         zeeplevel_count: &mut usize,
         other_count: &mut usize,
     ) -> Result<(), String> {
-        for entry in fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))? {
+        for entry in
+            fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))?
+        {
             let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let path = entry.path();
             let file_type = entry
@@ -445,7 +455,12 @@ fn detect_source_type(entry_dir: &Path) -> Result<SideloadSourceType, String> {
         Ok(())
     }
 
-    walk(entry_dir, &mut dll_count, &mut zeeplevel_count, &mut other_count)?;
+    walk(
+        entry_dir,
+        &mut dll_count,
+        &mut zeeplevel_count,
+        &mut other_count,
+    )?;
 
     if dll_count == 1 && zeeplevel_count == 0 && other_count == 0 {
         Ok(SideloadSourceType::Dll)
@@ -555,12 +570,7 @@ fn scan_kind_entries(
             let file_name = entry.file_name();
             let file_name = file_name.to_string_lossy();
             if let Some(source_type) = loose_file_source_type(&path, kind) {
-                entries.push(make_loose_file_entry(
-                    kind,
-                    &file_name,
-                    source_type,
-                    &path,
-                ));
+                entries.push(make_loose_file_entry(kind, &file_name, source_type, &path));
             }
         }
     }
@@ -573,7 +583,9 @@ fn infer_legacy_target_kind(entry_dir: &Path) -> Result<SideloadTargetKind, Stri
     let mut has_dll = false;
 
     fn walk(dir: &Path, has_zeeplevel: &mut bool, has_dll: &mut bool) -> Result<(), String> {
-        for entry in fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))? {
+        for entry in
+            fs::read_dir(dir).map_err(|e| format!("Did not read {}: {e}", dir.display()))?
+        {
             let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let path = entry.path();
             let file_type = entry
@@ -675,12 +687,8 @@ fn place_file(source_path: &Path, dest_path: &Path, use_symlinks: bool) -> Resul
     if use_symlinks {
         symlink_file(source_path, dest_path)
     } else {
-        fs::copy(source_path, dest_path).map_err(|e| {
-            format!(
-                "Did not copy file to {}: {e}",
-                dest_path.display()
-            )
-        })?;
+        fs::copy(source_path, dest_path)
+            .map_err(|e| format!("Did not copy file to {}: {e}", dest_path.display()))?;
         Ok(())
     }
 }
@@ -828,12 +836,9 @@ fn add_single_sideloaded_mod(
     let extension = source_path
         .extension()
         .and_then(|ext| ext.to_str())
-        .ok_or_else(|| {
-            "Selected file must be a .dll, .zeeplevel, or .zip file.".to_string()
-        })?;
-    let file_kind = file_kind_for_extension(extension).ok_or_else(|| {
-        "Only .dll, .zeeplevel, and .zip files can be sideloaded.".to_string()
-    })?;
+        .ok_or_else(|| "Selected file must be a .dll, .zeeplevel, or .zip file.".to_string())?;
+    let file_kind = file_kind_for_extension(extension)
+        .ok_or_else(|| "Only .dll, .zeeplevel, and .zip files can be sideloaded.".to_string())?;
 
     let base_name = folder_name_from_source(source_path)?;
     let source_path_string = source_path.to_string_lossy().into_owned();
@@ -887,7 +892,8 @@ fn add_single_linked_mod(
 ) -> Result<AddSideloadedModResult, String> {
     if is_zip_path(source_path) {
         return Err(
-            "Zip archives must not be linked. Use Choose files to copy and extract archives.".into(),
+            "Zip archives must not be linked. Use Choose files to copy and extract archives."
+                .into(),
         );
     }
 
@@ -966,9 +972,7 @@ fn add_multi_sideloaded_mod(
         let extension = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .ok_or_else(|| {
-                "Selected files must be .dll or .zeeplevel files.".to_string()
-            })?;
+            .ok_or_else(|| "Selected files must be .dll or .zeeplevel files.".to_string())?;
         let file_kind = file_kind_for_extension(extension).ok_or_else(|| {
             "Only .dll and .zeeplevel files can be sideloaded together.".to_string()
         })?;
@@ -1013,19 +1017,11 @@ where
 {
     let temp_dir = temp_extract_dir();
     if temp_dir.exists() {
-        fs::remove_dir_all(&temp_dir).map_err(|e| {
-            format!(
-                "Did not clear temp directory {}: {e}",
-                temp_dir.display()
-            )
-        })?;
+        fs::remove_dir_all(&temp_dir)
+            .map_err(|e| format!("Did not clear temp directory {}: {e}", temp_dir.display()))?;
     }
-    fs::create_dir_all(&temp_dir).map_err(|e| {
-        format!(
-            "Did not create temp directory {}: {e}",
-            temp_dir.display()
-        )
-    })?;
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Did not create temp directory {}: {e}", temp_dir.display()))?;
 
     let result = extract_zip(source_path, &temp_dir).and_then(|_| operation(&temp_dir));
     if temp_dir.exists() {
@@ -1057,12 +1053,8 @@ pub fn add_sideloaded_mod(
     let paths: Vec<PathBuf> = source_paths.iter().map(PathBuf::from).collect();
 
     let root = ensure_sideload_ready(&app)?;
-    fs::create_dir_all(&root).map_err(|e| {
-        format!(
-            "Did not create sideload directory {}: {e}",
-            root.display()
-        )
-    })?;
+    fs::create_dir_all(&root)
+        .map_err(|e| format!("Did not create sideload directory {}: {e}", root.display()))?;
 
     if paths.len() == 1 {
         add_single_sideloaded_mod(&root, &paths[0], target_kind, use_symlinks)
@@ -1502,10 +1494,7 @@ mod tests {
         fs::write(&dll_c, b"dll").unwrap();
         fs::write(&dll_d, b"dll").unwrap();
 
-        assert_eq!(
-            folder_name_from_sources(&[dll_c, dll_d]).unwrap(),
-            "c"
-        );
+        assert_eq!(folder_name_from_sources(&[dll_c, dll_d]).unwrap(), "c");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -1665,13 +1654,9 @@ mod tests {
             AddSideloadedModResult::NeedsTargetChoice { .. }
         ));
 
-        let result = add_single_sideloaded_mod(
-            &root,
-            &source,
-            Some(SideloadTargetKind::Plugins),
-            true,
-        )
-        .unwrap();
+        let result =
+            add_single_sideloaded_mod(&root, &source, Some(SideloadTargetKind::Plugins), true)
+                .unwrap();
         let AddSideloadedModResult::Added { entry } = result else {
             panic!("expected linked entry");
         };

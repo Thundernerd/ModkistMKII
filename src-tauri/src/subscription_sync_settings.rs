@@ -59,7 +59,10 @@ fn read_failed_sync_records(app: &AppHandle) -> Vec<FailedSyncModRecord> {
         .unwrap_or_default()
 }
 
-fn replace_failed_sync_records(app: &AppHandle, records: Vec<FailedSyncModRecord>) -> Result<(), String> {
+fn replace_failed_sync_records(
+    app: &AppHandle,
+    records: Vec<FailedSyncModRecord>,
+) -> Result<(), String> {
     let Some(state) = app.try_state::<FailedSyncState>() else {
         return Err("Sync failure state is not initialized.".into());
     };
@@ -144,7 +147,10 @@ fn truncate_error_detail(message: &str) -> Option<String> {
     }
     Some(format!(
         "{}…",
-        trimmed.chars().take(MAX_ERROR_DETAIL_LEN).collect::<String>()
+        trimmed
+            .chars()
+            .take(MAX_ERROR_DETAIL_LEN)
+            .collect::<String>()
     ))
 }
 
@@ -165,9 +171,7 @@ fn dependency_failure_detail(message: &str) -> Option<String> {
         || lower.contains("not logged in")
         || lower.contains("authentication")
     {
-        return Some(
-            "A required dependency is private or did not load on mod.io.".to_string(),
-        );
+        return Some("A required dependency is private or did not load on mod.io.".to_string());
     }
     truncate_error_detail(message)
 }
@@ -207,7 +211,10 @@ fn merge_dependency_failure_details(
     }
 
     if mod_ids.is_empty() {
-        return (error_type, new_detail.or_else(|| existing.map(str::to_string)));
+        return (
+            error_type,
+            new_detail.or_else(|| existing.map(str::to_string)),
+        );
     }
 
     let ids = mod_ids
@@ -332,9 +339,7 @@ pub fn set_sync_mod_ignored(app: &AppHandle, mod_id: ModId, ignored: bool) -> Re
     if ignored {
         let failed = read_failed_sync_mod_ids(app);
         if failed.binary_search(&mod_id).is_err() {
-            return Err(format!(
-                "Mod {mod_id} is not in the sync failures list."
-            ));
+            return Err(format!("Mod {mod_id} is not in the sync failures list."));
         }
         if position.is_ok() {
             return Ok(());

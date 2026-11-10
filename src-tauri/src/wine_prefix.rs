@@ -235,11 +235,7 @@ fn find_wine_prefix_for_game_path(game_dir: &Path) -> Option<WinePrefix> {
     find_prefix_via_scan(&canonical)
 }
 
-fn wine_prefix(
-    path: PathBuf,
-    label: Option<String>,
-    launch_kind: WineLaunchKind,
-) -> WinePrefix {
+fn wine_prefix(path: PathBuf, label: Option<String>, launch_kind: WineLaunchKind) -> WinePrefix {
     WinePrefix {
         path,
         label,
@@ -484,7 +480,9 @@ fn is_dll_overrides_section(line: &str) -> bool {
     };
 
     let section_name = &after_open[..close_index];
-    section_name.replace("\\\\", "\\").eq_ignore_ascii_case(r"software\wine\dlloverrides")
+    section_name
+        .replace("\\\\", "\\")
+        .eq_ignore_ascii_case(r"software\wine\dlloverrides")
 }
 
 fn is_timestamped_dll_overrides_section(line: &str) -> bool {
@@ -553,7 +551,11 @@ fn find_dll_overrides_section_span(content: &str) -> Option<(usize, usize)> {
     primary_dll_overrides_section_span(content)
 }
 
-fn read_dll_override_value_in_span(content: &str, span: (usize, usize), key: &str) -> Option<String> {
+fn read_dll_override_value_in_span(
+    content: &str,
+    span: (usize, usize),
+    key: &str,
+) -> Option<String> {
     for line in content[span.0..span.1].lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') || trimmed.starts_with('#') {
@@ -595,11 +597,7 @@ fn parse_quoted_string(value: &str) -> Option<String> {
 fn remove_plain_duplicate_dll_overrides_sections(content: &str) -> String {
     let spans = find_dll_overrides_section_spans(content);
     let has_timestamped = spans.iter().any(|(start, _)| {
-        let header = content[*start..]
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .trim();
+        let header = content[*start..].lines().next().unwrap_or_default().trim();
         is_timestamped_dll_overrides_section(header)
     });
 
@@ -658,8 +656,7 @@ fn reg_entry_key(line: &str) -> Option<String> {
 }
 
 fn compare_reg_entry_keys(left: &str, right: &str) -> std::cmp::Ordering {
-    left.to_ascii_lowercase()
-        .cmp(&right.to_ascii_lowercase())
+    left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
 }
 
 fn trailing_blank_line_count(section: &str) -> usize {
@@ -725,9 +722,8 @@ fn apply_via_user_reg(user_reg: &Path, content: &str) -> Result<(), String> {
         )
     })?;
 
-    fs::write(user_reg, merged).map_err(|error| {
-        format!("Did not write {}: {error}", user_reg.display())
-    })
+    fs::write(user_reg, merged)
+        .map_err(|error| format!("Did not write {}: {error}", user_reg.display()))
 }
 
 fn apply_via_wine_reg(prefix: &Path, preferred_wine: Option<&Path>) -> Result<(), String> {
@@ -757,9 +753,7 @@ fn apply_via_wine_reg(prefix: &Path, preferred_wine: Option<&Path>) -> Result<()
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            return Err(format!(
-                "wine reg add for {key} failed: {stdout} {stderr}"
-            ));
+            return Err(format!("wine reg add for {key} failed: {stdout} {stderr}"));
         }
     }
 
@@ -791,9 +785,8 @@ fn crossover_launch_kind(prefix_path: &Path, label: Option<&str>) -> WineLaunchK
 fn find_wine_binary_for_kind(_kind: &WineLaunchKind) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     if matches!(_kind, WineLaunchKind::CrossOver { .. }) {
-        let crossover_wine = PathBuf::from(
-            "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
-        );
+        let crossover_wine =
+            PathBuf::from("/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine");
         if crossover_wine.is_file() {
             return Some(crossover_wine);
         }
@@ -801,9 +794,8 @@ fn find_wine_binary_for_kind(_kind: &WineLaunchKind) -> Option<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        let crossover_wine = PathBuf::from(
-            "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine",
-        );
+        let crossover_wine =
+            PathBuf::from("/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine");
         if crossover_wine.is_file() {
             return Some(crossover_wine);
         }
@@ -832,10 +824,8 @@ mod tests {
     fn finds_prefix_via_drive_c() {
         let root = std::env::temp_dir().join("modkist-wine-test-drivec");
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(
-            root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"),
-        )
-        .unwrap();
+        fs::create_dir_all(root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"))
+            .unwrap();
         fs::write(root.join("user.reg"), "REGEDIT4\n").unwrap();
 
         let game = root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist");
@@ -882,7 +872,9 @@ mod tests {
         let prefix = find_wine_prefix(&game, None)
             .expect("no custom prefix error")
             .expect("prefix");
-        assert!(prefix.path.ends_with("modkist-wine-test-no-custom/detected"));
+        assert!(prefix
+            .path
+            .ends_with("modkist-wine-test-no-custom/detected"));
         assert_eq!(prefix.label.as_deref(), Some("detected"));
 
         let _ = fs::remove_dir_all(&root);
@@ -907,9 +899,11 @@ mod tests {
 
         assert_eq!(
             validate_wine_prefix(&root),
-            Err("This folder is not a Wine prefix. Choose the folder that contains \
+            Err(
+                "This folder is not a Wine prefix. Choose the folder that contains \
                  user.reg and drive_c."
-                .to_string())
+                    .to_string()
+            )
         );
 
         let _ = fs::remove_dir_all(&root);
@@ -925,8 +919,8 @@ mod tests {
         fs::create_dir_all(&game).unwrap();
         let gone = root.join("deleted-prefix");
 
-        let error = find_wine_prefix(&game, Some(&gone))
-            .expect_err("missing custom prefix is an error");
+        let error =
+            find_wine_prefix(&game, Some(&gone)).expect_err("missing custom prefix is an error");
         assert!(error.contains(&gone.display().to_string()), "{error}");
         assert!(error.contains("Settings"), "{error}");
 
@@ -1026,10 +1020,8 @@ mod tests {
         let root = std::env::temp_dir().join("modkist-wine-test-crossover-kind");
         let bottle = root.join("Library/Application Support/CrossOver/Bottles/ZeepBottle");
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(
-            bottle.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"),
-        )
-        .unwrap();
+        fs::create_dir_all(bottle.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"))
+            .unwrap();
         fs::write(bottle.join("user.reg"), "REGEDIT4\n").unwrap();
 
         let game = bottle.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist");
@@ -1048,10 +1040,8 @@ mod tests {
     fn non_crossover_prefix_uses_wine_prefix_launch_kind() {
         let root = std::env::temp_dir().join("modkist-wine-test-generic-kind");
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(
-            root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"),
-        )
-        .unwrap();
+        fs::create_dir_all(root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist"))
+            .unwrap();
         fs::write(root.join("user.reg"), "REGEDIT4\n").unwrap();
 
         let game = root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist");
@@ -1108,7 +1098,10 @@ mod tests {
             "[Software\\\\Wine\\\\DllOverrides] 1608830137\n#time=1d6da1865a6084e\n\"d3d11\"=\"builtin\"\n\"winhttp\"=\"native,builtin\"\n",
         ));
         assert!(!merged.contains("[Software\\\\Wine\\\\DllOverrides]\n\"winhttp\""));
-        assert_eq!(merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(), 1);
+        assert_eq!(
+            merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(),
+            1
+        );
     }
 
     #[test]
@@ -1151,7 +1144,10 @@ mod tests {
         assert!(merged.contains("\"d3d11\"=\"builtin\""));
         assert!(merged.contains("\"winhttp\"=\"native,builtin\""));
         assert!(is_winhttp_configured(&merged));
-        assert_eq!(merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(), 1);
+        assert_eq!(
+            merged.matches("[Software\\\\Wine\\\\DllOverrides]").count(),
+            1
+        );
     }
 
     #[test]

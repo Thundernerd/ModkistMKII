@@ -11,8 +11,8 @@ use crate::mod_ids::{FileId, ModId};
 use std::collections::{HashMap, HashSet};
 
 use crate::modio_api::{
-    is_mod_archived, ApiClient, ApiError, ListResponse, ModObject, ModQuery, Modfile,
-    ApiClientHooks,
+    is_mod_archived, ApiClient, ApiClientHooks, ApiError, ListResponse, ModObject, ModQuery,
+    Modfile,
 };
 
 pub const AUTH_STORE_PATH: &str = "modio-auth.json";
@@ -166,7 +166,11 @@ impl ModioState {
         state
     }
 
-    pub(crate) async fn with_oauth_request<T, E, F, Fut>(&self, label: &str, operation: F) -> Result<T, E>
+    pub(crate) async fn with_oauth_request<T, E, F, Fut>(
+        &self,
+        label: &str,
+        operation: F,
+    ) -> Result<T, E>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T, E>>,
@@ -435,7 +439,9 @@ impl ModioState {
     pub(crate) fn api(&self) -> Result<Arc<ApiClient>, String> {
         let status = self.status();
         if !status.configured {
-            return Err(status.message.unwrap_or_else(|| "mod.io is not configured".into()));
+            return Err(status
+                .message
+                .unwrap_or_else(|| "mod.io is not configured".into()));
         }
 
         let mut guard = self
@@ -463,11 +469,15 @@ impl ModioState {
     }
 
     pub(crate) fn session_token(&self) -> Option<String> {
-        self.session.lock().ok().and_then(|session| session.token.clone())
+        self.session
+            .lock()
+            .ok()
+            .and_then(|session| session.token.clone())
     }
 
     pub(crate) fn require_token(&self) -> Result<String, String> {
-        self.session_token().ok_or_else(|| "Not logged in".to_string())
+        self.session_token()
+            .ok_or_else(|| "Not logged in".to_string())
     }
 
     pub fn auth_status(&self) -> AuthStatus {
@@ -488,7 +498,9 @@ impl ModioState {
         let key_app = app.clone();
         let hooks = ApiClientHooks {
             on_token_rejected: Some(Arc::new(move |token| {
-                token_app.state::<ModioState>().expire_session(&token_app, token);
+                token_app
+                    .state::<ModioState>()
+                    .expire_session(&token_app, token);
             })),
             on_api_key_refused: Some(Arc::new(move || {
                 key_app.state::<ModioState>().mark_api_key_refused(&key_app);
@@ -699,7 +711,12 @@ enum Handled {
 
 impl ModioError {
     fn new(message: String, handled: Handled) -> Self {
-        Self { message, handled, rate_limited: false, retry_after_secs: None }
+        Self {
+            message,
+            handled,
+            rate_limited: false,
+            retry_after_secs: None,
+        }
     }
 
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
@@ -859,10 +876,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
         return Ok(cached);
     }
     if state.cached_dependency_fetch_failed(mod_id) {
-        return Err(format!(
-            "Dependencies for mod {mod_id} did not load (cached failure)"
-        )
-        .into());
+        return Err(format!("Dependencies for mod {mod_id} did not load (cached failure)").into());
     }
 
     let game_id = state.game_id()?;
@@ -1022,7 +1036,11 @@ pub(crate) async fn fetch_mod_outcomes_batch(
     for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
         let mut found_ids = HashSet::new();
         if rate_limit_error.is_none() {
-            match with_rate_limit_retry(Some("batch mod fetch"), || api.get_mods_by_id(game_id, chunk)).await {
+            match with_rate_limit_retry(Some("batch mod fetch"), || {
+                api.get_mods_by_id(game_id, chunk)
+            })
+            .await
+            {
                 Ok(list) => {
                     for mod_ in list.data {
                         found_ids.insert(mod_.id);
@@ -1036,7 +1054,8 @@ pub(crate) async fn fetch_mod_outcomes_batch(
                         "Batch mod fetch still rate limited after its retry, skipping per-mod requests: {}",
                         error.message
                     );
-                    rate_limit_error = Some(ModioError::from_api(error, state.auth_status().logged_in));
+                    rate_limit_error =
+                        Some(ModioError::from_api(error, state.auth_status().logged_in));
                 }
                 Err(error) => {
                     log::log!(
@@ -1072,7 +1091,10 @@ pub(crate) async fn fetch_mod_outcomes_batch(
     outcomes
 }
 
-pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: ModId) -> Result<ModObject, ModioError> {
+pub(crate) async fn fetch_mod_object(
+    state: &ModioState,
+    mod_id: ModId,
+) -> Result<ModObject, ModioError> {
     match fetch_mod_outcome(state, mod_id).await {
         ModFetchOutcome::Found(mod_) => Ok(mod_),
         ModFetchOutcome::Unavailable => {
@@ -1128,7 +1150,9 @@ where
 {
     match operation().await {
         Err(error) if error.is_rate_limited() => {
-            let on_request = request.map(|request| format!(" on {request}")).unwrap_or_default();
+            let on_request = request
+                .map(|request| format!(" on {request}"))
+                .unwrap_or_default();
             let wait = match error.retry_after_secs() {
                 Some(secs) => format!("retrying after the {secs} seconds mod.io asked for"),
                 None => "retrying, mod.io gave no Retry-After".to_string(),
@@ -1164,7 +1188,10 @@ pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: ModId) -> Resul
         .await
 }
 
-pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: ModId) -> Result<(), ModioError> {
+pub(crate) async fn unsubscribe_from_mod(
+    state: &ModioState,
+    mod_id: ModId,
+) -> Result<(), ModioError> {
     log::info!("Unsubscribing from mod {mod_id}");
     state
         .with_oauth_request("unsubscribe_from_mod", || async {
@@ -1714,41 +1741,38 @@ pub async fn list_mods(
 
     // Inject owned/subscribed extras only on the first page so later public pages
     // cannot reintroduce the same IDs as "extras" under a fresh per-request seen set.
-    let (user_list, subscriptions) =
-        if params.offset == 0 && state.session_token().is_some() {
-            let token = state.require_token()?;
-            let mut oauth_query = query.clone();
-            oauth_query.offset = 0;
-            log::debug!(
-                "Listing mods: merging first public page with /me/mods and /me/subscribed"
-            );
-            let user_list = state
-                .with_oauth_request("get_user_mods", || async {
-                    api.get_user_mods(&token, game_id, &oauth_query)
-                        .await
-                        .map_err(format_api_error)
-                })
-                .await?;
-            let subscriptions = state
-                .with_oauth_request("get_user_subscriptions", || async {
-                    api.get_user_subscriptions(&token, game_id, &oauth_query)
-                        .await
-                        .map_err(format_api_error)
-                })
-                .await?;
-            // When this single page already covers every subscription (common
-            // case: fewer subscriptions than the browse page size), seed the
-            // subscribed-id cache so a subsequent sync doesn't re-fetch
-            // /me/subscribed from scratch just to get the same full id list.
-            if subscriptions.data.len() as u32 >= subscriptions.result_total {
-                let subscribed_ids: Vec<ModId> =
-                    subscriptions.data.iter().map(|mod_| mod_.id).collect();
-                state.store_subscribed_mod_ids(subscribed_ids);
-            }
-            (Some(user_list), Some(subscriptions))
-        } else {
-            (None, None)
-        };
+    let (user_list, subscriptions) = if params.offset == 0 && state.session_token().is_some() {
+        let token = state.require_token()?;
+        let mut oauth_query = query.clone();
+        oauth_query.offset = 0;
+        log::debug!("Listing mods: merging first public page with /me/mods and /me/subscribed");
+        let user_list = state
+            .with_oauth_request("get_user_mods", || async {
+                api.get_user_mods(&token, game_id, &oauth_query)
+                    .await
+                    .map_err(format_api_error)
+            })
+            .await?;
+        let subscriptions = state
+            .with_oauth_request("get_user_subscriptions", || async {
+                api.get_user_subscriptions(&token, game_id, &oauth_query)
+                    .await
+                    .map_err(format_api_error)
+            })
+            .await?;
+        // When this single page already covers every subscription (common
+        // case: fewer subscriptions than the browse page size), seed the
+        // subscribed-id cache so a subsequent sync doesn't re-fetch
+        // /me/subscribed from scratch just to get the same full id list.
+        if subscriptions.data.len() as u32 >= subscriptions.result_total {
+            let subscribed_ids: Vec<ModId> =
+                subscriptions.data.iter().map(|mod_| mod_.id).collect();
+            state.store_subscribed_mod_ids(subscribed_ids);
+        }
+        (Some(user_list), Some(subscriptions))
+    } else {
+        (None, None)
+    };
 
     Ok(merge_mod_list_results(
         &state,
@@ -1875,9 +1899,9 @@ pub(crate) async fn list_mod_dependencies_inner(
         let outcome = outcomes
             .get(&dependency_id)
             .cloned()
-            .unwrap_or(ModFetchOutcome::Failed(format!(
-                "Mod {dependency_id} was not returned by the batch fetch"
-            ).into()));
+            .unwrap_or(ModFetchOutcome::Failed(
+                format!("Mod {dependency_id} was not returned by the batch fetch").into(),
+            ));
         match outcome {
             ModFetchOutcome::Found(mod_) => mods.push(mod_to_dependency(mod_)),
             ModFetchOutcome::Unavailable => mods.push(unavailable_dependency(
@@ -2129,7 +2153,10 @@ mod archived_mod_tests {
     fn mod_to_dependency_marks_archived_unavailable() {
         let dep = mod_to_dependency(sample_mod(42, 3));
         assert!(dep.unavailable);
-        assert_eq!(dep.unavailable_reason.as_deref(), Some("Archived on mod.io."));
+        assert_eq!(
+            dep.unavailable_reason.as_deref(),
+            Some("Archived on mod.io.")
+        );
         assert_eq!(dep.name, "Mod 42");
     }
 

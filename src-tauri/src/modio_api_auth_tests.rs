@@ -34,7 +34,9 @@ pub(crate) struct FakeModio {
 }
 
 impl FakeModio {
-    pub(crate) fn start(respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static) -> Self {
+    pub(crate) fn start(
+        respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static,
+    ) -> Self {
         Self::start_with_optional_retry_after(None, respond)
     }
 
@@ -64,7 +66,11 @@ impl FakeModio {
                 if reader.read_line(&mut request_line).is_err() {
                     continue;
                 }
-                let target = request_line.split_whitespace().nth(1).unwrap_or("").to_string();
+                let target = request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .to_string();
                 let path = target
                     .strip_prefix("/v1")
                     .unwrap_or(&target)
@@ -78,7 +84,10 @@ impl FakeModio {
                     if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
                         break;
                     }
-                    if line.to_ascii_lowercase().starts_with("authorization: bearer") {
+                    if line
+                        .to_ascii_lowercase()
+                        .starts_with("authorization: bearer")
+                    {
                         bearer = true;
                     }
                 }
@@ -157,7 +166,14 @@ pub(crate) fn error_body(error_ref: u32, message: &str) -> String {
 }
 
 pub(crate) fn token_expired() -> (u16, Option<u32>, String) {
-    (401, Some(TOKEN_REJECTED_ERROR_REF), error_body(TOKEN_REJECTED_ERROR_REF, "Access token is expired, or has been revoked."))
+    (
+        401,
+        Some(TOKEN_REJECTED_ERROR_REF),
+        error_body(
+            TOKEN_REJECTED_ERROR_REF,
+            "Access token is expired, or has been revoked.",
+        ),
+    )
 }
 
 // --- Behavior ----------------------------------------------------------------
@@ -167,12 +183,24 @@ async fn a_rejected_token_is_not_sent_to_mod_io_again() {
     let server = FakeModio::start(|_| token_expired());
     let (client, rejected) = server.client();
 
-    let first = client.get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default()).await.err().expect("request should fail");
-    let second = client.get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default()).await.err().expect("request should fail");
+    let first = client
+        .get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default())
+        .await
+        .err()
+        .expect("request should fail");
+    let second = client
+        .get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default())
+        .await
+        .err()
+        .expect("request should fail");
 
     assert!(first.is_unauthorized());
     assert!(second.is_unauthorized());
-    assert_eq!(server.received().len(), 1, "second request should not reach mod.io");
+    assert_eq!(
+        server.received().len(),
+        1,
+        "second request should not reach mod.io"
+    );
     assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()]);
 }
 
@@ -182,7 +210,11 @@ fn private_mod_with_expired_token(request: &Received) -> (u16, Option<u32>, Stri
     if request.bearer {
         token_expired()
     } else {
-        (403, None, r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string())
+        (
+            403,
+            None,
+            r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string(),
+        )
     }
 }
 
@@ -192,7 +224,11 @@ async fn an_expired_token_on_a_mod_read_retry_is_not_reported_to_sentry() {
     let server = FakeModio::start(private_mod_with_expired_token);
     let (client, rejected) = server.client();
 
-    let mod_error = client.get_mod(GAME_ID, ModId(2400035), Some(TOKEN)).await.err().expect("request should fail");
+    let mod_error = client
+        .get_mod(GAME_ID, ModId(2400035), Some(TOKEN))
+        .await
+        .err()
+        .expect("request should fail");
     let deps_error = client
         .get_mod_dependencies(GAME_ID, ModId(2400035), Some(TOKEN))
         .await
@@ -201,8 +237,15 @@ async fn an_expired_token_on_a_mod_read_retry_is_not_reported_to_sentry() {
 
     assert!(mod_error.is_unauthorized());
     assert!(deps_error.is_unauthorized());
-    let bearer_requests = server.received().iter().filter(|request| request.bearer).count();
-    assert_eq!(bearer_requests, 1, "the rejected token should not be retried on the next read");
+    let bearer_requests = server
+        .received()
+        .iter()
+        .filter(|request| request.bearer)
+        .count();
+    assert_eq!(
+        bearer_requests, 1,
+        "the rejected token should not be retried on the next read"
+    );
     assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()]);
     assert_eq!(sentry_reports(), Vec::<String>::new());
 }
@@ -211,7 +254,11 @@ async fn an_expired_token_on_a_mod_read_retry_is_not_reported_to_sentry() {
 const API_KEY_INVALID_ERROR_REF: u32 = 11002;
 
 fn api_key_invalid() -> (u16, Option<u32>, String) {
-    (401, Some(API_KEY_INVALID_ERROR_REF), error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."))
+    (
+        401,
+        Some(API_KEY_INVALID_ERROR_REF),
+        error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."),
+    )
 }
 
 #[tokio::test]
@@ -220,21 +267,43 @@ async fn a_refused_api_key_is_reported_to_sentry_once() {
     let server = FakeModio::start(|_| api_key_invalid());
     let (client, rejected) = server.client();
 
-    let tags = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+    let tags = client
+        .get_game_tags(GAME_ID)
+        .await
+        .err()
+        .expect("request should fail");
     let mods = client
         .get_mods(GAME_ID, &ModQuery::default())
         .await
         .err()
         .expect("request should fail");
-    let tags_again = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+    let tags_again = client
+        .get_game_tags(GAME_ID)
+        .await
+        .err()
+        .expect("request should fail");
 
     assert!(tags.is_unauthorized() && mods.is_unauthorized() && tags_again.is_unauthorized());
-    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
-    assert_eq!(paths, ["/games/3213/tags", "/games/3213/mods", "/games/3213/tags"]);
-    assert!(rejected.lock().unwrap().is_empty(), "no session token was involved");
+    let paths: Vec<String> = server
+        .received()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
+    assert_eq!(
+        paths,
+        ["/games/3213/tags", "/games/3213/mods", "/games/3213/tags"]
+    );
+    assert!(
+        rejected.lock().unwrap().is_empty(),
+        "no session token was involved"
+    );
     let reports = sentry_reports();
     assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-    assert!(reports[0].contains("game API key refused"), "report should name the cause: {}", reports[0]);
+    assert!(
+        reports[0].contains("game API key refused"),
+        "report should name the cause: {}",
+        reports[0]
+    );
 }
 
 #[tokio::test]
@@ -250,7 +319,11 @@ async fn requests_queued_behind_the_rejection_are_not_sent() {
     );
 
     assert!(subscribed.is_err() && own_mods.is_err() && me.is_err());
-    assert_eq!(server.received().len(), 1, "only the first request should reach mod.io");
+    assert_eq!(
+        server.received().len(),
+        1,
+        "only the first request should reach mod.io"
+    );
 }
 
 #[tokio::test]
@@ -271,7 +344,9 @@ async fn an_expired_token_does_not_signal_a_refused_api_key() {
     let (client, refusals) = server.client_counting_api_key_refusals();
 
     let _ = client.get_mod(GAME_ID, ModId(2400035), Some(TOKEN)).await;
-    let _ = client.get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default()).await;
+    let _ = client
+        .get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default())
+        .await;
 
     assert_eq!(*refusals.lock().unwrap(), 0);
 }
@@ -279,7 +354,11 @@ async fn an_expired_token_does_not_signal_a_refused_api_key() {
 // --- Private mods read without a session token (issue #68) -------------------
 
 pub(crate) fn forbidden() -> (u16, Option<u32>, String) {
-    (403, None, r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string())
+    (
+        403,
+        None,
+        r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string(),
+    )
 }
 
 #[tokio::test]
@@ -288,7 +367,11 @@ async fn a_private_mod_read_without_a_token_is_not_reported_to_sentry() {
     let server = FakeModio::start(|_| forbidden());
     let (client, _) = server.client();
 
-    let error = client.get_mod(GAME_ID, ModId(2400035), None).await.err().expect("request should fail");
+    let error = client
+        .get_mod(GAME_ID, ModId(2400035), None)
+        .await
+        .err()
+        .expect("request should fail");
 
     assert_eq!(error.status, Some(403));
     assert_eq!(sentry_reports(), Vec::<String>::new());
@@ -313,10 +396,20 @@ async fn a_private_mod_dependencies_read_without_a_token_is_not_reported_to_sent
 #[tokio::test]
 async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentry() {
     capture_reports();
-    let server = FakeModio::start(|_| (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string()));
+    let server = FakeModio::start(|_| {
+        (
+            503,
+            None,
+            r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string(),
+        )
+    });
     let (client, _) = server.client();
 
-    let mod_error = client.get_mod(GAME_ID, ModId(2400035), None).await.err().expect("request should fail");
+    let mod_error = client
+        .get_mod(GAME_ID, ModId(2400035), None)
+        .await
+        .err()
+        .expect("request should fail");
     let deps_error = client
         .get_mod_dependencies(GAME_ID, ModId(2400035), None)
         .await
@@ -325,8 +418,14 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
 
     assert!(mod_error.is_server_error() && deps_error.is_server_error());
     let reports = sentry_reports();
-    for path in ["/games/{game}/mods/{mod} ", "/games/{game}/mods/{mod}/dependencies"] {
-        assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
+    for path in [
+        "/games/{game}/mods/{mod} ",
+        "/games/{game}/mods/{mod}/dependencies",
+    ] {
+        assert!(
+            reports.iter().any(|report| report.contains(path)),
+            "no report for {path}: {reports:#?}"
+        );
     }
 }
 
@@ -354,7 +453,9 @@ async fn make_every_request_a_refused_session_made(client: &ApiClient) {
     let _ = client.get_game_tags(GAME_ID).await;
     for mod_id in [ModId(2400035), ModId(6315836), ModId(3137985)] {
         let _ = client.get_mod(GAME_ID, mod_id, Some(TOKEN)).await;
-        let _ = client.get_mod_dependencies(GAME_ID, mod_id, Some(TOKEN)).await;
+        let _ = client
+            .get_mod_dependencies(GAME_ID, mod_id, Some(TOKEN))
+            .await;
     }
     let _ = client.request_email_code(EMAIL).await;
 }
@@ -367,10 +468,22 @@ async fn a_session_refused_on_every_request_is_reported_to_sentry_once() {
 
     make_every_request_a_refused_session_made(&client).await;
 
-    assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()], "the token should be rejected once");
+    assert_eq!(
+        *rejected.lock().unwrap(),
+        vec![TOKEN.to_string()],
+        "the token should be rejected once"
+    );
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 1, "expected one report for the whole session, got {reports:#?}");
-    assert!(reports[0].contains("game API key refused"), "the one report should be the API key: {}", reports[0]);
+    assert_eq!(
+        reports.len(),
+        1,
+        "expected one report for the whole session, got {reports:#?}"
+    );
+    assert!(
+        reports[0].contains("game API key refused"),
+        "the one report should be the API key: {}",
+        reports[0]
+    );
 }
 
 /// Sentry groups message events by their text, so the report for a refused
@@ -390,7 +503,10 @@ async fn a_refused_api_key_is_one_sentry_issue_whichever_request_is_refused_firs
     let email_first = sentry_reports();
 
     assert_eq!(tags_first.len(), 1, "{tags_first:#?}");
-    assert_eq!(tags_first, email_first, "both runs should file the same Sentry issue");
+    assert_eq!(
+        tags_first, email_first,
+        "both runs should file the same Sentry issue"
+    );
 }
 
 #[tokio::test]
@@ -398,7 +514,14 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
     capture_reports();
     let server = FakeModio::start(|_| api_key_invalid());
     let reworded = FakeModio::start(|_| {
-        (401, Some(API_KEY_INVALID_ERROR_REF), error_body(API_KEY_INVALID_ERROR_REF, "The api_key you supplied is not valid."))
+        (
+            401,
+            Some(API_KEY_INVALID_ERROR_REF),
+            error_body(
+                API_KEY_INVALID_ERROR_REF,
+                "The api_key you supplied is not valid.",
+            ),
+        )
     });
 
     let (first_run, _) = server.client();
@@ -410,7 +533,11 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
     let _ = second_run.get_game_tags(GAME_ID).await;
 
     assert_eq!(original.len(), 1, "{original:#?}");
-    assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
+    assert_eq!(
+        original,
+        sentry_reports(),
+        "a reworded refusal should file the same Sentry issue"
+    );
 }
 
 // --- Tokenless 401s that are not a refused API key (issue #122) ---------------
@@ -419,7 +546,14 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
 const SECURITY_CODE_INVALID_ERROR_REF: u32 = 11014;
 
 fn security_code_invalid() -> (u16, Option<u32>, String) {
-    (401, Some(SECURITY_CODE_INVALID_ERROR_REF), error_body(SECURITY_CODE_INVALID_ERROR_REF, "The security code is invalid."))
+    (
+        401,
+        Some(SECURITY_CODE_INVALID_ERROR_REF),
+        error_body(
+            SECURITY_CODE_INVALID_ERROR_REF,
+            "The security code is invalid.",
+        ),
+    )
 }
 
 /// The email code is refused first; the game API key is refused later in the run.
@@ -437,18 +571,40 @@ async fn a_refused_api_key_is_reported_once_after_another_tokenless_401() {
     let server = FakeModio::start(email_code_refused_then_api_key_refused);
     let (client, refusals) = server.client_counting_api_key_refusals();
 
-    let code = client.exchange_email_code("12345").await.err().expect("request should fail");
-    let tags = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+    let code = client
+        .exchange_email_code("12345")
+        .await
+        .err()
+        .expect("request should fail");
+    let tags = client
+        .get_game_tags(GAME_ID)
+        .await
+        .err()
+        .expect("request should fail");
 
-    assert!(code.is_unauthorized(), "the email code should be refused: {code:?}");
-    assert!(tags.is_api_key_refused(), "the API key should be refused: {tags:?}");
+    assert!(
+        code.is_unauthorized(),
+        "the email code should be refused: {code:?}"
+    );
+    assert!(
+        tags.is_api_key_refused(),
+        "the API key should be refused: {tags:?}"
+    );
     let refused: Vec<String> = sentry_reports()
         .into_iter()
         .filter(|report| report.contains("game API key refused"))
         .collect();
-    assert_eq!(refused.len(), 1, "expected one refused-key report, got {refused:#?}");
+    assert_eq!(
+        refused.len(),
+        1,
+        "expected one refused-key report, got {refused:#?}"
+    );
     let api_key_invalid = format!("error_ref=Some({API_KEY_INVALID_ERROR_REF})");
-    assert!(refused[0].contains(&api_key_invalid), "the report should be the 11002: {}", refused[0]);
+    assert!(
+        refused[0].contains(&api_key_invalid),
+        "the report should be the 11002: {}",
+        refused[0]
+    );
     assert_eq!(*refusals.lock().unwrap(), 1);
 }
 
@@ -457,13 +613,27 @@ async fn a_wrong_or_expired_email_code_is_not_reported_to_sentry() {
     // mod.io's 401s for a code that is already used, expired, invalid or used up.
     for error_ref in [11011, 11012, SECURITY_CODE_INVALID_ERROR_REF, 11147] {
         capture_reports();
-        let server = FakeModio::start(move |_| (401, Some(error_ref), error_body(error_ref, "Security code refused.")));
+        let server = FakeModio::start(move |_| {
+            (
+                401,
+                Some(error_ref),
+                error_body(error_ref, "Security code refused."),
+            )
+        });
         let (client, refusals) = server.client_counting_api_key_refusals();
 
-        let error = client.exchange_email_code("12345").await.err().expect("request should fail");
+        let error = client
+            .exchange_email_code("12345")
+            .await
+            .err()
+            .expect("request should fail");
 
         assert!(error.is_unauthorized());
-        assert_eq!(sentry_reports(), Vec::<String>::new(), "error_ref {error_ref}");
+        assert_eq!(
+            sentry_reports(),
+            Vec::<String>::new(),
+            "error_ref {error_ref}"
+        );
         assert_eq!(*refusals.lock().unwrap(), 0, "error_ref {error_ref}");
     }
 }
@@ -474,7 +644,11 @@ async fn a_wrong_or_expired_email_code_is_not_reported_to_sentry() {
 async fn a_refused_api_key_without_the_error_ref_header_is_reported_once() {
     capture_reports();
     let server = FakeModio::start(|_| {
-        (401, None, error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."))
+        (
+            401,
+            None,
+            error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."),
+        )
     });
     let (client, _) = server.client();
 
@@ -495,7 +669,11 @@ async fn another_tokenless_401_is_reported_as_itself_and_leaves_the_refused_key_
     let server = FakeModio::start(|request| {
         if request.path == "/oauth/emailexchange" {
             let error_ref = SECURITY_CODE_DIFFERENT_KEY_ERROR_REF;
-            (401, Some(error_ref), error_body(error_ref, "The api_key differs."))
+            (
+                401,
+                Some(error_ref),
+                error_body(error_ref, "The api_key differs."),
+            )
         } else {
             api_key_invalid()
         }
@@ -515,7 +693,10 @@ async fn another_tokenless_401_is_reported_as_itself_and_leaves_the_refused_key_
     );
     let refused_key = format!("game API key refused, later refusals logged at info): status=Some(401), error_ref=Some({API_KEY_INVALID_ERROR_REF})");
     assert_eq!(
-        reports.iter().filter(|report| report.contains(&refused_key)).count(),
+        reports
+            .iter()
+            .filter(|report| report.contains(&refused_key))
+            .count(),
         1,
         "the refused key should be reported once: {reports:#?}"
     );
@@ -525,7 +706,11 @@ async fn another_tokenless_401_is_reported_as_itself_and_leaves_the_refused_key_
 // --- Stable Sentry text for failed requests (issue #121) ---------------------
 
 fn service_unavailable() -> (u16, Option<u32>, String) {
-    (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string())
+    (
+        503,
+        None,
+        r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string(),
+    )
 }
 
 #[tokio::test]
@@ -534,13 +719,21 @@ async fn a_failed_request_reports_no_response_headers() {
     let server = FakeModio::start(|_| service_unavailable());
     let (client, _) = server.client();
 
-    let _ = client.get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None).await;
+    let _ = client
+        .get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None)
+        .await;
 
     let reports = sentry_reports();
     assert!(!reports.is_empty(), "the failure should still be reported");
     for report in &reports {
-        assert!(!report.contains(FAKE_DATE), "report contains the date header: {report}");
-        assert!(!report.contains(FAKE_COOKIE), "report contains the cookie: {report}");
+        assert!(
+            !report.contains(FAKE_DATE),
+            "report contains the date header: {report}"
+        );
+        assert!(
+            !report.contains(FAKE_COOKIE),
+            "report contains the cookie: {report}"
+        );
     }
 }
 
@@ -552,24 +745,43 @@ async fn the_same_failure_on_different_mods_is_reported_with_the_same_text() {
     let (client, _) = server.client();
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None).await;
+    let _ = client
+        .get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None)
+        .await;
     let first = sentry_reports();
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, ModId(1), FileId(2), None).await;
+    let _ = client
+        .get_mod_file(GAME_ID, ModId(1), FileId(2), None)
+        .await;
     let second = sentry_reports();
 
     assert_eq!(first.len(), 1, "{first:#?}");
-    assert_eq!(first, second, "both failures should file the same Sentry issue");
-    assert!(first[0].contains("GET /games/{game}/mods/{mod}/files/{file} "), "{}", first[0]);
-    assert!(first[0].contains("503"), "the report should keep the status: {}", first[0]);
+    assert_eq!(
+        first, second,
+        "both failures should file the same Sentry issue"
+    );
+    assert!(
+        first[0].contains("GET /games/{game}/mods/{mod}/files/{file} "),
+        "{}",
+        first[0]
+    );
+    assert!(
+        first[0].contains("503"),
+        "the report should keep the status: {}",
+        first[0]
+    );
 }
 
 /// A private mod read with a session token while mod.io rate limits: the
 /// api_key read is refused, and the bearer retry gets a 429.
 fn private_mod_rate_limited_on_retry(request: &Received) -> (u16, Option<u32>, String) {
     if request.bearer {
-        (429, None, r#"{"error":{"code":429,"message":"Too Many Requests"}}"#.to_string())
+        (
+            429,
+            None,
+            r#"{"error":{"code":429,"message":"Too Many Requests"}}"#.to_string(),
+        )
     } else {
         forbidden()
     }
@@ -581,12 +793,24 @@ async fn a_rate_limited_bearer_retry_is_reported_once() {
     let server = FakeModio::start(private_mod_rate_limited_on_retry);
     let (client, _) = server.client();
 
-    let error = client.get_mod(GAME_ID, ModId(2400035), Some(TOKEN)).await.err().expect("request should fail");
+    let error = client
+        .get_mod(GAME_ID, ModId(2400035), Some(TOKEN))
+        .await
+        .err()
+        .expect("request should fail");
 
     assert!(error.is_rate_limited());
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 1, "expected one report for the failed read, got {reports:#?}");
-    assert!(reports[0].contains("429"), "the report should be the rate limit: {}", reports[0]);
+    assert_eq!(
+        reports.len(),
+        1,
+        "expected one report for the failed read, got {reports:#?}"
+    );
+    assert!(
+        reports[0].contains("429"),
+        "the report should be the rate limit: {}",
+        reports[0]
+    );
 }
 
 /// A base URL nothing listens on, so every request fails before a response.
@@ -604,14 +828,25 @@ async fn a_transport_failure_is_reported_with_the_same_text_for_every_mod() {
         .with_base_url(unreachable_base_url());
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None).await;
+    let _ = client
+        .get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None)
+        .await;
     let first = sentry_reports();
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, ModId(1), FileId(2), None).await;
+    let _ = client
+        .get_mod_file(GAME_ID, ModId(1), FileId(2), None)
+        .await;
     let second = sentry_reports();
 
     assert_eq!(first.len(), 1, "{first:#?}");
-    assert_eq!(first, second, "both failures should file the same Sentry issue");
-    assert!(!first[0].contains("game-key"), "the report contains the API key: {}", first[0]);
+    assert_eq!(
+        first, second,
+        "both failures should file the same Sentry issue"
+    );
+    assert!(
+        !first[0].contains("game-key"),
+        "the report contains the API key: {}",
+        first[0]
+    );
 }

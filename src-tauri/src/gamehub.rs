@@ -225,15 +225,12 @@ fn wine_installation_id_for_binding(
         return Some(id.to_string());
     }
 
-    let base_id = binding
-        .base_container_id
-        .clone()
-        .or_else(|| {
-            virtual_container
-                .get("base_container_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })?;
+    let base_id = binding.base_container_id.clone().or_else(|| {
+        virtual_container
+            .get("base_container_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })?;
 
     let base_containers = read_json(support.join(BASE_CONTAINERS_REL))?;
     base_containers
@@ -244,9 +241,7 @@ fn wine_installation_id_for_binding(
 
 fn wine_binary(support: &Path, wine_installation_id: &str) -> Option<PathBuf> {
     let installations = read_json(support.join(WINE_INSTALLATIONS_REL))?;
-    let install = installations.pointer(&format!(
-        "/wine_installations/{wine_installation_id}"
-    ))?;
+    let install = installations.pointer(&format!("/wine_installations/{wine_installation_id}"))?;
 
     if let Some(path) = install
         .pointer("/metadata/wine_executable")
@@ -416,8 +411,7 @@ mod tests {
         assert!(ensure_winhttp_dll_override_in(&support, "1").unwrap());
         assert!(!ensure_winhttp_dll_override_in(&support, "1").unwrap());
 
-        let content =
-            fs::read_to_string(support.join(VIRTUAL_CONTAINERS_REL)).unwrap();
+        let content = fs::read_to_string(support.join(VIRTUAL_CONTAINERS_REL)).unwrap();
         let value: Value = serde_json::from_str(&content).unwrap();
         let overrides = value
             .pointer("/virtual_containers/1/dll_overrides")

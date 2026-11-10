@@ -23,12 +23,20 @@ fn private_mods_with_expired_token(request: &Received) -> (u16, Option<u32>, Str
     if request.bearer {
         token_expired()
     } else {
-        (403, None, r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string())
+        (
+            403,
+            None,
+            r#"{"error":{"code":403,"message":"Forbidden"}}"#.to_string(),
+        )
     }
 }
 
 fn bearer_requests(server: &FakeModio) -> usize {
-    server.received().iter().filter(|request| request.bearer).count()
+    server
+        .received()
+        .iter()
+        .filter(|request| request.bearer)
+        .count()
 }
 
 #[tokio::test]
@@ -54,7 +62,11 @@ async fn an_expired_token_while_mapping_dependencies_is_not_reported_per_mod() {
 }
 
 fn server_error(_: &Received) -> (u16, Option<u32>, String) {
-    (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string())
+    (
+        503,
+        None,
+        r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string(),
+    )
 }
 
 /// True when `report` names any of `ids`: ids in a report would make Sentry
@@ -72,8 +84,15 @@ async fn the_one_id_free_report_per_dependency_read(state: &ModioState) -> Strin
     build_dependency_map(state, &installed).await;
 
     let reports = sentry_reports();
-    assert_eq!(reports.len(), PRIVATE_MODS.len(), "one report per failed read: {reports:#?}");
-    assert!(reports.iter().all(|report| report == &reports[0]), "{reports:#?}");
+    assert_eq!(
+        reports.len(),
+        PRIVATE_MODS.len(),
+        "one report per failed read: {reports:#?}"
+    );
+    assert!(
+        reports.iter().all(|report| report == &reports[0]),
+        "{reports:#?}"
+    );
     assert!(!names_an_id(&reports[0], &PRIVATE_MODS), "{reports:#?}");
     reports[0].clone()
 }
@@ -94,7 +113,8 @@ fn unparsable_body(_: &Received) -> (u16, Option<u32>, String) {
 }
 
 #[tokio::test]
-async fn an_unparsable_response_while_mapping_dependencies_is_reported_once_per_read_without_mod_ids() {
+async fn an_unparsable_response_while_mapping_dependencies_is_reported_once_per_read_without_mod_ids(
+) {
     let server = FakeModio::start(unparsable_body);
     let signed_out = ModioState::signed_out_against(server.base_url.clone());
     let signed_in = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
@@ -102,7 +122,10 @@ async fn an_unparsable_response_while_mapping_dependencies_is_reported_once_per_
     let signed_out_report = the_one_id_free_report_per_dependency_read(&signed_out).await;
     let signed_in_report = the_one_id_free_report_per_dependency_read(&signed_in).await;
 
-    assert_eq!(signed_in_report, signed_out_report, "the same failure should group as one Sentry issue");
+    assert_eq!(
+        signed_in_report, signed_out_report,
+        "the same failure should group as one Sentry issue"
+    );
 }
 
 const EMPTY_LIST: &str = r#"{"data":[],"result_total":0}"#;
@@ -133,9 +156,16 @@ async fn an_expired_token_while_fetching_mods_stops_the_per_mod_fallback() {
     assert!(PRIVATE_MODS
         .iter()
         .all(|mod_id| failed_on_rejected_credentials(outcomes.get(mod_id))));
-    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    let paths: Vec<String> = server
+        .received()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
     let mods = format!("/games/{GAME_ID}/mods");
-    assert_eq!(paths, [mods.clone(), format!("{mods}/101"), format!("{mods}/101")]);
+    assert_eq!(
+        paths,
+        [mods.clone(), format!("{mods}/101"), format!("{mods}/101")]
+    );
 }
 
 /// mod.io `error_ref` for "api_key supplied is invalid".
@@ -145,7 +175,11 @@ const API_KEY_INVALID_ERROR_REF: u32 = 11002;
 /// mods were deleted, so the bearer read finds nothing either.
 fn api_key_refused_and_mods_gone(request: &Received) -> (u16, Option<u32>, String) {
     if request.bearer {
-        (404, None, r#"{"error":{"code":404,"message":"Not Found"}}"#.to_string())
+        (
+            404,
+            None,
+            r#"{"error":{"code":404,"message":"Not Found"}}"#.to_string(),
+        )
     } else {
         let body = error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid.");
         (401, Some(API_KEY_INVALID_ERROR_REF), body)
@@ -161,8 +195,16 @@ async fn a_refused_api_key_on_the_batch_mod_fetch_is_reported_once() {
     let outcomes = fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
 
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 1, "only the client's own report: {reports:#?}");
-    assert!(reports[0].contains("game API key refused"), "{}", reports[0]);
+    assert_eq!(
+        reports.len(),
+        1,
+        "only the client's own report: {reports:#?}"
+    );
+    assert!(
+        reports[0].contains("game API key refused"),
+        "{}",
+        reports[0]
+    );
     assert!(PRIVATE_MODS
         .iter()
         .all(|mod_id| matches!(outcomes.get(mod_id), Some(ModFetchOutcome::Unavailable))));
@@ -273,7 +315,9 @@ async fn an_expired_token_while_resolving_install_order_stops_reading_dependenci
     let server = FakeModio::start(public_mod_with_private_dependencies);
     let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
 
-    let order = collect_install_order(&state, ModId(100)).await.expect("install order");
+    let order = collect_install_order(&state, ModId(100))
+        .await
+        .expect("install order");
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
     assert!(order.contains(&ModId(100)));
@@ -350,7 +394,10 @@ const MODFILE_NOT_FOUND_ERROR_REF: u32 = 14000;
 
 /// Mod 100's installed file 7 was deleted or replaced by its author.
 fn installed_file_deleted(_: &Received) -> (u16, Option<u32>, String) {
-    let body = error_body(MODFILE_NOT_FOUND_ERROR_REF, "The requested file id could not be found.");
+    let body = error_body(
+        MODFILE_NOT_FOUND_ERROR_REF,
+        "The requested file id could not be found.",
+    );
     (404, Some(MODFILE_NOT_FOUND_ERROR_REF), body)
 }
 
@@ -400,7 +447,10 @@ fn picked_version_deleted(request: &Received) -> (u16, Option<u32>, String) {
     }
 }
 
-async fn install_picked_version(state: &ModioState, file_id: FileId) -> Result<InstallModResult, ModioError> {
+async fn install_picked_version(
+    state: &ModioState,
+    file_id: FileId,
+) -> Result<InstallModResult, ModioError> {
     install_targets_internal(
         None,
         state,
@@ -410,7 +460,10 @@ async fn install_picked_version(state: &ModioState, file_id: FileId) -> Result<I
         &mut HashMap::new(),
         InstallTargetsOptions {
             auto_update: true,
-            file_override: Some(FileOverride { mod_id: ModId(100), file_id }),
+            file_override: Some(FileOverride {
+                mod_id: ModId(100),
+                file_id,
+            }),
             root_mod_id: Some(ModId(100)),
             ..Default::default()
         },
@@ -427,7 +480,10 @@ async fn installing_a_deleted_version_drops_the_stale_version_list() {
 
     let _ = install_picked_version(&state, FileId(7)).await;
 
-    assert!(state.cached_mod_files(ModId(100)).is_none(), "the versions list should be fetched again");
+    assert!(
+        state.cached_mod_files(ModId(100)).is_none(),
+        "the versions list should be fetched again"
+    );
 }
 
 #[tokio::test]
@@ -448,7 +504,10 @@ async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
         "This version of Some mod is no longer on mod.io. Its author deleted or replaced it. Pick another version, or install the latest one."
     );
     assert_eq!(error.log_level(log::Level::Error), log::Level::Info);
-    assert!(error.is_modfile_deleted(), "a restored profile falls back on this");
+    assert!(
+        error.is_modfile_deleted(),
+        "a restored profile falls back on this"
+    );
 }
 
 // --- Rate-limited reads (issue #138) ------------------------------------------
@@ -458,7 +517,9 @@ const RATE_LIMITED_ERROR_REF: u32 = 11008;
 
 /// The first request is rate limited (429); every later one answers 200 with
 /// `body`.
-fn rate_limited_once(body: &'static str) -> impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static {
+fn rate_limited_once(
+    body: &'static str,
+) -> impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static {
     let limited = AtomicBool::new(false);
     move |_| {
         if limited.swap(true, Ordering::SeqCst) {
@@ -477,15 +538,28 @@ fn rate_limited_once(body: &'static str) -> impl Fn(&Received) -> (u16, Option<u
 /// `retry_line` at info.
 fn assert_reported_once_and_retried(server: &FakeModio, route: &str, retry_line: &str) {
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
+    assert_eq!(
+        reports.len(),
+        1,
+        "one report per rate-limited read: {reports:#?}"
+    );
     assert!(
-        reports[0].contains(&format!("mod.io API error: GET {route} returned status=429")),
+        reports[0].contains(&format!(
+            "mod.io API error: GET {route} returned status=429"
+        )),
         "{reports:#?}"
     );
-    assert_eq!(server.received().len(), 2, "the read should be retried: {:#?}", server.received());
+    assert_eq!(
+        server.received().len(),
+        2,
+        "the read should be retried: {:#?}",
+        server.received()
+    );
     let lines = log_lines();
     assert!(
-        lines.iter().any(|line| line.starts_with(&format!("INFO: {retry_line}"))),
+        lines
+            .iter()
+            .any(|line| line.starts_with(&format!("INFO: {retry_line}"))),
         "the retry should still be in the log file: {lines:#?}"
     );
 }
@@ -510,7 +584,9 @@ async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
 #[tokio::test(start_paused = true)]
 async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
     capture_reports();
-    let server = FakeModio::start(rate_limited_once(r#"{"data":[{"id":100,"name":"Some mod"}],"result_total":1}"#));
+    let server = FakeModio::start(rate_limited_once(
+        r#"{"data":[{"id":100,"name":"Some mod"}],"result_total":1}"#,
+    ));
     let state = ModioState::signed_out_against(server.base_url.clone());
 
     let outcomes = fetch_mod_outcomes_batch(&state, &[ModId(100)]).await;
@@ -520,7 +596,10 @@ async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
         "/games/{game}/mods",
         "mod.io rate limit hit on batch mod fetch, retrying, mod.io gave no Retry-After",
     );
-    assert!(matches!(outcomes.get(&ModId(100)), Some(ModFetchOutcome::Found(_))));
+    assert!(matches!(
+        outcomes.get(&ModId(100)),
+        Some(ModFetchOutcome::Found(_))
+    ));
 }
 
 // --- Bounded rate-limit retries (issue #143) ----------------------------------
@@ -540,17 +619,29 @@ async fn a_mod_read_under_a_sustained_rate_limit_fails_after_one_retry() {
 
     let outcome = crate::modio_client::fetch_mod_outcome(&state, ModId(100)).await;
 
-    assert!(matches!(outcome, ModFetchOutcome::Failed(_)), "the read should give up");
-    assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
+    assert!(
+        matches!(outcome, ModFetchOutcome::Failed(_)),
+        "the read should give up"
+    );
+    assert_eq!(
+        server.received().len(),
+        2,
+        "one retry: {:#?}",
+        server.received()
+    );
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 2, "one ApiClient report per request: {reports:#?}");
+    assert_eq!(
+        reports.len(),
+        2,
+        "one ApiClient report per request: {reports:#?}"
+    );
     assert!(reports.iter().all(|report| report
         .contains("mod.io API error: GET /games/{game}/mods/{mod} returned status=429")));
     let lines = log_lines();
     assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("INFO: mod.io rate limit hit on mod fetch, retrying, mod.io gave no Retry-After")),
+        lines.iter().any(|line| line.starts_with(
+            "INFO: mod.io rate limit hit on mod fetch, retrying, mod.io gave no Retry-After"
+        )),
         "the retry should be in the log file: {lines:#?}"
     );
 }
@@ -572,19 +663,32 @@ async fn a_batch_mod_read_under_a_sustained_rate_limit_fails_without_per_mod_rea
     assert!(PRIVATE_MODS
         .iter()
         .all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
-    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    let paths: Vec<String> = server
+        .received()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
     let mods = format!("/games/{GAME_ID}/mods");
-    assert_eq!(paths, [mods.clone(), mods], "the batch and its one retry only");
+    assert_eq!(
+        paths,
+        [mods.clone(), mods],
+        "the batch and its one retry only"
+    );
     let reports = sentry_reports();
-    assert_eq!(reports.len(), 2, "one ApiClient report per request: {reports:#?}");
+    assert_eq!(
+        reports.len(),
+        2,
+        "one ApiClient report per request: {reports:#?}"
+    );
     assert!(reports
         .iter()
-        .all(|report| report.contains("mod.io API error: GET /games/{game}/mods returned status=429")));
+        .all(|report| report
+            .contains("mod.io API error: GET /games/{game}/mods returned status=429")));
     let lines = log_lines();
     assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("INFO: Batch mod fetch still rate limited after its retry")),
+        lines.iter().any(
+            |line| line.starts_with("INFO: Batch mod fetch still rate limited after its retry")
+        ),
         "the final failure should be in the log file at info: {lines:#?}"
     );
 }
@@ -598,9 +702,19 @@ async fn a_batch_still_rate_limited_after_its_retry_fails_the_later_chunks_witho
 
     let outcomes = fetch_mod_outcomes_batch(&state, &mod_ids).await;
 
-    assert!(mod_ids.iter().all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
-    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
-    assert_eq!(paths.len(), 2, "the first chunk and its one retry only: {paths:#?}");
+    assert!(mod_ids
+        .iter()
+        .all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
+    let paths: Vec<String> = server
+        .received()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
+    assert_eq!(
+        paths.len(),
+        2,
+        "the first chunk and its one retry only: {paths:#?}"
+    );
 }
 
 // --- The retry waits for mod.io's Retry-After (issue #149) --------------------
@@ -616,8 +730,16 @@ async fn time_the_retried_mod_read(server: &FakeModio) -> Duration {
     let outcome = crate::modio_client::fetch_mod_outcome(&state, ModId(100)).await;
     let waited = started.elapsed();
 
-    assert!(matches!(outcome, ModFetchOutcome::Found(_)), "the retry should find the mod");
-    assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
+    assert!(
+        matches!(outcome, ModFetchOutcome::Found(_)),
+        "the retry should find the mod"
+    );
+    assert_eq!(
+        server.received().len(),
+        2,
+        "one retry: {:#?}",
+        server.received()
+    );
     waited
 }
 

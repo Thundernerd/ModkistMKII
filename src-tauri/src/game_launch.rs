@@ -175,7 +175,10 @@ fn launch_game_at(game_dir: &Path, custom_prefix: Option<&Path>) -> Result<(), S
 #[cfg(target_os = "macos")]
 fn launch_game_at(game_dir: &Path, custom_prefix: Option<&Path>) -> Result<(), String> {
     launch_via_wine(game_dir, custom_prefix)?;
-    log::info!("Launched Zeepkist via CrossOver/GameHub/Wine from {}", game_dir.display());
+    log::info!(
+        "Launched Zeepkist via CrossOver/GameHub/Wine from {}",
+        game_dir.display()
+    );
     Ok(())
 }
 

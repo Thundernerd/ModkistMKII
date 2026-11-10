@@ -11,10 +11,7 @@ pub struct GameRunningStatus {
 }
 
 fn process_name_is_game(name: &str) -> bool {
-    let basename = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name);
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let lower = basename.to_ascii_lowercase();
     GAME_PROCESS_BASENAMES
         .iter()

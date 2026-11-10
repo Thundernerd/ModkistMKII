@@ -18,7 +18,10 @@ pub async fn request_email_code(
 ) -> Result<String, String> {
     log::info!("Requesting mod.io login code");
     let api = state.api()?;
-    let message = api.request_email_code(&email).await.map_err(format_api_error)?;
+    let message = api
+        .request_email_code(&email)
+        .await
+        .map_err(format_api_error)?;
     Ok(message.message)
 }
 
@@ -29,7 +32,10 @@ pub async fn verify_email_code(
     code: String,
 ) -> Result<AuthUser, String> {
     let api = state.api()?;
-    let token = api.exchange_email_code(&code).await.map_err(format_api_error)?;
+    let token = api
+        .exchange_email_code(&code)
+        .await
+        .map_err(format_api_error)?;
 
     let user = api
         .get_authenticated_user(&token.access_token)

@@ -91,10 +91,7 @@ mod tests {
 
     #[test]
     fn trims_profile_name() {
-        let options = parse_launch_options([
-            "-profile".to_string(),
-            "  Survival  ".to_string(),
-        ]);
+        let options = parse_launch_options(["-profile".to_string(), "  Survival  ".to_string()]);
         assert_eq!(options.profile_name.as_deref(), Some("Survival"));
     }
 }

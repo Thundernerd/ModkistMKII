@@ -203,10 +203,7 @@ async fn download_archive(destination: &Path) -> Result<(), String> {
         .map_err(|e| format!("Download failed: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "Download failed with status {}",
-            response.status()
-        ));
+        return Err(format!("Download failed with status {}", response.status()));
     }
 
     let bytes = response
@@ -214,8 +211,8 @@ async fn download_archive(destination: &Path) -> Result<(), String> {
         .await
         .map_err(|e| format!("Download failed: {e}"))?;
 
-    let mut file = File::create(destination)
-        .map_err(|e| format!("Did not create temp file: {e}"))?;
+    let mut file =
+        File::create(destination).map_err(|e| format!("Did not create temp file: {e}"))?;
     file.write_all(&bytes)
         .map_err(|e| format!("Did not write temp file: {e}"))?;
 
@@ -228,7 +225,10 @@ fn wine_winhttp_for_installed(
     custom_prefix: Option<&Path>,
 ) -> Option<WineWinhttpStatus> {
     if state == BepInExState::Installed {
-        Some(wine_prefix::configure_winhttp_override(game_dir, custom_prefix))
+        Some(wine_prefix::configure_winhttp_override(
+            game_dir,
+            custom_prefix,
+        ))
     } else {
         None
     }
@@ -299,10 +299,12 @@ async fn perform_install(
     game_dir: &Path,
     custom_prefix: Option<&Path>,
 ) -> Result<BepInExStatus, String> {
-    log::info!("Downloading and extracting BepInEx to {}", game_dir.display());
+    log::info!(
+        "Downloading and extracting BepInEx to {}",
+        game_dir.display()
+    );
     let temp_dir = std::env::temp_dir().join("modkist-bepinex");
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Did not create temp directory: {e}"))?;
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
     let archive_path = temp_dir.join(ARCHIVE_NAME);
 
     download_archive(&archive_path).await?;
@@ -334,9 +336,8 @@ fn remove_bepinex_installation(game_dir: &Path) -> Result<(), String> {
     for file_name in [WINHTTP_DLL, DOORSTOP_CONFIG, CHANGELOG_TXT] {
         let path = game_dir.join(file_name);
         if path.is_file() {
-            fs::remove_file(&path).map_err(|e| {
-                format!("Did not remove {}: {e}", path.display())
-            })?;
+            fs::remove_file(&path)
+                .map_err(|e| format!("Did not remove {}: {e}", path.display()))?;
         }
     }
 

@@ -8,11 +8,11 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 use crate::fs_move::move_dir;
-use crate::mod_ids::{FileId, ModId};
 use crate::game_path::game_directory;
 use crate::mod_folder::{
     is_valid_install_folder_name, parse_install_folder_name, sanitize_mod_name,
 };
+use crate::mod_ids::{FileId, ModId};
 use crate::modio_client::ModioState;
 
 pub const PROFILES_STORE_PATH: &str = "modkist-profiles.json";
@@ -214,7 +214,9 @@ fn scan_managed_mods_in_kind_dir(
     }
 
     let mut entries = Vec::new();
-    for entry in fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))? {
+    for entry in
+        fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
+    {
         let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let file_type = entry
             .file_type()
@@ -280,8 +282,12 @@ pub fn read_profile_mods_manifest(archive_root: &Path) -> Result<ProfileModsMani
 
     let raw = fs::read_to_string(&path)
         .map_err(|e| format!("Did not read profile mods manifest {}: {e}", path.display()))?;
-    serde_json::from_str(&raw)
-        .map_err(|e| format!("Did not parse profile mods manifest {}: {e}", path.display()))
+    serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "Did not parse profile mods manifest {}: {e}",
+            path.display()
+        )
+    })
 }
 
 pub fn write_profile_mods_manifest(
@@ -297,8 +303,12 @@ pub fn write_profile_mods_manifest(
     let path = profile_manifest_path(archive_root);
     let raw = serde_json::to_string_pretty(manifest)
         .map_err(|e| format!("Did not serialize profile mods manifest: {e}"))?;
-    fs::write(&path, raw)
-        .map_err(|e| format!("Did not write profile mods manifest {}: {e}", path.display()))
+    fs::write(&path, raw).map_err(|e| {
+        format!(
+            "Did not write profile mods manifest {}: {e}",
+            path.display()
+        )
+    })
 }
 
 fn resolve_profile_archive_root_for(
@@ -577,18 +587,16 @@ fn ensure_builtin_profiles(data: &mut ProfileStoreData, username: Option<&str>) 
 }
 
 fn profile_by_id<'a>(data: &'a ProfileStoreData, profile_id: &str) -> Option<&'a StoredProfile> {
-    data.profiles.iter().find(|profile| profile.id == profile_id)
+    data.profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
 }
 
 fn install_blocked_for(profile: &StoredProfile) -> bool {
     profile.kind == ProfileKind::Vanilla
 }
 
-fn to_summary(
-    profile: &StoredProfile,
-    active_profile_id: &str,
-    logged_in: bool,
-) -> ProfileSummary {
+fn to_summary(profile: &StoredProfile, active_profile_id: &str, logged_in: bool) -> ProfileSummary {
     let selectable = profile.kind != ProfileKind::User || logged_in;
     ProfileSummary {
         id: profile.id.clone(),
@@ -601,19 +609,15 @@ fn to_summary(
 }
 
 fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(to_dir).map_err(|e| {
-        format!(
-            "Did not create profile directory {}: {e}",
-            to_dir.display()
-        )
-    })?;
+    fs::create_dir_all(to_dir)
+        .map_err(|e| format!("Did not create profile directory {}: {e}", to_dir.display()))?;
 
     if !from_dir.is_dir() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(from_dir)
-        .map_err(|e| format!("Did not read {}: {e}", from_dir.display()))?
+    for entry in
+        fs::read_dir(from_dir).map_err(|e| format!("Did not read {}: {e}", from_dir.display()))?
     {
         let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let path = entry.path();
@@ -631,12 +635,14 @@ fn move_valid_folders(from_dir: &Path, to_dir: &Path) -> Result<(), String> {
             let dest = to_dir.join(entry.file_name());
             if dest.exists() {
                 fs::remove_dir_all(&dest).map_err(|e| {
-                    format!("Did not replace existing profile folder {}: {e}", dest.display())
+                    format!(
+                        "Did not replace existing profile folder {}: {e}",
+                        dest.display()
+                    )
                 })?;
             }
-            move_dir(&path, &dest).map_err(|e| {
-                format!("Did not move mod folder {}: {e}", path.display())
-            })?;
+            move_dir(&path, &dest)
+                .map_err(|e| format!("Did not move mod folder {}: {e}", path.display()))?;
         }
     }
 
@@ -648,8 +654,8 @@ fn clear_valid_mod_folders(kind_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    for entry in fs::read_dir(kind_dir)
-        .map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
+    for entry in
+        fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
     {
         let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         if !entry
@@ -664,12 +670,8 @@ fn clear_valid_mod_folders(kind_dir: &Path) -> Result<(), String> {
             continue;
         }
 
-        fs::remove_dir_all(entry.path()).map_err(|e| {
-            format!(
-                "Did not clear mod folder {}: {e}",
-                entry.path().display()
-            )
-        })?;
+        fs::remove_dir_all(entry.path())
+            .map_err(|e| format!("Did not clear mod folder {}: {e}", entry.path().display()))?;
     }
 
     Ok(())
@@ -701,7 +703,10 @@ fn live_has_valid_mod_folders(game_dir: &Path) -> Result<bool, String> {
 }
 
 fn save_active_profile_at(game_dir: &Path, archive_root: &Path) -> Result<(), String> {
-    log::debug!("Saving live mods to profile archive '{}'", archive_root.display());
+    log::debug!(
+        "Saving live mods to profile archive '{}'",
+        archive_root.display()
+    );
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
         let archive_dir = archive_kind_dir_at_root(archive_root, kind_dir_name);
@@ -716,8 +721,7 @@ fn save_active_profile(
     profile: &StoredProfile,
 ) -> Result<(), String> {
     let archives_root = profile_archives_root(app)?;
-    let archive_root =
-        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
+    let archive_root = resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
     save_active_profile_at(game_dir, &archive_root)?;
     if profile.kind != ProfileKind::Vanilla {
         let mods = scan_managed_mods_at_archive_root(&archive_root)?;
@@ -746,8 +750,7 @@ fn restore_profile(
     profile: &StoredProfile,
 ) -> Result<(), String> {
     let archives_root = profile_archives_root(app)?;
-    let archive_root =
-        resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
+    let archive_root = resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
     restore_profile_at(game_dir, &archive_root)?;
     if profile.kind != ProfileKind::Vanilla {
         // Prefer existing manifest; if missing, seed from restored live folders.
@@ -775,8 +778,7 @@ fn adopt_live_mods_into_profile_at(
     archives_root: &Path,
     profile: &StoredProfile,
 ) -> Result<(), String> {
-    let archive_root =
-        resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
+    let archive_root = resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
     for kind_dir_name in [MODS_DIR, BLUEPRINTS_DIR] {
         let live_dir = live_kind_dir(game_dir, kind_dir_name);
         let archive_dir = archive_kind_dir_at_root(&archive_root, kind_dir_name);
@@ -839,10 +841,7 @@ fn sync_profile_archive_dir_name(
     ensure_profile_archive_dirs_at(&canonical)
 }
 
-fn sync_profile_archive_dir_names(
-    app: &AppHandle,
-    data: &ProfileStoreData,
-) -> Result<(), String> {
+fn sync_profile_archive_dir_names(app: &AppHandle, data: &ProfileStoreData) -> Result<(), String> {
     let archives_root = profile_archives_root(app)?;
     fs::create_dir_all(&archives_root).map_err(|e| e.to_string())?;
     for profile in &data.profiles {
@@ -923,14 +922,20 @@ fn remove_profile_archive_dirs_at(
                     legacy_archive.display()
                 )
             })?;
-            log::debug!("Removed legacy profile archive {}", legacy_archive.display());
+            log::debug!(
+                "Removed legacy profile archive {}",
+                legacy_archive.display()
+            );
         }
     }
 
     Ok(())
 }
 
-fn remove_profile_archive_from_disk(app: &AppHandle, profile: &StoredProfile) -> Result<(), String> {
+fn remove_profile_archive_from_disk(
+    app: &AppHandle,
+    profile: &StoredProfile,
+) -> Result<(), String> {
     let archives_root = profile_archives_root(app)?;
     let app_data_archive =
         resolve_profile_archive_root_at(&archives_root, &profile.id, &profile.name);
@@ -1001,10 +1006,7 @@ fn migrate_profile_archives_to_app_data(
     }
 
     data.archives_migrated = true;
-    log::info!(
-        "Moved profile archives to {}",
-        archives_root.display()
-    );
+    log::info!("Moved profile archives to {}", archives_root.display());
     Ok(())
 }
 
@@ -1035,8 +1037,7 @@ fn apply_first_run_profile_selection(
             .ok_or_else(|| "User profile is not configured.".to_string())?
             .clone();
         data.active_profile_id = USER_PROFILE_ID.to_string();
-        let archive_root =
-            resolve_profile_archive_root_at(archives_root, &user.id, &user.name);
+        let archive_root = resolve_profile_archive_root_at(archives_root, &user.id, &user.name);
         ensure_profile_archive_dirs_at(&archive_root)?;
         restore_profile_at(game_dir, &archive_root)?;
         log::info!("First run: activated user profile while signed in");
@@ -1050,14 +1051,11 @@ fn apply_first_run_profile_selection(
         kind: ProfileKind::Custom,
     };
     data.profiles.push(profile.clone());
-    let archive_root =
-        resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
+    let archive_root = resolve_profile_archive_root_at(archives_root, &profile.id, &profile.name);
     ensure_profile_archive_dirs_at(&archive_root)?;
     restore_profile_at(game_dir, &archive_root)?;
     data.active_profile_id = profile_id.clone();
-    log::info!(
-        "First run: created profile '{DEFAULT_FIRST_RUN_PROFILE_NAME}' ({profile_id})"
-    );
+    log::info!("First run: created profile '{DEFAULT_FIRST_RUN_PROFILE_NAME}' ({profile_id})");
     Ok(())
 }
 
@@ -1101,7 +1099,10 @@ fn prepare_store(app: &AppHandle, modio_state: &ModioState) -> Result<ProfileSto
     Ok(data)
 }
 
-pub fn active_profile_info(app: &AppHandle, modio_state: &ModioState) -> Result<ActiveProfileInfo, String> {
+pub fn active_profile_info(
+    app: &AppHandle,
+    modio_state: &ModioState,
+) -> Result<ActiveProfileInfo, String> {
     let data = prepare_store(app, modio_state)?;
     let profile = profile_by_id(&data, &data.active_profile_id).ok_or_else(|| {
         format!(
@@ -1267,8 +1268,7 @@ pub fn create_profile(
 
     if let Ok(archives_root) = profile_archives_root(&app) {
         ensure_profile_archive_dirs(&archives_root, &id, trimmed)?;
-        let archive_root =
-            resolve_profile_archive_root_at(&archives_root, &id, trimmed);
+        let archive_root = resolve_profile_archive_root_at(&archives_root, &id, trimmed);
         let _ = write_profile_mods_manifest(&archive_root, &ProfileModsManifest::default());
     }
 
@@ -1378,10 +1378,7 @@ mod tests {
     }
 
     fn write_mod_folder(game_dir: &Path, kind: &str, folder_name: &str) {
-        let path = game_dir
-            .join(BEPINEX_PLUGINS)
-            .join(kind)
-            .join(folder_name);
+        let path = game_dir.join(BEPINEX_PLUGINS).join(kind).join(folder_name);
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("mod.dll"), b"test").unwrap();
     }
@@ -1431,7 +1428,10 @@ mod tests {
 
         assert_eq!(manifest.mods[0].mod_id, ModId(10));
         assert_eq!(manifest.mods[0].file_id, FileId(20));
-        assert_eq!(fs::read_to_string(profile_manifest_path(&archive_root)).unwrap(), stored);
+        assert_eq!(
+            fs::read_to_string(profile_manifest_path(&archive_root)).unwrap(),
+            stored
+        );
     }
 
     #[test]
@@ -1453,7 +1453,10 @@ mod tests {
             profile_archive_dir_name("custom-1", "My Mod Pack"),
             "custom-1_My Mod Pack"
         );
-        assert_eq!(profile_archive_dir_name("vanilla", "Vanilla"), "vanilla_Vanilla");
+        assert_eq!(
+            profile_archive_dir_name("vanilla", "Vanilla"),
+            "vanilla_Vanilla"
+        );
         assert_eq!(profile_archive_dir_name("custom-1", ""), "custom-1");
     }
 

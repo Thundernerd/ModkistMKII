@@ -90,7 +90,8 @@ impl ApiCache {
     }
 
     pub(crate) fn mark_mod_file_deleted(&mut self, mod_id: ModId, file_id: FileId) {
-        self.deleted_mod_files.insert((mod_id, file_id), Timed::new(()));
+        self.deleted_mod_files
+            .insert((mod_id, file_id), Timed::new(()));
     }
 
     pub(crate) fn is_dependency_fetch_failed(&self, mod_id: ModId) -> bool {
@@ -100,12 +101,14 @@ impl ApiCache {
     }
 
     pub(crate) fn mark_dependency_fetch_failed(&mut self, mod_id: ModId) {
-        self.failed_dependency_fetches.insert(mod_id, Timed::new(()));
+        self.failed_dependency_fetches
+            .insert(mod_id, Timed::new(()));
     }
 
     pub(crate) fn invalidate_mod(&mut self, mod_id: ModId) {
         self.unavailable_mods.remove(&mod_id);
-        self.deleted_mod_files.retain(|(deleted_mod_id, _), _| *deleted_mod_id != mod_id);
+        self.deleted_mod_files
+            .retain(|(deleted_mod_id, _), _| *deleted_mod_id != mod_id);
         self.failed_dependency_fetches.remove(&mod_id);
         self.latest_file_ids.remove(&mod_id);
         self.mod_files.remove(&mod_id);
@@ -123,7 +126,11 @@ impl ApiCache {
         let mod_id = mod_.id;
         let merged = if let Some(entry) = self.mods.get(&mod_id).filter(|entry| entry.is_valid()) {
             let mut merged = mod_;
-            if merged.description.as_ref().is_none_or(|value| value.is_empty()) {
+            if merged
+                .description
+                .as_ref()
+                .is_none_or(|value| value.is_empty())
+            {
                 merged.description = entry.value.description.clone();
             }
             merged

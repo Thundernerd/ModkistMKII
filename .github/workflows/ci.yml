@@ -1,10 +1,11 @@
 # Checks every pull request to main, and every push to main.
 #
 # Runs the type check, the node:test suites for the release scripts under
-# .github/scripts/, the Rust tests in src-tauri, and clippy on src-tauri with
-# warnings as errors. Clippy runs on Linux, Windows and macOS, so code behind a
-# platform cfg is linted too. Any failing step fails the run.
-# This workflow does not build installers (see the Build workflow) and needs no secrets.
+# .github/scripts/, the Rust tests in src-tauri, the rustfmt check on src-tauri,
+# and clippy on src-tauri with warnings as errors. Clippy runs on Linux, Windows
+# and macOS, so code behind a platform cfg is linted too. Any failing step fails
+# the run. This workflow does not build installers (see the Build workflow) and
+# needs no secrets.
 
 name: CI
 
@@ -39,7 +40,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -61,7 +62,7 @@ jobs:
         id: install
         run: npm ci
 
-      # The four checks below run even if an earlier one fails, so one run reports
+      # The checks below run even if an earlier one fails, so one run reports
       # every failing check. They are skipped only when setup itself failed.
       - name: Type check
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -75,6 +76,11 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo test --locked
+
+      - name: Rust fmt
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: src-tauri
+        run: cargo fmt --check
 
       - name: Rust clippy
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

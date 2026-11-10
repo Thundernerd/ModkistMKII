@@ -20,10 +20,7 @@ pub fn sanitize_mod_name(name: &str) -> String {
         }
     }
 
-    let sanitized = sanitized
-        .trim_end_matches(['.', ' '])
-        .trim()
-        .to_string();
+    let sanitized = sanitized.trim_end_matches(['.', ' ']).trim().to_string();
     truncate_mod_name_suffix(&sanitized)
 }
 
@@ -71,7 +68,11 @@ pub fn is_legacy_install_folder_name(name: &str) -> bool {
     name == format!("{mod_id}_{file_id}")
 }
 
-pub fn rename_install_folder(parent_dir: &Path, from_name: &str, to_name: &str) -> Result<(), String> {
+pub fn rename_install_folder(
+    parent_dir: &Path,
+    from_name: &str,
+    to_name: &str,
+) -> Result<(), String> {
     if from_name == to_name {
         return Ok(());
     }
@@ -84,12 +85,8 @@ pub fn rename_install_folder(parent_dir: &Path, from_name: &str, to_name: &str) 
     }
 
     if to.exists() {
-        fs::remove_dir_all(&to).map_err(|e| {
-            format!(
-                "Did not replace existing mod folder {}: {e}",
-                to.display()
-            )
-        })?;
+        fs::remove_dir_all(&to)
+            .map_err(|e| format!("Did not replace existing mod folder {}: {e}", to.display()))?;
     }
 
     fs::rename(&from, &to).map_err(|e| {
@@ -107,7 +104,10 @@ mod tests {
 
     #[test]
     fn parses_legacy_and_named_folder_names() {
-        assert_eq!(parse_install_folder_name("12345_67890"), Some((ModId(12345), FileId(67890))));
+        assert_eq!(
+            parse_install_folder_name("12345_67890"),
+            Some((ModId(12345), FileId(67890)))
+        );
         assert_eq!(
             parse_install_folder_name("12345_67890_Cool Mod"),
             Some((ModId(12345), FileId(67890)))
@@ -121,7 +121,10 @@ mod tests {
 
     #[test]
     fn builds_named_install_folder() {
-        assert_eq!(install_folder_name(ModId(1), FileId(2), "Cool Mod"), "1_2_Cool Mod");
+        assert_eq!(
+            install_folder_name(ModId(1), FileId(2), "Cool Mod"),
+            "1_2_Cool Mod"
+        );
         assert_eq!(install_folder_name(ModId(1), FileId(2), "  "), "1_2");
         assert_eq!(
             install_folder_name(ModId(1), FileId(2), "Bad/Name:Here"),
