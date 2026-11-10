@@ -650,9 +650,10 @@ fn delete_stored_session(app: &AppHandle) -> Result<(), String> {
 }
 
 /// The level for logging `error` from a caller: `level`, or info when mod.io
-/// rejected our credentials (see [`ModioError`]).
+/// rejected our credentials or `ApiClient` already reported the failure (see
+/// [`ModioError`]).
 pub(crate) fn caller_log_level(error: &ApiError, level: log::Level) -> log::Level {
-    level_unless_already_handled(error.is_unauthorized(), level)
+    level_unless_already_handled(error.is_unauthorized() || error.reported, level)
 }
 
 /// `level`, or info when `ApiClient` already logged and explained the failure.
@@ -671,7 +672,9 @@ fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log
 /// which `SentryLogWriter` would forward to Sentry once per mod. The same goes
 /// for a private mod read while signed out (HTTP 403): the message already asks
 /// the user to sign in, and for a picked version whose file the author
-/// deleted (HTTP 404): the message already tells the user.
+/// deleted (HTTP 404): the message already tells the user. Any other failure
+/// `ApiClient` reported (a 5xx, a 429, a transport error) is likewise logged at
+/// info: its report holds no ids, so it groups into one Sentry issue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModioError {
     pub message: String,
@@ -686,6 +689,8 @@ enum Handled {
     CredentialsRejected,
     SignInRequired,
     ModfileDeleted,
+    /// `ApiClient` reported it to Sentry.
+    Reported,
 }
 
 impl ModioError {
@@ -697,10 +702,13 @@ impl ModioError {
         Self::from_api_with(error, logged_in, Handled::No)
     }
 
-    /// `handled` unless mod.io rejected our credentials (HTTP 401).
+    /// `handled` unless mod.io rejected our credentials (HTTP 401); when
+    /// nothing else handled it, whether `ApiClient` reported it.
     fn from_api_with(error: ApiError, logged_in: bool, handled: Handled) -> Self {
         let handled = if error.is_unauthorized() {
             Handled::CredentialsRejected
+        } else if handled == Handled::No && error.reported {
+            Handled::Reported
         } else {
             handled
         };
@@ -753,7 +761,8 @@ impl ModioError {
 
     /// `level` for an ordinary failure; info when the failure was already
     /// handled: mod.io rejected our credentials, the user must sign in to
-    /// read the mod, or the picked version was deleted.
+    /// read the mod, the picked version was deleted, or `ApiClient` reported
+    /// it.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
         level_unless_already_handled(self.handled != Handled::No, level)
     }
@@ -1897,6 +1906,7 @@ mod format_api_error_tests {
             message: "The mod ID you have included in your request could not be found.".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         }
     }
 
@@ -1922,6 +1932,7 @@ mod format_api_error_tests {
             message: "You have made too many requests in a short period of time, please wait and try again soon.".to_string(),
             retry_after_secs: Some(60),
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         let message = format_api_error_logged_in(error, true);
         assert!(is_rate_limited_message(&message));
@@ -1940,6 +1951,7 @@ mod is_mod_unavailable_tests {
             message: "test".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry,
+            reported: false,
         }
     }
 

@@ -90,6 +90,10 @@ pub struct ApiError {
     /// response that means the caller cannot access the mod (not 5xx / 429 / 401
     /// / transport). Callers treat this as "mod unavailable".
     pub inaccessible_after_bearer_retry: bool,
+    /// Set when `ApiClient` reported this failure to Sentry (logged at error).
+    /// Callers then log it at info: a second report would carry their ids,
+    /// and Sentry would open one issue per mod.
+    pub(crate) reported: bool,
 }
 
 impl ApiError {
@@ -100,6 +104,7 @@ impl ApiError {
             message,
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         }
     }
 
@@ -112,6 +117,7 @@ impl ApiError {
             message: "Your mod.io session has expired. Sign in again.".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         }
     }
 
@@ -210,6 +216,12 @@ impl ApiError {
     /// window) go to the log file at info. The report (error) holds only what
     /// does not vary per request, as Sentry groups message events by their
     /// text: the method, the route template, the status and `error_ref`.
+    fn report(mut self, method: &str, path: &str) -> Self {
+        self.log(method, path);
+        self.reported = true;
+        self
+    }
+
     fn log(&self, method: &str, path: &str) {
         self.log_details(method, path);
         let route = route_template(path);
@@ -765,11 +777,11 @@ impl ApiClient {
             let error = ApiError::transport(format!("mod.io request failed: {e}"));
             if on_failure.is_quiet() {
                 log::debug!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
+                error
             } else {
                 log::info!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
-                error.log(&method_label, path);
+                error.report(&method_label, path)
             }
-            error
         })?;
 
         let status = response.status();
@@ -813,12 +825,13 @@ impl ApiClient {
             message
         };
 
-        let error = ApiError {
+        let mut error = ApiError {
             status: Some(status.as_u16()),
             error_ref,
             message,
             retry_after_secs: retry_after,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         // If mod.io rate limited us, pause all subsequent requests for the
         // advised window instead of immediately retrying into the same block.
@@ -840,6 +853,7 @@ impl ApiClient {
         } else if token.is_none() && error.is_api_key_refused() {
             let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
             error.log_api_key_rejected(path, first);
+            error.reported = first;
             if let Some(hook) = self.hooks.on_api_key_refused.as_ref().filter(|_| first) {
                 hook();
             }
@@ -854,7 +868,7 @@ impl ApiClient {
         } else if error.status.is_some_and(|status| on_failure.expects(status)) {
             error.log_forbidden(path);
         } else {
-            error.log(&method_label, path);
+            error = error.report(&method_label, path);
         }
         Err(error)
     }
@@ -953,7 +967,7 @@ impl ApiClient {
                     // it once. send_raw already reported a 429, even when quiet.
                     api_key_error.log_details("GET", context);
                     if !bearer_error.is_rate_limited() {
-                        bearer_error.log("GET", context);
+                        return Err(bearer_error.report("GET", context));
                     }
                 }
                 Err(bearer_error)
@@ -1433,6 +1447,7 @@ mod tests {
             message: String::new(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         assert!(error(404, MODFILE_NOT_FOUND_ERROR_REF).is_known_not_found());
         assert!(error(403, MOD_NOT_FOUND_ERROR_REF).is_known_not_found());
@@ -1520,6 +1535,7 @@ mod tests {
             message: "slow down".to_string(),
             retry_after_secs: Some(60),
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         assert!(err.is_rate_limited());
         assert!(!err.is_auth());
@@ -1533,6 +1549,7 @@ mod tests {
             message: "not subscribed".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         assert!(err.is_not_subscribed());
         assert!(!err.is_not_found());
@@ -1547,6 +1564,7 @@ mod tests {
             message: "The mod ID you have included in your request could not be found.".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         assert!(err.is_not_found());
 
@@ -1562,6 +1580,7 @@ mod tests {
             message: "test".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         }
     }
 
@@ -1601,6 +1620,7 @@ mod tests {
             message: "too many requests".to_string(),
             retry_after_secs: None,
             inaccessible_after_bearer_retry: false,
+            reported: false,
         };
         assert!(!rate_limited
             .mark_inaccessible_after_bearer_retry()
