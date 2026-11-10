@@ -66,6 +66,17 @@ const NOT_FOUND_ERROR_REFS: [u32; 2] = [MOD_NOT_FOUND_ERROR_REF, MODFILE_NOT_FOU
 /// mod.io `error_ref` for an expired, revoked or malformed access token.
 const TOKEN_REJECTED_ERROR_REF: u32 = 11005;
 
+/// mod.io `error_ref` codes meaning the game API key itself was refused
+/// (missing, malformed or invalid). Every public read then fails the same way,
+/// so the first refusal per client is reported and later ones logged at info.
+const API_KEY_REFUSED_ERROR_REFS: [u32; 3] = [11000, 11001, 11002];
+
+/// mod.io `error_ref` codes `/oauth/emailexchange` returns (HTTP 401) for a
+/// security code the user got wrong: already redeemed (11011), expired (11012),
+/// invalid (11014) or used up (11147). The user is told and can request a new
+/// code, so these are logged at info level instead of being reported.
+const SECURITY_CODE_REFUSED_ERROR_REFS: [u32; 4] = [11011, 11012, 11014, 11147];
+
 /// Error returned by any mod.io API call. Captures the HTTP status, the mod.io
 /// `error_ref`, the server message and the `Retry-After` value (seconds) so the
 /// caller can distinguish rate limits, auth failures and missing resources.
@@ -155,10 +166,18 @@ impl ApiError {
         self.status == Some(401)
     }
 
-    /// True when mod.io refused the game API key itself (error_ref 11000-11002:
-    /// missing, malformed or invalid), as opposed to a session token.
+    /// True when mod.io refused the game API key itself (see
+    /// `API_KEY_REFUSED_ERROR_REFS`), as opposed to a session token.
     pub fn is_api_key_refused(&self) -> bool {
-        self.is_unauthorized() && matches!(self.error_ref, Some(11000..=11002))
+        self.is_unauthorized()
+            && self.error_ref.is_some_and(|error_ref| API_KEY_REFUSED_ERROR_REFS.contains(&error_ref))
+    }
+
+    /// True when mod.io refused an email security code the user entered (see
+    /// `SECURITY_CODE_REFUSED_ERROR_REFS`).
+    fn is_security_code_refused(&self) -> bool {
+        self.is_unauthorized()
+            && self.error_ref.is_some_and(|error_ref| SECURITY_CODE_REFUSED_ERROR_REFS.contains(&error_ref))
     }
 
     pub fn is_forbidden(&self) -> bool {
@@ -187,9 +206,26 @@ impl ApiError {
         self
     }
 
-    fn log(&self, context: &str) {
-        log::error!(
-            "mod.io API error [{context}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
+    /// Reports a failed request. The details (path, mod.io's message, retry
+    /// window) go to the log file at info. The report (error) holds only what
+    /// does not vary per request, as Sentry groups message events by their
+    /// text: the method, the route template, the status and `error_ref`.
+    fn log(&self, method: &str, path: &str) {
+        self.log_details(method, path);
+        let route = route_template(path);
+        match self.status {
+            Some(status) => log::error!(
+                "mod.io API error: {method} {route} returned status={status}, error_ref={:?}",
+                self.error_ref
+            ),
+            None => log::error!("mod.io API error: {method} {route} failed without a response"),
+        }
+    }
+
+    /// The details of a failed request, for the log file only.
+    fn log_details(&self, method: &str, path: &str) {
+        log::info!(
+            "mod.io API error [{method} {path}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
             self.message,
             self.status,
             self.error_ref,
@@ -243,6 +279,15 @@ impl ApiError {
                 self.error_ref
             );
         }
+    }
+
+    fn log_security_code_refused(&self, context: &str) {
+        log::info!(
+            "mod.io API error [{context}] (email security code refused): {} (status={:?}, error_ref={:?})",
+            self.message,
+            self.status,
+            self.error_ref
+        );
     }
 
     fn log_expected(&self, context: &str) {
@@ -551,7 +596,7 @@ impl ModQuery {
 pub type TokenRejectedHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Called once per client when mod.io refuses the game API key on an api_key
-/// request (error_ref 11000-11002: missing, malformed or invalid key).
+/// request (see `API_KEY_REFUSED_ERROR_REFS`).
 pub type ApiKeyRefusedHook = Arc<dyn Fn() + Send + Sync>;
 
 /// How an `ApiClient` reports credential failures back to the app. Every hook
@@ -567,13 +612,12 @@ pub struct ApiClient {
     base_url: String,
     api_key: String,
     hooks: ApiClientHooks,
-    /// Set once `hooks.on_api_key_refused` was called.
-    api_key_refusal_signalled: AtomicBool,
     /// Tokens mod.io already answered with 401. Later requests carrying one of
     /// them fail locally instead of firing another doomed request.
     rejected_tokens: std::sync::Mutex<HashSet<String>>,
-    /// Set once a 401 on an api_key request was reported. A refused game API
-    /// key fails every public read the same way, so report it only once.
+    /// Set once a refused game API key (see `API_KEY_REFUSED_ERROR_REFS`) was
+    /// reported and `hooks.on_api_key_refused` called. A refused key fails
+    /// every public read the same way, so both happen only once.
     api_key_rejection_reported: AtomicBool,
     /// Earliest instant the next request may start. Guards both the steady-state
     /// pacing and the self-healing backoff after a `Retry-After` response.
@@ -609,7 +653,6 @@ impl ApiClient {
             base_url: format!("https://{host}/v1"),
             api_key,
             hooks: ApiClientHooks::default(),
-            api_key_refusal_signalled: AtomicBool::new(false),
             rejected_tokens: std::sync::Mutex::new(HashSet::new()),
             api_key_rejection_reported: AtomicBool::new(false),
             next_request_at: tokio::sync::Mutex::new(Instant::now()),
@@ -717,12 +760,16 @@ impl ApiClient {
 
         let started = Instant::now();
         let response = request.send().await.map_err(|e| {
+            // reqwest's text includes the URL, with the api_key query.
+            let e = e.without_url();
+            let error = ApiError::transport(format!("mod.io request failed: {e}"));
             if on_failure.is_quiet() {
-                log::debug!("mod.io <- {method_label} {path} transport error: {e}");
+                log::debug!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
             } else {
-                log::error!("mod.io <- {method_label} {path} transport error: {e}");
+                log::info!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
+                error.log(&method_label, path);
             }
-            ApiError::transport(format!("mod.io request failed: {e}"))
+            error
         })?;
 
         let status = response.status();
@@ -733,8 +780,10 @@ impl ApiClient {
             response.headers(),
             started.elapsed(),
             on_failure,
-            // send_raw logs these 401s itself: a rejected token goes to the
-            // hook, a refused API key is reported once below.
+            // send_raw logs these 401s itself, by the error_ref in the body: a
+            // rejected token goes to the hook, a refused API key is reported
+            // once, a wrong email code is logged at info, anything else at
+            // error.
             !authenticated || self.hooks.on_token_rejected.is_some(),
         );
 
@@ -788,16 +837,14 @@ impl ApiClient {
         }
         if token_rejected {
             error.log_token_rejected(path);
-        } else if token.is_none() && error.is_unauthorized() {
+        } else if token.is_none() && error.is_api_key_refused() {
             let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
             error.log_api_key_rejected(path, first);
-            if error.is_api_key_refused()
-                && !self.api_key_refusal_signalled.swap(true, Ordering::Relaxed)
-            {
-                if let Some(hook) = self.hooks.on_api_key_refused.as_ref() {
-                    hook();
-                }
+            if let Some(hook) = self.hooks.on_api_key_refused.as_ref().filter(|_| first) {
+                hook();
             }
+        } else if token.is_none() && error.is_security_code_refused() {
+            error.log_security_code_refused(path);
         } else if on_failure.is_quiet() && !error.is_rate_limited() {
             error.log_suppressed(path);
         } else if error.is_expected_no_op() {
@@ -807,7 +854,7 @@ impl ApiClient {
         } else if error.status.is_some_and(|status| on_failure.expects(status)) {
             error.log_forbidden(path);
         } else {
-            error.log(path);
+            error.log(&method_label, path);
         }
         Err(error)
     }
@@ -902,9 +949,12 @@ impl ApiClient {
                     );
                 } else {
                     // 429/5xx/transport on the bearer retry is a genuinely
-                    // unexpected failure the caller will propagate, so surface it.
-                    api_key_error.log(context);
-                    bearer_error.log(context);
+                    // unexpected failure the caller will propagate, so surface
+                    // it once. send_raw already reported a 429, even when quiet.
+                    api_key_error.log_details("GET", context);
+                    if !bearer_error.is_rate_limited() {
+                        bearer_error.log("GET", context);
+                    }
                 }
                 Err(bearer_error)
             }
@@ -1253,6 +1303,39 @@ impl OnFailure {
     }
 }
 
+/// `error` followed by each of its causes, separated by colons.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut chain = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        chain.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    chain
+}
+
+/// `path` with each numeric id replaced by a placeholder named after the
+/// collection before it: `/games/3213/mods/44/files/9` becomes
+/// `/games/{game}/mods/{mod}/files/{file}`.
+fn route_template(path: &str) -> String {
+    let mut previous = "";
+    path.split('/')
+        .map(|segment| {
+            let templated = if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
+                match previous.strip_suffix('s') {
+                    Some(singular) if !singular.is_empty() => format!("{{{singular}}}"),
+                    _ => "{id}".to_string(),
+                }
+            } else {
+                segment.to_string()
+            };
+            previous = segment;
+            templated
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Logs the response status, elapsed time and all response headers.
 fn log_response(
     method: &str,
@@ -1283,13 +1366,15 @@ fn log_response(
 
     let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
     let expected = on_failure.expects(status.as_u16());
+    let expected_outcome = status.is_success() || known_not_found || handled_unauthorized || expected;
 
-    if status.is_success() || known_not_found || handled_unauthorized || expected {
-        log::info!("{line}");
-    } else if expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429) {
+    // Never above info: the header dump differs on every response (`date`,
+    // `cf-ray`, cookies) and is only for the log file. `send_raw` reports a
+    // failure once, in text that does not depend on the request.
+    if !expected_outcome && (expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429)) {
         log::debug!("{line}");
     } else {
-        log::warn!("{line}");
+        log::info!("{line}");
     }
 }
 
