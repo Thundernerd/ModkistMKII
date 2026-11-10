@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 
 const UPDATER_TAG = "updater";
 const TEMP_SUFFIX = ".next";
+const RETRY_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 2000;
 const REQUIRED_PLATFORMS = [
   "darwin-aarch64",
   "darwin-x86_64",
@@ -102,6 +104,27 @@ export function buildManifest(version, platforms, pubDate = new Date()) {
   };
 }
 
+function sleepSync(ms) {
+  if (ms > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  }
+}
+
+// Runs `fn`, retrying a failure with a growing delay. Used for the steps after
+// the old manifest is deleted, where giving up leaves the manifest missing.
+function withRetry(fn, delayMs) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return fn();
+    } catch (error) {
+      if (attempt >= RETRY_ATTEMPTS) {
+        throw error;
+      }
+      sleepSync(delayMs * attempt);
+    }
+  }
+}
+
 function tempName(name) {
   return `${name}${TEMP_SUFFIX}`;
 }
@@ -135,11 +158,19 @@ function renameAsset(runGh, repo, id, name) {
  * Each manifest is uploaded as `<name>.next`. Only once every upload has
  * succeeded is the old asset deleted and the temp asset renamed to `<name>`.
  * A failed upload throws before anything is deleted, so the previous manifest
- * stays downloadable.
+ * stays downloadable. The rename after the delete is retried, because giving
+ * up there would leave the manifest missing.
  *
  * `runGh` runs the gh CLI with the given arguments and returns its stdout.
  */
-export function replaceManifests({ runGh, repo, tag, dir, manifests }) {
+export function replaceManifests({
+  runGh,
+  repo,
+  tag,
+  dir,
+  manifests,
+  retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+}) {
   const tempNames = new Set(manifests.map(({ name }) => tempName(name)));
   for (const stale of listAssets(runGh, repo, tag)) {
     if (tempNames.has(stale.name)) {
@@ -153,19 +184,26 @@ export function replaceManifests({ runGh, repo, tag, dir, manifests }) {
     runGh(["release", "upload", tag, file]);
   }
 
-  const assets = listAssets(runGh, repo, tag);
+  const assets = withRetry(() => {
+    const listed = listAssets(runGh, repo, tag);
+    const missing = [...tempNames].filter(
+      (temp) => !listed.some((asset) => asset.name === temp),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `Uploaded ${missing.join(", ")} missing from release ${tag}`,
+      );
+    }
+    return listed;
+  }, retryDelayMs);
+
   for (const { name } of manifests) {
     const old = assets.find((asset) => asset.name === name);
     const next = assets.find((asset) => asset.name === tempName(name));
-    if (!next) {
-      throw new Error(
-        `Uploaded ${tempName(name)} is missing from release ${tag}`,
-      );
-    }
     if (old) {
       deleteAsset(runGh, repo, old.id);
     }
-    renameAsset(runGh, repo, next.id, name);
+    withRetry(() => renameAsset(runGh, repo, next.id, name), retryDelayMs);
   }
 }
 

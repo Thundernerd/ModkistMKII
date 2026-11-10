@@ -117,10 +117,19 @@ function describeCall(args) {
 // A fake `gh` runner that keeps the updater release's assets in memory and
 // records every call, so tests can check both the order of operations and
 // what a client would be able to download afterwards.
-function fakeGh({ assets = [], failUploadOf = [] } = {}) {
+function fakeGh({
+  assets = [],
+  failUploadOf = [],
+  failRenames = 0,
+  staleListsAfterUpload = 0,
+} = {}) {
   let nextId = 1000;
   const state = new Map(assets.map((asset) => [asset.name, { ...asset }]));
   const calls = [];
+  // Asset listings that still show the release as it was before the latest
+  // upload, as GitHub's API can for a moment after an upload.
+  let staleLists = 0;
+  let beforeUpload = [];
   const findById = (id) => {
     const entry = [...state.values()].find((asset) => asset.id === id);
     if (!entry) {
@@ -132,10 +141,13 @@ function fakeGh({ assets = [], failUploadOf = [] } = {}) {
     calls.push(args);
     const call = parseGhCall(args);
     switch (call.kind) {
-      case "list":
+      case "list": {
+        const listed = staleLists > 0 ? beforeUpload : [...state.values()];
+        staleLists = Math.max(0, staleLists - 1);
         return JSON.stringify({
-          assets: [...state.values()].map(({ id, name }) => ({ id, name })),
+          assets: listed.map(({ id, name }) => ({ id, name })),
         });
+      }
       case "upload":
         if (failUploadOf.includes(call.name)) {
           throw new Error(`upload of ${call.name} failed`);
@@ -143,6 +155,8 @@ function fakeGh({ assets = [], failUploadOf = [] } = {}) {
         if (state.has(call.name)) {
           throw new Error(`asset ${call.name} already exists`);
         }
+        beforeUpload = [...state.values()];
+        staleLists = staleListsAfterUpload;
         state.set(call.name, {
           id: nextId++,
           name: call.name,
@@ -153,6 +167,10 @@ function fakeGh({ assets = [], failUploadOf = [] } = {}) {
         state.delete(findById(call.id).name);
         return "";
       case "rename": {
+        if (failRenames > 0) {
+          failRenames--;
+          throw new Error("HTTP 502: Bad Gateway");
+        }
         const entry = findById(call.id);
         state.delete(entry.name);
         state.set(call.name, { ...entry, name: call.name });
@@ -297,6 +315,44 @@ test("removes a leftover temp asset from an earlier failed run before uploading"
     steps.indexOf("delete 7") < steps.indexOf("upload latest.json.next"),
     `stale temp asset should be deleted before the upload: ${steps.join(", ")}`,
   );
+  assert.deepEqual([...gh.state.keys()], ["latest.json"]);
+  assert.equal(gh.state.get("latest.json").content, "new");
+});
+
+test("retries a rename that fails after the old manifest was deleted", () => {
+  const gh = fakeGh({
+    assets: [{ id: 1, name: "latest.json", content: "old" }],
+    failRenames: 2,
+  });
+
+  replaceManifests({
+    runGh: gh.run,
+    repo: REPO,
+    tag: "updater",
+    dir: tempDir(),
+    manifests: [{ name: "latest.json", content: "new" }],
+    retryDelayMs: 0,
+  });
+
+  assert.deepEqual([...gh.state.keys()], ["latest.json"]);
+  assert.equal(gh.state.get("latest.json").content, "new");
+});
+
+test("waits for an uploaded temp asset to show up in the release's asset list", () => {
+  const gh = fakeGh({
+    assets: [{ id: 1, name: "latest.json", content: "old" }],
+    staleListsAfterUpload: 2,
+  });
+
+  replaceManifests({
+    runGh: gh.run,
+    repo: REPO,
+    tag: "updater",
+    dir: tempDir(),
+    manifests: [{ name: "latest.json", content: "new" }],
+    retryDelayMs: 0,
+  });
+
   assert.deepEqual([...gh.state.keys()], ["latest.json"]);
   assert.equal(gh.state.get("latest.json").content, "new");
 });
