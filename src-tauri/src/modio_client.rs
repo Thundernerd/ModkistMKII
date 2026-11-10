@@ -960,7 +960,10 @@ const BATCH_FETCH_CHUNK_SIZE: usize = 100;
 /// resolved from cache without any request. Any id the batch call doesn't
 /// return — e.g. a private mod the api key alone can't see, or the whole batch
 /// request failing — falls back to [`fetch_mod_outcome`], which retries with a
-/// bearer token and handles rate limits/unavailability per mod.
+/// bearer token and handles rate limits/unavailability per mod. A batch
+/// request still rate limited after its retry is the exception: its ids and
+/// those of every later chunk fail with that error, without any per-mod
+/// request, since those would only be rate limited too.
 pub(crate) async fn fetch_mod_outcomes_batch(
     state: &ModioState,
     mod_ids: &[ModId],
@@ -1005,23 +1008,44 @@ pub(crate) async fn fetch_mod_outcomes_batch(
     };
     let session = state.session_token();
 
+    // Set once a batch request is still rate limited after its retry: every
+    // id left fails with that error, without further requests.
+    let mut rate_limit_error: Option<ModioError> = None;
+
     for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
         let mut found_ids = HashSet::new();
-        match with_rate_limit_retry(Some("batch mod fetch"), || api.get_mods_by_id(game_id, chunk)).await {
-            Ok(list) => {
-                for mod_ in list.data {
-                    found_ids.insert(mod_.id);
-                    seed_mod_cache(state, &mod_);
-                    outcomes.insert(mod_.id, ModFetchOutcome::Found(mod_));
+        if rate_limit_error.is_none() {
+            match with_rate_limit_retry(Some("batch mod fetch"), || api.get_mods_by_id(game_id, chunk)).await {
+                Ok(list) => {
+                    for mod_ in list.data {
+                        found_ids.insert(mod_.id);
+                        seed_mod_cache(state, &mod_);
+                        outcomes.insert(mod_.id, ModFetchOutcome::Found(mod_));
+                    }
+                }
+                Err(error) if error.is_rate_limited() => {
+                    log::log!(
+                        caller_log_level(&error, log::Level::Warn),
+                        "Batch mod fetch still rate limited after its retry, skipping per-mod requests: {}",
+                        error.message
+                    );
+                    rate_limit_error = Some(ModioError::from_api(error, state.auth_status().logged_in));
+                }
+                Err(error) => {
+                    log::log!(
+                        caller_log_level(&error, log::Level::Warn),
+                        "Batch mod fetch failed, falling back to per-mod requests: {}",
+                        error.message
+                    );
                 }
             }
-            Err(error) => {
-                log::log!(
-                    caller_log_level(&error, log::Level::Warn),
-                    "Batch mod fetch failed, falling back to per-mod requests: {}",
-                    error.message
-                );
+        }
+
+        if let Some(error) = &rate_limit_error {
+            for &mod_id in chunk {
+                outcomes.insert(mod_id, ModFetchOutcome::Failed(error.clone()));
             }
+            continue;
         }
 
         for &mod_id in chunk {

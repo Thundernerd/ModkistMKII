@@ -554,3 +554,51 @@ async fn a_mod_read_under_a_sustained_rate_limit_fails_after_one_retry() {
         "the retry should be in the log file: {lines:#?}"
     );
 }
+
+// --- Rate-limited batch reads skip the per-mod fallback (issue #147) ----------
+
+fn failed_on_rate_limit(outcome: Option<&ModFetchOutcome>) -> bool {
+    matches!(outcome, Some(ModFetchOutcome::Failed(error)) if error.is_rate_limited())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_batch_mod_read_under_a_sustained_rate_limit_fails_without_per_mod_reads() {
+    capture_reports();
+    let server = FakeModio::start(always_rate_limited);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let outcomes = fetch_mod_outcomes_batch(&state, &PRIVATE_MODS).await;
+
+    assert!(PRIVATE_MODS
+        .iter()
+        .all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
+    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    let mods = format!("/games/{GAME_ID}/mods");
+    assert_eq!(paths, [mods.clone(), mods], "the batch and its one retry only");
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 2, "one ApiClient report per request: {reports:#?}");
+    assert!(reports
+        .iter()
+        .all(|report| report.contains("mod.io API error: GET /games/{game}/mods returned status=429")));
+    let lines = log_lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("INFO: Batch mod fetch still rate limited after its retry")),
+        "the final failure should be in the log file at info: {lines:#?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_batch_still_rate_limited_after_its_retry_fails_the_later_chunks_without_requests() {
+    let server = FakeModio::start(always_rate_limited);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+    // More ids than one `id-in` request takes (100), so the read needs two chunks.
+    let mod_ids: Vec<ModId> = (1..=150).map(ModId).collect();
+
+    let outcomes = fetch_mod_outcomes_batch(&state, &mod_ids).await;
+
+    assert!(mod_ids.iter().all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
+    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    assert_eq!(paths.len(), 2, "the first chunk and its one retry only: {paths:#?}");
+}
