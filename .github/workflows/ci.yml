@@ -2,7 +2,8 @@
 #
 # Runs the type check, the node:test suites for the release scripts under
 # .github/scripts/, the Rust tests in src-tauri, and clippy on src-tauri with
-# warnings as errors. Any failing step fails the run.
+# warnings as errors. Clippy runs on Linux, Windows and macOS, so code behind a
+# platform cfg is linted too. Any failing step fails the run.
 # This workflow does not build installers (see the Build workflow) and needs no secrets.
 
 name: CI
@@ -77,5 +78,37 @@ jobs:
 
       - name: Rust clippy
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  # Clippy only, on the platforms the checks job does not cover, so code behind
+  # #[cfg(windows)] or #[cfg(target_os = "macos")] is linted too. Clippy does not
+  # need the built frontend, so this job sets up no Node.
+  clippy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: clippy
+          cache-on-failure: true
+
+      # Same gate as the checks job: skipped only when setup itself failed.
+      - name: Rust clippy
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' }}
         working-directory: src-tauri
         run: cargo clippy --all-targets --locked -- -D warnings

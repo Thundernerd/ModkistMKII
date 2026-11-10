@@ -55,52 +55,46 @@ fn command_exists(command: &str) -> bool {
 }
 
 #[cfg(any(windows, target_os = "linux"))]
+const STEAM_NOT_FOUND: &str = "Did not find Steam. Install Steam or launch Zeepkist manually.";
+
+#[cfg(any(windows, target_os = "linux"))]
+fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
 fn find_steam_executable() -> Result<PathBuf, String> {
-    #[cfg(windows)]
-    {
-        let mut candidates = Vec::new();
-        // Prefer the registry, since Steam is very often installed outside
-        // the default Program Files locations (different drive, custom path).
-        if let Some(install_dir) = crate::game_path::windows_steam_install_dir() {
-            candidates.push(install_dir.join("steam.exe"));
-        }
-        if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
-            candidates.push(PathBuf::from(program_files_x86).join("Steam/steam.exe"));
-        }
-        if let Ok(program_files) = std::env::var("ProgramFiles") {
-            candidates.push(PathBuf::from(program_files).join("Steam/steam.exe"));
-        }
-
-        for candidate in candidates {
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-
-        return Err("Did not find Steam. Install Steam or launch Zeepkist manually.".into());
+    let mut candidates = Vec::new();
+    // Prefer the registry, since Steam is very often installed outside
+    // the default Program Files locations (different drive, custom path).
+    if let Some(install_dir) = crate::game_path::windows_steam_install_dir() {
+        candidates.push(install_dir.join("steam.exe"));
+    }
+    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(PathBuf::from(program_files_x86).join("Steam/steam.exe"));
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        candidates.push(PathBuf::from(program_files).join("Steam/steam.exe"));
     }
 
-    #[cfg(target_os = "linux")]
-    {
-        if command_exists("steam") {
-            return Ok(PathBuf::from("steam"));
-        }
+    first_existing_file(candidates).ok_or_else(|| STEAM_NOT_FOUND.into())
+}
 
-        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            let candidates = [
-                home.join(".local/share/Steam/ubuntu12_32/steam"),
-                home.join(".steam/steam/ubuntu12_32/steam"),
-                home.join(".steam/debian-installation/ubuntu12_32/steam"),
-            ];
-            for candidate in candidates {
-                if candidate.is_file() {
-                    return Ok(candidate);
-                }
-            }
-        }
-
-        Err("Did not find Steam. Install Steam or launch Zeepkist manually.".into())
+#[cfg(target_os = "linux")]
+fn find_steam_executable() -> Result<PathBuf, String> {
+    if command_exists("steam") {
+        return Ok(PathBuf::from("steam"));
     }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    home.and_then(|home| {
+        first_existing_file([
+            home.join(".local/share/Steam/ubuntu12_32/steam"),
+            home.join(".steam/steam/ubuntu12_32/steam"),
+            home.join(".steam/debian-installation/ubuntu12_32/steam"),
+        ])
+    })
+    .ok_or_else(|| STEAM_NOT_FOUND.into())
 }
 
 #[cfg(any(windows, target_os = "linux"))]
