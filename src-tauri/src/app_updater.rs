@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use reqwest::StatusCode;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
@@ -67,8 +70,47 @@ fn log_updater_failure(step: &str, error: &tauri_plugin_updater::Error) {
     }
 }
 
-fn log_check_failure(error: &tauri_plugin_updater::Error) {
-    log_updater_failure("check", error);
+/// How long the follow-up request for a missing manifest's status may take.
+const MANIFEST_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The status the manifest endpoint answers with now, or `None` without a response.
+/// `ReleaseNotFound` drops the status the updater saw, so ask once more.
+async fn manifest_status(endpoint: &str) -> Option<StatusCode> {
+    let client = reqwest::Client::builder()
+        .timeout(MANIFEST_STATUS_TIMEOUT)
+        .build()
+        .ok()?;
+    let response = client.get(endpoint).send().await.ok()?;
+    Some(response.status())
+}
+
+/// Whether the manifest is missing or refused for everyone, as opposed to
+/// GitHub, a proxy or the user's network having a bad moment.
+fn is_missing_manifest(status: StatusCode) -> bool {
+    status.is_client_error()
+        && status != StatusCode::TOO_MANY_REQUESTS
+        && status != StatusCode::REQUEST_TIMEOUT
+}
+
+/// Log a failed update check. A missing or broken manifest is reported to
+/// Sentry; a network failure stays in the log file, since the next launch
+/// checks again.
+async fn log_check_failure(error: &tauri_plugin_updater::Error, endpoint: &str) {
+    use tauri_plugin_updater::Error;
+
+    match error {
+        Error::ReleaseNotFound => match manifest_status(endpoint).await {
+            Some(status) if is_missing_manifest(status) => {
+                log::warn!("App update check failed: manifest {endpoint} returned {status}")
+            }
+            Some(status) => {
+                log::info!("App update check failed: manifest {endpoint} returned {status}")
+            }
+            None => log::info!("App update check failed: manifest {endpoint} did not respond"),
+        },
+        Error::Reqwest(_) => log::info!("App update check failed: {error}"),
+        _ => log::warn!("App update check failed: {error}"),
+    }
 }
 
 fn log_install_failure(error: &tauri_plugin_updater::Error) {
@@ -134,7 +176,7 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
             version: None,
         }),
         Err(error) => {
-            log_check_failure(&error);
+            log_check_failure(&error, endpoint).await;
             Err(error.to_string())
         }
     }
@@ -144,17 +186,51 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
 mod tests {
     use super::*;
     use crate::logging::report_capture::{capture_reports, sentry_reports};
+    use crate::modio_api::auth_tests::FakeModio;
     use tauri_plugin_updater::Error as UpdaterError;
 
-    #[test]
-    fn an_unreachable_update_endpoint_is_not_reported_to_sentry() {
+    /// For failures that are classified without asking the endpoint again.
+    const UNUSED_ENDPOINT: &str = "http://127.0.0.1:1/unused.json";
+
+    /// A manifest endpoint on a local server that answers every request with `status`.
+    fn manifest_endpoint(status: u16) -> (FakeModio, String) {
+        let server = FakeModio::start(move |_| (status, None, String::new()));
+        let endpoint = format!("{}/latest.json", server.base_url);
+        (server, endpoint)
+    }
+
+    #[tokio::test]
+    async fn an_update_endpoint_with_a_server_error_is_not_reported_to_sentry() {
+        // GitHub hiccup, or the manifest being replaced mid-release.
+        let (_server, endpoint) = manifest_endpoint(503);
         capture_reports();
 
-        // A non-2xx response from every endpoint (GitHub hiccup, captive portal,
-        // proxy, manifest briefly replaced during a release).
-        log_check_failure(&UpdaterError::ReleaseNotFound);
+        log_check_failure(&UpdaterError::ReleaseNotFound, &endpoint).await;
 
         assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_update_endpoint_is_not_reported_to_sentry() {
+        // Offline: nothing listens on port 1.
+        capture_reports();
+
+        log_check_failure(&UpdaterError::ReleaseNotFound, "http://127.0.0.1:1/latest.json").await;
+
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_missing_update_manifest_is_reported_to_sentry() {
+        let (_server, endpoint) = manifest_endpoint(404);
+        capture_reports();
+
+        log_check_failure(&UpdaterError::ReleaseNotFound, &endpoint).await;
+
+        let reports = sentry_reports();
+        assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+        assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
+        assert!(reports[0].contains("404"), "report should name the status: {}", reports[0]);
     }
 
     /// A `reqwest::Error` of the major tauri-plugin-updater uses. Building a real
@@ -169,21 +245,21 @@ mod tests {
             .expect_err("a 503 is an error status")
     }
 
-    #[test]
-    fn a_failed_update_request_is_not_reported_to_sentry() {
+    #[tokio::test]
+    async fn a_failed_update_request_is_not_reported_to_sentry() {
         capture_reports();
 
         // Offline, DNS, TLS or a cut-off body while fetching the manifest.
-        log_check_failure(&UpdaterError::Reqwest(failed_request()));
+        log_check_failure(&UpdaterError::Reqwest(failed_request()), UNUSED_ENDPOINT).await;
 
         assert_eq!(sentry_reports(), Vec::<String>::new());
     }
 
-    #[test]
-    fn a_manifest_without_this_platform_is_still_reported_to_sentry() {
+    #[tokio::test]
+    async fn a_manifest_without_this_platform_is_still_reported_to_sentry() {
         capture_reports();
 
-        log_check_failure(&UpdaterError::TargetNotFound("windows-x86_64".into()));
+        log_check_failure(&UpdaterError::TargetNotFound("windows-x86_64".into()), UNUSED_ENDPOINT).await;
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
