@@ -732,12 +732,21 @@ impl ApiClient {
 
         let started = Instant::now();
         let response = request.send().await.map_err(|e| {
-            if on_failure.is_quiet() {
-                log::debug!("mod.io <- {method_label} {path} transport error: {e}");
-            } else {
-                log::error!("mod.io <- {method_label} {path} transport error: {e}");
+            // reqwest's text includes the URL, with the api_key query.
+            let e = e.without_url();
+            let mut causes = String::new();
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                causes.push_str(&format!(": {cause}"));
+                source = cause.source();
             }
-            ApiError::transport(format!("mod.io request failed: {e}"))
+            if on_failure.is_quiet() {
+                log::debug!("mod.io <- {method_label} {path} transport error: {e}{causes}");
+            } else {
+                log::info!("mod.io <- {method_label} {path} transport error: {e}{causes}");
+                log::error!("mod.io <- {method_label} {} transport error: {e}", route_template(path));
+            }
+            ApiError::transport(format!("mod.io request failed: {e}{causes}"))
         })?;
 
         let status = response.status();

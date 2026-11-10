@@ -460,3 +460,30 @@ async fn a_rate_limited_bearer_retry_is_reported_once() {
     assert_eq!(reports.len(), 1, "expected one report for the failed read, got {reports:#?}");
     assert!(reports[0].contains("429"), "the report should be the rate limit: {}", reports[0]);
 }
+
+/// A base URL nothing listens on, so every request fails before a response.
+fn unreachable_base_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    drop(listener);
+    base_url
+}
+
+#[tokio::test]
+async fn a_transport_failure_is_reported_with_the_same_text_for_every_mod() {
+    let client = ApiClient::new("game-key".into(), Some(GAME_ID), None, false)
+        .unwrap()
+        .with_base_url(unreachable_base_url());
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let first = sentry_reports();
+
+    capture_reports();
+    let _ = client.get_mod_file(GAME_ID, 1, 2, None).await;
+    let second = sentry_reports();
+
+    assert_eq!(first.len(), 1, "{first:#?}");
+    assert_eq!(first, second, "both failures should file the same Sentry issue");
+    assert!(!first[0].contains("game-key"), "the report contains the API key: {}", first[0]);
+}
