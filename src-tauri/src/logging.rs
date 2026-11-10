@@ -140,7 +140,8 @@ pub fn log_directory_path(app: AppHandle) -> Result<String, String> {
 }
 
 /// Captures, per test thread, the log records `SentryLogWriter` would send to
-/// Sentry, so tests can assert what gets reported.
+/// Sentry, so tests can assert what gets reported, and every record at info
+/// or above, so tests can assert what reaches the log file.
 #[cfg(test)]
 pub(crate) mod report_capture {
     use std::cell::RefCell;
@@ -148,6 +149,7 @@ pub(crate) mod report_capture {
 
     thread_local! {
         static REPORTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static LOG_LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     struct ReportCapture;
@@ -158,8 +160,11 @@ pub(crate) mod report_capture {
         }
 
         fn log(&self, record: &log::Record) {
+            let line = format!("{}: {}", record.level(), record.args());
+            if record.level() <= log::Level::Info {
+                LOG_LINES.with(|lines| lines.borrow_mut().push(line.clone()));
+            }
             if super::sentry_level(record).is_some() {
-                let line = format!("{}: {}", record.level(), record.args());
                 REPORTS.with(|reports| reports.borrow_mut().push(line));
             }
         }
@@ -167,7 +172,8 @@ pub(crate) mod report_capture {
         fn flush(&self) {}
     }
 
-    /// Install the capture (once per process) and clear this thread's reports.
+    /// Install the capture (once per process) and clear this thread's reports
+    /// and log lines.
     pub(crate) fn capture_reports() {
         static INSTALLED: OnceLock<()> = OnceLock::new();
         INSTALLED.get_or_init(|| {
@@ -175,11 +181,18 @@ pub(crate) mod report_capture {
             log::set_max_level(log::LevelFilter::Trace);
         });
         REPORTS.with(|reports| reports.borrow_mut().clear());
+        LOG_LINES.with(|lines| lines.borrow_mut().clear());
     }
 
     /// The `LEVEL: message` lines this thread would have sent to Sentry.
     pub(crate) fn sentry_reports() -> Vec<String> {
         REPORTS.with(|reports| reports.borrow().clone())
+    }
+
+    /// The `LEVEL: message` lines at info or above this thread logged: what
+    /// the default file filter (`DEFAULT_LOG_FILTER`) keeps.
+    pub(crate) fn log_lines() -> Vec<String> {
+        LOG_LINES.with(|lines| lines.borrow().clone())
     }
 }
 

@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
-use crate::logging::report_capture::{capture_reports, sentry_reports};
+use crate::logging::report_capture::{capture_reports, log_lines, sentry_reports};
 use crate::modio_api::auth_tests::{
     error_body, forbidden, token_expired, FakeModio, Received, GAME_ID, TOKEN,
 };
@@ -485,6 +485,11 @@ async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
     assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
     assert!(reports[0].contains("mod.io API error: GET /games/{game}/mods/{mod}/dependencies returned status=429"), "{reports:#?}");
     assert_eq!(server.received().len(), 2, "the read should be retried: {:#?}", server.received());
+    assert!(
+        log_lines().iter().any(|line| line.starts_with("INFO: mod.io rate limit hit, retrying in 61 seconds")),
+        "the retry should still be in the log file: {:#?}",
+        log_lines()
+    );
     assert_eq!(map.get(&100), Some(&Vec::new()));
 }
 
@@ -500,5 +505,10 @@ async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
     assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
     assert!(reports[0].contains("mod.io API error: GET /games/{game}/mods returned status=429"), "{reports:#?}");
     assert_eq!(server.received().len(), 2, "the batch should be retried: {:#?}", server.received());
+    assert!(
+        log_lines().contains(&"INFO: mod.io rate limit hit on batch mod fetch, retrying in 61 seconds".to_string()),
+        "the retry should still be in the log file: {:#?}",
+        log_lines()
+    );
     assert!(matches!(outcomes.get(&100), Some(ModFetchOutcome::Found(_))));
 }
