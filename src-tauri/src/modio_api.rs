@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::mod_ids::{FileId, ModId};
+
 const PLATFORM_HEADER: &str = "windows";
 const DEFAULT_HOST: &str = "api.mod.io";
 const TEST_HOST: &str = "api.test.mod.io";
@@ -449,7 +451,7 @@ pub struct Download {
 #[derive(Deserialize, Clone)]
 pub struct Modfile {
     #[serde(default)]
-    pub id: u64,
+    pub id: FileId,
     #[serde(default, deserialize_with = "deserialize_null_string")]
     pub filename: String,
     #[serde(default)]
@@ -488,7 +490,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let modfile = Option::<Modfile>::deserialize(deserializer)?;
-    Ok(modfile.filter(|file| file.id != 0))
+    Ok(modfile.filter(|file| file.id != FileId(0)))
 }
 
 /// mod.io admin status: 3 = archived (only returned via `/me/*` endpoints).
@@ -502,7 +504,7 @@ pub fn is_mod_archived(mod_: &ModObject) -> bool {
 #[derive(Deserialize, Clone)]
 pub struct ModObject {
     #[serde(default)]
-    pub id: u64,
+    pub id: ModId,
     #[serde(default)]
     pub game_id: u64,
     /// Admin status: 0 = not accepted, 1 = accepted, 3 = archived.
@@ -545,7 +547,7 @@ pub struct ModObject {
 #[derive(Deserialize)]
 pub struct DependencyObject {
     #[serde(default)]
-    pub mod_id: u64,
+    pub mod_id: ModId,
 }
 
 #[derive(Deserialize)]
@@ -571,7 +573,7 @@ pub struct Message {
 #[derive(Deserialize, Clone)]
 pub struct RatingObject {
     #[serde(default)]
-    pub mod_id: u64,
+    pub mod_id: ModId,
     #[serde(default)]
     pub rating: i8,
 }
@@ -1014,12 +1016,12 @@ impl ApiClient {
     pub async fn get_mods_by_id(
         &self,
         game_id: u64,
-        mod_ids: &[u64],
+        mod_ids: &[ModId],
     ) -> Result<ListResponse<ModObject>, ApiError> {
         let path = format!("/games/{game_id}/mods");
         let ids = mod_ids
             .iter()
-            .map(u64::to_string)
+            .map(ModId::to_string)
             .collect::<Vec<_>>()
             .join(",");
         let params = vec![
@@ -1033,7 +1035,7 @@ impl ApiClient {
     pub async fn get_mod(
         &self,
         game_id: u64,
-        mod_id: u64,
+        mod_id: ModId,
         token: Option<&str>,
     ) -> Result<ModObject, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}");
@@ -1069,7 +1071,7 @@ impl ApiClient {
     pub async fn get_mod_files(
         &self,
         game_id: u64,
-        mod_id: u64,
+        mod_id: ModId,
         token: Option<&str>,
     ) -> Result<ListResponse<Modfile>, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/files");
@@ -1084,8 +1086,8 @@ impl ApiClient {
     pub async fn get_mod_file(
         &self,
         game_id: u64,
-        mod_id: u64,
-        file_id: u64,
+        mod_id: ModId,
+        file_id: FileId,
         token: Option<&str>,
     ) -> Result<Modfile, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/files/{file_id}");
@@ -1096,7 +1098,7 @@ impl ApiClient {
     pub async fn get_mod_dependencies(
         &self,
         game_id: u64,
-        mod_id: u64,
+        mod_id: ModId,
         token: Option<&str>,
     ) -> Result<ListResponse<DependencyObject>, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/dependencies");
@@ -1166,7 +1168,7 @@ impl ApiClient {
             .await
     }
 
-    pub async fn subscribe(&self, token: &str, game_id: u64, mod_id: u64) -> Result<(), ApiError> {
+    pub async fn subscribe(&self, token: &str, game_id: u64, mod_id: ModId) -> Result<(), ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/subscribe");
         self.send_empty(reqwest::Method::POST, &path, Some(token)).await
     }
@@ -1175,7 +1177,7 @@ impl ApiClient {
         &self,
         token: &str,
         game_id: u64,
-        mod_id: u64,
+        mod_id: ModId,
     ) -> Result<(), ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/subscribe");
         self.send_empty(reqwest::Method::DELETE, &path, Some(token))
@@ -1188,7 +1190,7 @@ impl ApiClient {
         &self,
         token: &str,
         game_id: u64,
-        mod_id: u64,
+        mod_id: ModId,
         rating: i8,
     ) -> Result<Message, ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/ratings");
@@ -1217,7 +1219,7 @@ impl ApiClient {
         &self,
         token: &str,
         game_id: u64,
-        mod_id: u64,
+        mod_id: ModId,
     ) -> Result<Option<i8>, ApiError> {
         let params = [
             ("game_id".to_string(), game_id.to_string()),
@@ -1516,7 +1518,7 @@ mod tests {
         )
         .unwrap();
         let file = mod_.modfile.expect("modfile should be present");
-        assert_eq!(file.id, 42);
+        assert_eq!(file.id, FileId(42));
         assert_eq!(file.filesize, 10);
         assert_eq!(file.download.binary_url, "https://example.com/a.zip");
     }

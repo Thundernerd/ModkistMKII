@@ -42,6 +42,7 @@ mod logging;
 mod mod_api_cache;
 mod mod_download;
 mod mod_folder;
+pub mod mod_ids;
 mod modio_env;
 mod mod_install;
 pub mod modio_api;

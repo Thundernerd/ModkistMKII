@@ -173,9 +173,9 @@ async fn an_expired_token_on_a_mod_read_retry_is_not_reported_to_sentry() {
     let server = FakeModio::start(private_mod_with_expired_token);
     let (client, rejected) = server.client();
 
-    let mod_error = client.get_mod(GAME_ID, 2400035, Some(TOKEN)).await.err().expect("request should fail");
+    let mod_error = client.get_mod(GAME_ID, ModId(2400035), Some(TOKEN)).await.err().expect("request should fail");
     let deps_error = client
-        .get_mod_dependencies(GAME_ID, 2400035, Some(TOKEN))
+        .get_mod_dependencies(GAME_ID, ModId(2400035), Some(TOKEN))
         .await
         .err()
         .expect("request should fail");
@@ -251,7 +251,7 @@ async fn an_expired_token_does_not_signal_a_refused_api_key() {
     let server = FakeModio::start(private_mod_with_expired_token);
     let (client, refusals) = server.client_counting_api_key_refusals();
 
-    let _ = client.get_mod(GAME_ID, 2400035, Some(TOKEN)).await;
+    let _ = client.get_mod(GAME_ID, ModId(2400035), Some(TOKEN)).await;
     let _ = client.get_user_subscriptions(TOKEN, GAME_ID, &ModQuery::default()).await;
 
     assert_eq!(*refusals.lock().unwrap(), 0);
@@ -269,7 +269,7 @@ async fn a_private_mod_read_without_a_token_is_not_reported_to_sentry() {
     let server = FakeModio::start(|_| forbidden());
     let (client, _) = server.client();
 
-    let error = client.get_mod(GAME_ID, 2400035, None).await.err().expect("request should fail");
+    let error = client.get_mod(GAME_ID, ModId(2400035), None).await.err().expect("request should fail");
 
     assert_eq!(error.status, Some(403));
     assert_eq!(sentry_reports(), Vec::<String>::new());
@@ -282,7 +282,7 @@ async fn a_private_mod_dependencies_read_without_a_token_is_not_reported_to_sent
     let (client, _) = server.client();
 
     let error = client
-        .get_mod_dependencies(GAME_ID, 2400035, None)
+        .get_mod_dependencies(GAME_ID, ModId(2400035), None)
         .await
         .err()
         .expect("request should fail");
@@ -297,9 +297,9 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
     let server = FakeModio::start(|_| (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string()));
     let (client, _) = server.client();
 
-    let mod_error = client.get_mod(GAME_ID, 2400035, None).await.err().expect("request should fail");
+    let mod_error = client.get_mod(GAME_ID, ModId(2400035), None).await.err().expect("request should fail");
     let deps_error = client
-        .get_mod_dependencies(GAME_ID, 2400035, None)
+        .get_mod_dependencies(GAME_ID, ModId(2400035), None)
         .await
         .err()
         .expect("request should fail");
@@ -333,7 +333,7 @@ async fn make_every_request_a_refused_session_made(client: &ApiClient) {
     let _ = client.get_user_subscriptions(TOKEN, GAME_ID, &query).await;
     let _ = client.get_mods(GAME_ID, &query).await;
     let _ = client.get_game_tags(GAME_ID).await;
-    for mod_id in [2400035, 6315836, 3137985] {
+    for mod_id in [ModId(2400035), ModId(6315836), ModId(3137985)] {
         let _ = client.get_mod(GAME_ID, mod_id, Some(TOKEN)).await;
         let _ = client.get_mod_dependencies(GAME_ID, mod_id, Some(TOKEN)).await;
     }
@@ -515,7 +515,7 @@ async fn a_failed_request_reports_no_response_headers() {
     let server = FakeModio::start(|_| service_unavailable());
     let (client, _) = server.client();
 
-    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let _ = client.get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None).await;
 
     let reports = sentry_reports();
     assert!(!reports.is_empty(), "the failure should still be reported");
@@ -533,11 +533,11 @@ async fn the_same_failure_on_different_mods_is_reported_with_the_same_text() {
     let (client, _) = server.client();
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let _ = client.get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None).await;
     let first = sentry_reports();
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, 1, 2, None).await;
+    let _ = client.get_mod_file(GAME_ID, ModId(1), FileId(2), None).await;
     let second = sentry_reports();
 
     assert_eq!(first.len(), 1, "{first:#?}");
@@ -562,7 +562,7 @@ async fn a_rate_limited_bearer_retry_is_reported_once() {
     let server = FakeModio::start(private_mod_rate_limited_on_retry);
     let (client, _) = server.client();
 
-    let error = client.get_mod(GAME_ID, 2400035, Some(TOKEN)).await.err().expect("request should fail");
+    let error = client.get_mod(GAME_ID, ModId(2400035), Some(TOKEN)).await.err().expect("request should fail");
 
     assert!(error.is_rate_limited());
     let reports = sentry_reports();
@@ -585,11 +585,11 @@ async fn a_transport_failure_is_reported_with_the_same_text_for_every_mod() {
         .with_base_url(unreachable_base_url());
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, 4406867, 6642350, None).await;
+    let _ = client.get_mod_file(GAME_ID, ModId(4406867), FileId(6642350), None).await;
     let first = sentry_reports();
 
     capture_reports();
-    let _ = client.get_mod_file(GAME_ID, 1, 2, None).await;
+    let _ = client.get_mod_file(GAME_ID, ModId(1), FileId(2), None).await;
     let second = sentry_reports();
 
     assert_eq!(first.len(), 1, "{first:#?}");
