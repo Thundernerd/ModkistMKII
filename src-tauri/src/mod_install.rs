@@ -248,12 +248,13 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if is_stale_staging_dir_name(&name) {
-            // Left behind when an earlier run exited mid-install (the app was
+            // A staging folder, or a previous version an update moved aside,
+            // left behind when an earlier run exited mid-install (the app was
             // closed or restarted for an update). Removing it is routine
             // housekeeping, so it is logged at info and not sent to Sentry.
-            // BepInEx loads plugins from hidden subfolders too, so a staging
-            // dir that can't be removed would load a duplicate copy of the
-            // mod: that is worth a report.
+            // BepInEx loads plugins from hidden subfolders too, so one that
+            // can't be removed would load a duplicate copy of the mod: that
+            // is worth a report.
             log::info!("Removing stale mod install staging folder: {}", entry.path().display());
             if let Err(error) = remove_dir_all_with_retry(&entry.path()) {
                 log::warn!(
@@ -907,7 +908,10 @@ fn process_scoped_dir_name(prefix: &str, mod_id: u64, file_id: u64) -> String {
 /// A staging or moved-aside dir created by a different (earlier) process
 /// can't belong to an install that's still running, so it's safe to delete.
 fn is_stale_staging_dir_name(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix(STAGING_DIR_PREFIX) else {
+    let Some(rest) = name
+        .strip_prefix(STAGING_DIR_PREFIX)
+        .or_else(|| name.strip_prefix(REPLACED_DIR_PREFIX))
+    else {
         return false;
     };
     let mut parts = rest.split('-');
@@ -2379,6 +2383,27 @@ mod tests {
 
         assert!(!stale.exists());
         assert!(live.exists());
+    }
+
+    /// An update that was interrupted after moving the previous version
+    /// aside leaves it in a hidden folder BepInEx still loads (issue #129).
+    #[test]
+    fn scan_installed_mods_removes_folders_left_moved_aside_by_an_earlier_run() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let other_pid = std::process::id().wrapping_add(1);
+        let stale = kind_dir.join(format!(".modkist-replaced-1-2-{other_pid}-0"));
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("mod.dll"), b"test").unwrap();
+        let live = kind_dir.join(process_scoped_dir_name(REPLACED_DIR_PREFIX, 1, 2));
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("mod.dll"), b"test").unwrap();
+
+        let records = scan_installed_mods(temp.path()).unwrap();
+
+        assert!(records.is_empty(), "{records:#?}");
+        assert!(!stale.exists());
+        assert!(live.exists(), "this run's update may still move it back");
     }
 
     #[test]
