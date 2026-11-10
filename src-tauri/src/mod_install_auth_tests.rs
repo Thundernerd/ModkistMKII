@@ -599,10 +599,6 @@ async fn a_batch_still_rate_limited_after_its_retry_fails_the_later_chunks_witho
     let outcomes = fetch_mod_outcomes_batch(&state, &mod_ids).await;
 
     assert!(mod_ids.iter().all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
-    assert_eq!(
-        server.received().len(),
-        2,
-        "the first chunk and its one retry only: {:#?}",
-        server.received().into_iter().map(|request| request.path).collect::<Vec<_>>()
-    );
+    let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
+    assert_eq!(paths.len(), 2, "the first chunk and its one retry only: {paths:#?}");
 }
