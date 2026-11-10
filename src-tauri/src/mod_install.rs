@@ -1200,6 +1200,12 @@ fn record_sync_failure_for_target(
     }
 }
 
+/// One mod's need for another: `subscriber` needs `dependency` installed.
+struct DependencyEdge {
+    dependency: u64,
+    subscriber: u64,
+}
+
 /// The mods a sync failure can be recorded against.
 #[derive(Debug)]
 struct SyncFailureTargets {
@@ -1222,13 +1228,20 @@ impl SyncFailureTargets {
     fn for_manual_install(mod_id: u64, order: &[u64]) -> Self {
         let mut targets = Self::new([mod_id]);
         for &target_mod_id in order {
-            targets.add_dependency(target_mod_id, mod_id);
+            targets.add_dependency(DependencyEdge {
+                dependency: target_mod_id,
+                subscriber: mod_id,
+            });
         }
         targets
     }
 
-    /// Records that `subscriber` needs `dependency`. A mod is never its own dependency.
-    fn add_dependency(&mut self, dependency: u64, subscriber: u64) {
+    /// Records that `edge.subscriber` needs `edge.dependency`. A mod is never its own dependency.
+    fn add_dependency(&mut self, edge: DependencyEdge) {
+        let DependencyEdge {
+            dependency,
+            subscriber,
+        } = edge;
         if dependency != subscriber {
             self.dependency_to_subscribers
                 .entry(dependency)
@@ -1244,7 +1257,10 @@ impl SyncFailureTargets {
                 continue;
             };
             for dep_id in deps {
-                self.add_dependency(dep_id, mod_id);
+                self.add_dependency(DependencyEdge {
+                    dependency: dep_id,
+                    subscriber: mod_id,
+                });
             }
         }
     }
@@ -1724,7 +1740,10 @@ async fn run_subscription_sync(
                     if drop_reasons.contains_key(&target_mod_id) {
                         continue;
                     }
-                    sync_failure_targets.add_dependency(target_mod_id, *mod_id);
+                    sync_failure_targets.add_dependency(DependencyEdge {
+                        dependency: target_mod_id,
+                        subscriber: *mod_id,
+                    });
                     if ignored.contains(&target_mod_id) {
                         continue;
                     }
