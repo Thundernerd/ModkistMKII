@@ -394,6 +394,115 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
     assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
 }
 
+// --- Tokenless 401s that are not a refused API key (issue #122) ---------------
+
+/// mod.io `error_ref` for "the security code is not valid" (`/oauth/emailexchange`).
+const SECURITY_CODE_INVALID_ERROR_REF: u32 = 11014;
+
+fn security_code_invalid() -> (u16, Option<u32>, String) {
+    (401, Some(SECURITY_CODE_INVALID_ERROR_REF), error_body(SECURITY_CODE_INVALID_ERROR_REF, "The security code is invalid."))
+}
+
+/// The email code is refused first; the game API key is refused later in the run.
+fn email_code_refused_then_api_key_refused(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == "/oauth/emailexchange" {
+        security_code_invalid()
+    } else {
+        api_key_invalid()
+    }
+}
+
+#[tokio::test]
+async fn a_refused_api_key_is_reported_once_after_another_tokenless_401() {
+    capture_reports();
+    let server = FakeModio::start(email_code_refused_then_api_key_refused);
+    let (client, refusals) = server.client_counting_api_key_refusals();
+
+    let code = client.exchange_email_code("12345").await.err().expect("request should fail");
+    let tags = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+
+    assert!(code.is_unauthorized(), "the email code should be refused: {code:?}");
+    assert!(tags.is_api_key_refused(), "the API key should be refused: {tags:?}");
+    let refused: Vec<String> = sentry_reports()
+        .into_iter()
+        .filter(|report| report.contains("game API key refused"))
+        .collect();
+    assert_eq!(refused.len(), 1, "expected one refused-key report, got {refused:#?}");
+    let api_key_invalid = format!("error_ref=Some({API_KEY_INVALID_ERROR_REF})");
+    assert!(refused[0].contains(&api_key_invalid), "the report should be the 11002: {}", refused[0]);
+    assert_eq!(*refusals.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_wrong_or_expired_email_code_is_not_reported_to_sentry() {
+    // mod.io's 401s for a code that is already used, expired, invalid or used up.
+    for error_ref in [11011, 11012, SECURITY_CODE_INVALID_ERROR_REF, 11147] {
+        capture_reports();
+        let server = FakeModio::start(move |_| (401, Some(error_ref), error_body(error_ref, "Security code refused.")));
+        let (client, refusals) = server.client_counting_api_key_refusals();
+
+        let error = client.exchange_email_code("12345").await.err().expect("request should fail");
+
+        assert!(error.is_unauthorized());
+        assert_eq!(sentry_reports(), Vec::<String>::new(), "error_ref {error_ref}");
+        assert_eq!(*refusals.lock().unwrap(), 0, "error_ref {error_ref}");
+    }
+}
+
+/// The `error_ref` in the body is what counts: mod.io may leave out the
+/// `x-modio-error-ref` header.
+#[tokio::test]
+async fn a_refused_api_key_without_the_error_ref_header_is_reported_once() {
+    capture_reports();
+    let server = FakeModio::start(|_| {
+        (401, None, error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."))
+    });
+    let (client, _) = server.client();
+
+    let _ = client.get_game_tags(GAME_ID).await;
+    let _ = client.get_mods(GAME_ID, &ModQuery::default()).await;
+
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+}
+
+/// mod.io `error_ref` for "the api_key differs from the one that requested the
+/// security code": an app bug, not the user's doing.
+const SECURITY_CODE_DIFFERENT_KEY_ERROR_REF: u32 = 11013;
+
+#[tokio::test]
+async fn another_tokenless_401_is_reported_as_itself_and_leaves_the_refused_key_report() {
+    capture_reports();
+    let server = FakeModio::start(|request| {
+        if request.path == "/oauth/emailexchange" {
+            let error_ref = SECURITY_CODE_DIFFERENT_KEY_ERROR_REF;
+            (401, Some(error_ref), error_body(error_ref, "The api_key differs."))
+        } else {
+            api_key_invalid()
+        }
+    });
+    let (client, refusals) = server.client_counting_api_key_refusals();
+
+    let _ = client.exchange_email_code("12345").await;
+    let _ = client.get_game_tags(GAME_ID).await;
+
+    let reports = sentry_reports();
+    let different_key = format!(
+        "mod.io API error: POST /oauth/emailexchange returned status=401, error_ref=Some({SECURITY_CODE_DIFFERENT_KEY_ERROR_REF})"
+    );
+    assert!(
+        reports.iter().any(|report| report.contains(&different_key)),
+        "the 11013 should be reported as itself: {reports:#?}"
+    );
+    let refused_key = format!("game API key refused, later refusals logged at info): status=Some(401), error_ref=Some({API_KEY_INVALID_ERROR_REF})");
+    assert_eq!(
+        reports.iter().filter(|report| report.contains(&refused_key)).count(),
+        1,
+        "the refused key should be reported once: {reports:#?}"
+    );
+    assert_eq!(*refusals.lock().unwrap(), 1);
+}
+
 // --- Stable Sentry text for failed requests (issue #121) ---------------------
 
 fn service_unavailable() -> (u16, Option<u32>, String) {
