@@ -383,3 +383,23 @@ async fn a_session_refused_on_every_request_is_reported_to_sentry_once() {
     let reports = sentry_reports();
     assert_eq!(reports.len(), 1, "expected one report for the whole session, got {reports:#?}");
 }
+
+/// Sentry groups message events by their text, so the report for a refused
+/// API key must not depend on which request happened to be refused first.
+#[tokio::test]
+async fn a_refused_api_key_is_one_sentry_issue_whichever_request_is_refused_first() {
+    let server = FakeModio::start(|_| api_key_invalid());
+
+    capture_reports();
+    let (first_run, _) = server.client();
+    let _ = first_run.get_game_tags(GAME_ID).await;
+    let tags_first = sentry_reports();
+
+    capture_reports();
+    let (second_run, _) = server.client();
+    let _ = second_run.request_email_code("player@example.com").await;
+    let email_first = sentry_reports();
+
+    assert_eq!(tags_first.len(), 1, "{tags_first:#?}");
+    assert_eq!(tags_first, email_first, "both runs should file the same Sentry issue");
+}

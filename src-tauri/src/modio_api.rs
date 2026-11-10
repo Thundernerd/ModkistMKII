@@ -226,16 +226,23 @@ impl ApiError {
 
     /// A refused game API key fails every public read the same way, so only
     /// the first one per client is reported (error); the rest log at info.
+    /// The report leaves out the request path: Sentry groups message events by
+    /// their text, and the first refused request differs from run to run.
     fn log_api_key_rejected(&self, context: &str, first: bool) {
-        let level = if first { log::Level::Error } else { log::Level::Info };
-        log::log!(
-            level,
-            "mod.io API error [{context}] (game API key refused{}): {} (status={:?}, error_ref={:?})",
-            if first { ", later refusals logged at info" } else { "" },
+        log::info!(
+            "mod.io API error [{context}] (game API key refused): {} (status={:?}, error_ref={:?})",
             self.message,
             self.status,
             self.error_ref
         );
+        if first {
+            log::error!(
+                "mod.io API error (game API key refused, later refusals logged at info): {} (status={:?}, error_ref={:?})",
+                self.message,
+                self.status,
+                self.error_ref
+            );
+        }
     }
 
     fn log_expected(&self, context: &str) {
