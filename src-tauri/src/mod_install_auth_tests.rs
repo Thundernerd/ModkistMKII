@@ -1,14 +1,16 @@
 //! What callers log when mod.io answers with an expected failure: rejected
-//! credentials mid-operation (issue #59), private mods while signed out (#68)
-//! and mod files the author deleted (#75). `ApiClient` already handles and
-//! reports these; the callers must not turn them into one Sentry report per
-//! mod. Runs the real callers against a local fake mod.io and captures the
+//! credentials mid-operation (issue #59), private mods while signed out (#68),
+//! mod files the author deleted (#75) and rate limits (#138). `ApiClient`
+//! already handles and reports these; the callers must not turn them into one
+//! Sentry report per mod, or add a second report beside `ApiClient`'s. Runs
+//! the real callers against a local fake mod.io and captures the
 //! `warn`/`error` records `SentryLogWriter` would forward.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
-use crate::logging::report_capture::{capture_reports, sentry_reports};
+use crate::logging::report_capture::{capture_reports, log_lines, sentry_reports};
 use crate::modio_api::auth_tests::{
     error_body, forbidden, token_expired, FakeModio, Received, GAME_ID, TOKEN,
 };
@@ -447,4 +449,76 @@ async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
     );
     assert_eq!(error.log_level(log::Level::Error), log::Level::Info);
     assert!(error.is_modfile_deleted(), "a restored profile falls back on this");
+}
+
+// --- Rate-limited reads (issue #138) ------------------------------------------
+
+/// mod.io `error_ref` for "too many requests in a short period".
+const RATE_LIMITED_ERROR_REF: u32 = 11008;
+
+/// The first request is rate limited (429); every later one answers 200 with
+/// `body`.
+fn rate_limited_once(body: &'static str) -> impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static {
+    let limited = AtomicBool::new(false);
+    move |_| {
+        if limited.swap(true, Ordering::SeqCst) {
+            (200, None, body.to_string())
+        } else {
+            let body = format!(
+                r#"{{"error":{{"code":429,"error_ref":{RATE_LIMITED_ERROR_REF},"message":"Too many requests."}}}}"#
+            );
+            (429, Some(RATE_LIMITED_ERROR_REF), body)
+        }
+    }
+}
+
+/// Checks that the one rate-limited read of `route` was reported once, by
+/// `ApiClient`, that it was retried, and that the log file kept the caller's
+/// `retry_line` at info.
+fn assert_reported_once_and_retried(server: &FakeModio, route: &str, retry_line: &str) {
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
+    assert!(
+        reports[0].contains(&format!("mod.io API error: GET {route} returned status=429")),
+        "{reports:#?}"
+    );
+    assert_eq!(server.received().len(), 2, "the read should be retried: {:#?}", server.received());
+    let lines = log_lines();
+    assert!(
+        lines.iter().any(|line| line.starts_with(&format!("INFO: {retry_line}"))),
+        "the retry should still be in the log file: {lines:#?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
+    capture_reports();
+    let server = FakeModio::start(rate_limited_once(EMPTY_LIST));
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let installed: HashSet<u64> = [100].into_iter().collect();
+    let map = build_dependency_map(&state, &installed).await;
+
+    assert_reported_once_and_retried(
+        &server,
+        "/games/{game}/mods/{mod}/dependencies",
+        "mod.io rate limit hit, retrying in 61 seconds",
+    );
+    assert_eq!(map.get(&100), Some(&Vec::new()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
+    capture_reports();
+    let server = FakeModio::start(rate_limited_once(r#"{"data":[{"id":100,"name":"Some mod"}],"result_total":1}"#));
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let outcomes = fetch_mod_outcomes_batch(&state, &[100]).await;
+
+    assert_reported_once_and_retried(
+        &server,
+        "/games/{game}/mods",
+        "mod.io rate limit hit on batch mod fetch, retrying in 61 seconds",
+    );
+    assert!(matches!(outcomes.get(&100), Some(ModFetchOutcome::Found(_))));
 }
