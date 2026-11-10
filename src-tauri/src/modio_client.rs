@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -681,6 +681,8 @@ pub(crate) struct ModioError {
     pub message: String,
     handled: Handled,
     rate_limited: bool,
+    /// The `Retry-After` mod.io sent with a rate limit, in seconds.
+    retry_after_secs: Option<u64>,
 }
 
 /// Why a `ModioError` was already handled (reported or explained to the user)
@@ -697,7 +699,7 @@ enum Handled {
 
 impl ModioError {
     fn new(message: String, handled: Handled) -> Self {
-        Self { message, handled, rate_limited: false }
+        Self { message, handled, rate_limited: false, retry_after_secs: None }
     }
 
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
@@ -716,6 +718,7 @@ impl ModioError {
         };
         Self {
             rate_limited: error.is_rate_limited(),
+            retry_after_secs: error.retry_after_secs,
             message: format_api_error_logged_in(error, logged_in),
             handled,
         }
@@ -962,10 +965,12 @@ const BATCH_FETCH_CHUNK_SIZE: usize = 100;
 /// resolved from cache without any request. Any id the batch call doesn't
 /// return — e.g. a private mod the api key alone can't see, or the whole batch
 /// request failing — falls back to [`fetch_mod_outcome`], which retries with a
-/// bearer token and handles rate limits/unavailability per mod. A batch
-/// request still rate limited after its retry is the exception: its ids and
-/// those of every later chunk fail with that error, without any per-mod
-/// request, since those would only be rate limited too.
+/// bearer token and handles rate limits/unavailability per mod. A rate-limited
+/// batch request is retried once, after mod.io's `Retry-After` window (see
+/// [`with_rate_limit_retry`]). A batch request still rate limited after that
+/// retry is the exception: its ids and those of every later chunk fail with
+/// that error, without any per-mod request, since those would only be rate
+/// limited too.
 pub(crate) async fn fetch_mod_outcomes_batch(
     state: &ModioState,
     mod_ids: &[ModId],
@@ -1077,18 +1082,21 @@ pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: ModId) -> Resul
     }
 }
 
-/// How long to wait before retrying a request mod.io rate limited. Its limits
-/// reset after a minute.
-const RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(61);
-
-/// An error that can say whether mod.io rate limited the request.
+/// An error that can say whether mod.io rate limited the request, and how long
+/// mod.io asked us to wait.
 pub(crate) trait MaybeRateLimited: std::fmt::Display {
     fn is_rate_limited(&self) -> bool;
+    /// The `Retry-After` mod.io sent with the rate limit, in seconds.
+    fn retry_after_secs(&self) -> Option<u64>;
 }
 
 impl MaybeRateLimited for ApiError {
     fn is_rate_limited(&self) -> bool {
         ApiError::is_rate_limited(self)
+    }
+
+    fn retry_after_secs(&self) -> Option<u64> {
+        self.retry_after_secs
     }
 }
 
@@ -1096,11 +1104,18 @@ impl MaybeRateLimited for ModioError {
     fn is_rate_limited(&self) -> bool {
         ModioError::is_rate_limited(self)
     }
+
+    fn retry_after_secs(&self) -> Option<u64> {
+        self.retry_after_secs
+    }
 }
 
-/// Runs `operation`; when mod.io rate limits it, logs the retry at info, waits
-/// [`RATE_LIMIT_RETRY_DELAY`] and runs it once more, returning that result
-/// whatever it is. `request` names the request in the log line, e.g.
+/// Runs `operation`; when mod.io rate limits it, logs the retry at info and
+/// runs it once more, returning that result whatever it is. The retry does not
+/// sleep itself: `operation` must send through the shared `ApiClient`, which
+/// holds every request after a 429 until mod.io's `Retry-After` window ends
+/// ([`DEFAULT_RETRY_AFTER_SECS`](crate::modio_api::DEFAULT_RETRY_AFTER_SECS)
+/// when mod.io sends none). `request` names the request in the log line, e.g.
 /// `Some("batch mod fetch")`.
 pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(
     request: Option<&str>,
@@ -1114,11 +1129,11 @@ where
     match operation().await {
         Err(error) if error.is_rate_limited() => {
             let on_request = request.map(|request| format!(" on {request}")).unwrap_or_default();
-            log::info!(
-                "mod.io rate limit hit{on_request}, retrying in {} seconds: {error}",
-                RATE_LIMIT_RETRY_DELAY.as_secs()
-            );
-            tokio::time::sleep(RATE_LIMIT_RETRY_DELAY).await;
+            let wait = match error.retry_after_secs() {
+                Some(secs) => format!("retrying after the {secs} seconds mod.io asked for"),
+                None => "retrying, mod.io gave no Retry-After".to_string(),
+            };
+            log::info!("mod.io rate limit hit{on_request}, {wait}: {error}");
             operation().await
         }
         result => result,

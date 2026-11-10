@@ -37,6 +37,10 @@ const USER_AGENT: &str = concat!("Modkist/", env!("CARGO_PKG_VERSION"));
 /// bursts even when the per-minute quota is fine, so we pace every call.
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(110);
 
+/// How long to hold off every request after a rate limit when mod.io sends no
+/// `Retry-After`. Its limits reset after a minute.
+pub(crate) const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
+
 /// mod.io `error_ref` codes that every caller checking them treats as a benign
 /// no-op (already in the desired state) rather than a real failure: "not
 /// subscribed" (15005, from unsubscribe) and "rating already applied/no
@@ -859,7 +863,7 @@ impl ApiClient {
         // If mod.io rate limited us, pause all subsequent requests for the
         // advised window instead of immediately retrying into the same block.
         if error.is_rate_limited() {
-            self.respect_retry_after(error.retry_after_secs.unwrap_or(60)).await;
+            self.respect_retry_after(error.retry_after_secs.unwrap_or(DEFAULT_RETRY_AFTER_SECS)).await;
         }
         // An expired or revoked token is routine: the hook signs the user out
         // and the UI prompts them to log in again, so keep it out of Sentry.
