@@ -54,6 +54,14 @@ fn command_exists(command: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+const STEAM_NOT_FOUND: &str = "Did not find Steam. Install Steam or launch Zeepkist manually.";
+
+#[cfg(any(windows, target_os = "linux"))]
+fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
 #[cfg(windows)]
 fn find_steam_executable() -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
@@ -69,13 +77,7 @@ fn find_steam_executable() -> Result<PathBuf, String> {
         candidates.push(PathBuf::from(program_files).join("Steam/steam.exe"));
     }
 
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    Err("Did not find Steam. Install Steam or launch Zeepkist manually.".into())
+    first_existing_file(candidates).ok_or_else(|| STEAM_NOT_FOUND.into())
 }
 
 #[cfg(target_os = "linux")]
@@ -84,20 +86,15 @@ fn find_steam_executable() -> Result<PathBuf, String> {
         return Ok(PathBuf::from("steam"));
     }
 
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        let candidates = [
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    home.and_then(|home| {
+        first_existing_file([
             home.join(".local/share/Steam/ubuntu12_32/steam"),
             home.join(".steam/steam/ubuntu12_32/steam"),
             home.join(".steam/debian-installation/ubuntu12_32/steam"),
-        ];
-        for candidate in candidates {
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    Err("Did not find Steam. Install Steam or launch Zeepkist manually.".into())
+        ])
+    })
+    .ok_or_else(|| STEAM_NOT_FOUND.into())
 }
 
 #[cfg(any(windows, target_os = "linux"))]
