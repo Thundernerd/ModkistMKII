@@ -108,7 +108,10 @@ async fn log_check_failure(error: &tauri_plugin_updater::Error, endpoint: &str) 
             }
             None => log::info!("App update check failed: manifest {endpoint} did not respond"),
         },
-        Error::Reqwest(_) => log::info!("App update check failed: {error}"),
+        // A body that is not JSON is a broken manifest; anything else is the request.
+        Error::Reqwest(request) if !request.is_decode() => {
+            log::info!("App update check failed: {error}")
+        }
         _ => log::warn!("App update check failed: {error}"),
     }
 }
@@ -253,6 +256,26 @@ mod tests {
         log_check_failure(&UpdaterError::Reqwest(failed_request()), UNUSED_ENDPOINT).await;
 
         assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_manifest_that_is_not_json_is_reported_to_sentry() {
+        // What the plugin returns for a 200 with an HTML page or a corrupt upload.
+        let response = tauri::http::Response::builder()
+            .status(200)
+            .body(b"<html>Not a manifest</html>".to_vec())
+            .unwrap();
+        let not_json = updater_reqwest::Response::from(response)
+            .json::<serde_json::Value>()
+            .await
+            .expect_err("HTML is not JSON");
+        capture_reports();
+
+        log_check_failure(&UpdaterError::Reqwest(not_json), UNUSED_ENDPOINT).await;
+
+        let reports = sentry_reports();
+        assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+        assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
     }
 
     #[tokio::test]
