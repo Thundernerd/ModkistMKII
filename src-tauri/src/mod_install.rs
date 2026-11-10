@@ -916,7 +916,13 @@ async fn install_single_mod(
             let token = state.session_token();
             api.get_mod_file(game_id, mod_id, file_id, token.as_deref())
                 .await
-                .map_err(|error| ModioError::from_api(error, false))?
+                .map_err(|error| {
+                    if error.is_not_found() {
+                        ModioError::modfile_deleted(&mod_.name)
+                    } else {
+                        ModioError::from_api(error, false)
+                    }
+                })?
         }
         None => mod_
             .modfile

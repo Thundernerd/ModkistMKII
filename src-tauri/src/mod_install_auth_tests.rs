@@ -359,3 +359,46 @@ async fn a_deleted_installed_file_is_not_requested_again_on_the_next_refresh() {
     assert_eq!(label, "");
     assert_eq!(server.received().len(), 1, "{:#?}", server.received());
 }
+
+/// Mod 100 still exists, but the version the user picked (file 7) was deleted.
+fn picked_version_deleted(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == format!("/games/{GAME_ID}/mods/100") {
+        (200, None, r#"{"id":100,"name":"Some mod"}"#.to_string())
+    } else {
+        installed_file_deleted(request)
+    }
+}
+
+#[tokio::test]
+async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
+    capture_reports();
+    let server = FakeModio::start(picked_version_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+    state.store_latest_file_id(100, 8);
+
+    let result = install_targets_internal(
+        None,
+        &state,
+        Path::new("/nonexistent-game-dir"),
+        vec![100],
+        &mut Vec::new(),
+        &mut HashMap::new(),
+        false,
+        true,
+        Some((100, 7)),
+        None,
+        None,
+        Some(100),
+    )
+    .await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    let Err(error) = result else {
+        panic!("installing a deleted version should fail");
+    };
+    assert_eq!(
+        error.message,
+        "This version of Some mod is no longer on mod.io. Its author deleted or replaced it. Pick another version, or install the latest one."
+    );
+    assert_eq!(error.log_level(log::Level::Error), log::Level::Info);
+}
