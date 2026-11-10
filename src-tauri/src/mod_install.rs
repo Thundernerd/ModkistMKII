@@ -31,9 +31,9 @@ use crate::subscription_sync_settings::{
     remove_pending_unsubscribe_mod, remove_sync_mod_tracking, FailedSyncModList,
 };
 use crate::modio_client::{
-    fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch, fetch_subscribed_mod_ids,
-    format_api_error, modfile_version_label, subscribe_to_mod, unsubscribe_from_mod,
-    with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
+    caller_log_level, fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch,
+    fetch_subscribed_mod_ids, format_api_error, modfile_version_label, subscribe_to_mod,
+    unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -931,7 +931,17 @@ async fn install_single_mod(
             let token = state.session_token();
             api.get_mod_file(game_id, mod_id, file_id, token.as_deref())
                 .await
-                .map_err(|error| ModioError::from_api(error, false))?
+                .map_err(|error| {
+                    if error.is_not_found() {
+                        // The mod changed on mod.io: drop its cached versions
+                        // so the versions list stops offering this file.
+                        state.invalidate_mod_cache(mod_id);
+                        state.mark_mod_file_deleted(mod_id, file_id);
+                        ModioError::modfile_deleted(&mod_.name)
+                    } else {
+                        ModioError::from_api(error, false)
+                    }
+                })?
         }
         None => mod_
             .modfile
@@ -1741,8 +1751,20 @@ async fn reconcile_custom_profile_mods_inner(
             entry.mod_id,
             entry.file_id
         );
-        match install_mod_internal(app, state, &game_dir, entry.mod_id, Some(entry.file_id)).await
-        {
+        let mut result =
+            install_mod_internal(app, state, &game_dir, entry.mod_id, Some(entry.file_id)).await;
+        if result.as_ref().is_err_and(ModioError::is_modfile_deleted) {
+            // The author deleted or replaced the pinned file: restore the mod's
+            // current file instead. The manifest sync after a successful
+            // install moves the pin to it.
+            log::info!(
+                "Custom-profile mod {} file {} was deleted on mod.io; installing its current file",
+                entry.mod_id,
+                entry.file_id
+            );
+            result = install_mod_internal(app, state, &game_dir, entry.mod_id, None).await;
+        }
+        match result {
             Ok(result) => {
                 installed.extend(result.installed.iter().copied());
                 skipped.extend(result.skipped.iter().copied());
@@ -1873,6 +1895,10 @@ async fn resolve_installed_file_version(
         }
     }
 
+    if state.cached_mod_file_deleted(mod_id, file_id) {
+        return String::new();
+    }
+
     let Ok(game_id) = state.game_id() else {
         return String::new();
     };
@@ -1895,7 +1921,19 @@ async fn resolve_installed_file_version(
             label
         }
         Err(error) => {
-            log::warn!(
+            // The author deleted or replaced the installed file: expected, and
+            // the mod then shows an update to its current file.
+            let file_deleted = error.is_not_found();
+            if file_deleted {
+                state.mark_mod_file_deleted(mod_id, file_id);
+            }
+            let level = if file_deleted {
+                log::Level::Info
+            } else {
+                caller_log_level(&error, log::Level::Warn)
+            };
+            log::log!(
+                level,
                 "Did not resolve version for mod {mod_id} file {file_id}: {}",
                 format_api_error(error)
             );
