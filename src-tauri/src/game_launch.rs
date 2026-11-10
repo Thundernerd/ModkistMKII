@@ -106,10 +106,11 @@ fn launch_via_steam() -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
-    let info = crate::wine_prefix::wine_launch_info(game_dir).ok_or_else(|| {
+fn launch_via_wine(game_dir: &Path, custom_prefix: Option<&Path>) -> Result<(), String> {
+    let info = crate::wine_prefix::wine_launch_info(game_dir, custom_prefix)?.ok_or_else(|| {
         "Did not find a Wine prefix for your game directory. Launch Zeepkist \
-         one time with Steam, CrossOver, or GameHub."
+         one time with Steam, CrossOver, or GameHub, or choose the prefix folder \
+         in Settings → Wine prefix."
             .to_string()
     })?;
 
@@ -139,7 +140,7 @@ fn launch_via_wine(game_dir: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn launch_game_at(game_dir: &Path) -> Result<(), String> {
+fn launch_game_at(game_dir: &Path, _custom_prefix: Option<&Path>) -> Result<(), String> {
     if launch_via_steam().is_ok() {
         log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
         return Ok(());
@@ -152,21 +153,28 @@ fn launch_game_at(game_dir: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn launch_game_at(game_dir: &Path) -> Result<(), String> {
+fn launch_game_at(game_dir: &Path, custom_prefix: Option<&Path>) -> Result<(), String> {
+    // A prefix chosen in Settings wins: Steam would launch in its own Proton prefix.
+    if custom_prefix.is_some() {
+        launch_via_wine(game_dir, custom_prefix)?;
+        log::info!("Launched Zeepkist via Wine with the custom prefix from Settings");
+        return Ok(());
+    }
+
     if launch_via_steam().is_ok() {
         log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
         return Ok(());
     }
 
     log::warn!("Steam launch failed, falling back to Wine");
-    launch_via_wine(game_dir)?;
+    launch_via_wine(game_dir, custom_prefix)?;
     log::info!("Launched Zeepkist via Wine from {}", game_dir.display());
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn launch_game_at(game_dir: &Path) -> Result<(), String> {
-    launch_via_wine(game_dir)?;
+fn launch_game_at(game_dir: &Path, custom_prefix: Option<&Path>) -> Result<(), String> {
+    launch_via_wine(game_dir, custom_prefix)?;
     log::info!("Launched Zeepkist via CrossOver/GameHub/Wine from {}", game_dir.display());
     Ok(())
 }
@@ -178,7 +186,8 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
     }
 
     let game_dir = game_directory(&app)?;
-    launch_game_at(&game_dir)
+    let custom_prefix = crate::app_settings::custom_wine_prefix_path(&app);
+    launch_game_at(&game_dir, custom_prefix.as_deref())
 }
 
 #[cfg(test)]

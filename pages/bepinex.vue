@@ -126,7 +126,8 @@ onMounted(async () => {
           <p class="warning-text">
             BepInEx is installed. Modkist did not find a Wine prefix for mod
             loading. Launch Zeepkist one time with Steam, Proton, CrossOver, or
-            GameHub. Then the prefix exists. Then retry here.
+            GameHub. Then the prefix exists. Then retry here. If your prefix
+            is somewhere else, choose its folder in Settings → Wine prefix.
           </p>
           <p
             v-if="wineFeedback"

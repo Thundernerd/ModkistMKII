@@ -10,6 +10,8 @@ const USER_REG_DLL_OVERRIDES_SECTION: &str = "[Software\\\\Wine\\\\DllOverrides]
 const OVERRIDE_VALUE: &str = "native,builtin";
 const WINHTTP_KEY: &str = "winhttp";
 const WINE_REG_WINHTTP_KEYS: [&str; 2] = ["winhttp", "*winhttp"];
+const NOT_A_WINE_PREFIX: &str =
+    "This folder is not a Wine prefix. Choose the folder that contains user.reg and drive_c.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,8 +28,10 @@ impl WineWinhttpStatus {
             message: Some(
                 "Did not find a Wine prefix for your game directory. Launch Zeepkist \
                  one time with Steam, Proton, CrossOver, or GameHub. Then the prefix \
-                 exists. Then retry in Modkist. You can also configure winhttp manually \
-                 in Wine Configuration (Libraries → winhttp → native, builtin)."
+                 exists. Then retry in Modkist. If your prefix is somewhere else, choose \
+                 the prefix folder in Settings → Wine prefix. You can also configure \
+                 winhttp manually in Wine Configuration (Libraries → winhttp → native, \
+                 builtin)."
                     .into(),
             ),
             prefix_label: None,
@@ -86,22 +90,42 @@ pub(crate) struct WineLaunchInfo {
     pub kind: WineLaunchKind,
 }
 
-pub(crate) fn wine_launch_info(game_dir: &Path) -> Option<WineLaunchInfo> {
-    let prefix = find_wine_prefix_for_game_path(game_dir)?;
-    let wine = prefix
+/// `Ok(None)` means no prefix was found by detection; `Err` means the custom
+/// prefix from Settings is not valid, or no wine binary was found for the prefix.
+pub(crate) fn wine_launch_info(
+    game_dir: &Path,
+    custom_prefix: Option<&Path>,
+) -> Result<Option<WineLaunchInfo>, String> {
+    let Some(prefix) = find_wine_prefix(game_dir, custom_prefix)? else {
+        return Ok(None);
+    };
+    let Some(wine) = prefix
         .wine
         .clone()
-        .or_else(|| find_wine_binary_for_kind(&prefix.launch_kind))?;
-    Some(WineLaunchInfo {
+        .or_else(|| find_wine_binary_for_kind(&prefix.launch_kind))
+    else {
+        return Err(format!(
+            "Found the Wine prefix {}, but did not find a wine binary to launch \
+             Zeepkist with. Install Wine or CrossOver, or make sure that wine is on \
+             your PATH.",
+            prefix.path.display()
+        ));
+    };
+    Ok(Some(WineLaunchInfo {
         prefix: prefix.path,
         wine,
         kind: prefix.launch_kind,
-    })
+    }))
 }
 
-pub fn configure_winhttp_override(game_dir: &Path) -> WineWinhttpStatus {
-    let Some(prefix) = find_wine_prefix_for_game_path(game_dir) else {
-        return WineWinhttpStatus::not_found();
+pub fn configure_winhttp_override(
+    game_dir: &Path,
+    custom_prefix: Option<&Path>,
+) -> WineWinhttpStatus {
+    let prefix = match find_wine_prefix(game_dir, custom_prefix) {
+        Ok(Some(prefix)) => prefix,
+        Ok(None) => return WineWinhttpStatus::not_found(),
+        Err(error) => return WineWinhttpStatus::failed(error),
     };
 
     let user_reg = prefix.path.join("user.reg");
@@ -146,6 +170,44 @@ pub fn configure_winhttp_override(game_dir: &Path) -> WineWinhttpStatus {
     } else {
         WineWinhttpStatus::already_configured(prefix.label)
     }
+}
+
+/// Looks up the Wine prefix to use for `game_dir`. A custom prefix chosen in
+/// Settings wins over detection. `Err` means the custom prefix is not valid.
+fn find_wine_prefix(
+    game_dir: &Path,
+    custom_prefix: Option<&Path>,
+) -> Result<Option<WinePrefix>, String> {
+    if let Some(custom) = custom_prefix {
+        return custom_wine_prefix(custom).map(Some);
+    }
+    Ok(find_wine_prefix_for_game_path(game_dir))
+}
+
+/// A folder is a Wine prefix when it contains `user.reg`, the same test detection uses.
+pub fn validate_wine_prefix(path: &Path) -> Result<(), String> {
+    if path.join("user.reg").is_file() {
+        Ok(())
+    } else {
+        Err(NOT_A_WINE_PREFIX.to_string())
+    }
+}
+
+fn custom_wine_prefix(path: &Path) -> Result<WinePrefix, String> {
+    if validate_wine_prefix(path).is_err() {
+        return Err(format!(
+            "The Wine prefix chosen in Settings ({}) is not a Wine prefix anymore. \
+             It has no user.reg, or the folder is gone. Choose the prefix folder again \
+             in Settings → Wine prefix, or use auto-detection.",
+            path.display()
+        ));
+    }
+    let label = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string);
+    let launch_kind = crossover_launch_kind(path, label.as_deref());
+    Ok(wine_prefix(path.to_path_buf(), label, launch_kind))
 }
 
 fn find_wine_prefix_for_game_path(game_dir: &Path) -> Option<WinePrefix> {
@@ -779,6 +841,154 @@ mod tests {
         let game = root.join("drive_c/Program Files/Steam/steamapps/common/Zeepkist");
         let prefix = find_prefix_via_drive_c(&game).expect("prefix");
         assert!(prefix.path.ends_with("modkist-wine-test-drivec"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn make_prefix(path: &Path) {
+        fs::create_dir_all(path.join("drive_c")).unwrap();
+        fs::write(path.join("user.reg"), "REGEDIT4\n").unwrap();
+    }
+
+    #[test]
+    fn custom_prefix_wins_over_detected_prefix() {
+        let root = std::env::temp_dir().join("modkist-wine-test-custom-wins");
+        let _ = fs::remove_dir_all(&root);
+        let detected = root.join("detected");
+        let custom = root.join("custom");
+        make_prefix(&detected);
+        make_prefix(&custom);
+        let game = detected.join("drive_c/Games/Zeepkist");
+        fs::create_dir_all(&game).unwrap();
+
+        let prefix = find_wine_prefix(&game, Some(&custom))
+            .expect("valid custom prefix")
+            .expect("prefix");
+        assert_eq!(prefix.path, custom);
+        assert_eq!(prefix.label.as_deref(), Some("custom"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_custom_prefix_uses_detection() {
+        let root = std::env::temp_dir().join("modkist-wine-test-no-custom");
+        let _ = fs::remove_dir_all(&root);
+        let detected = root.join("detected");
+        make_prefix(&detected);
+        let game = detected.join("drive_c/Games/Zeepkist");
+        fs::create_dir_all(&game).unwrap();
+
+        let prefix = find_wine_prefix(&game, None)
+            .expect("no custom prefix error")
+            .expect("prefix");
+        assert!(prefix.path.ends_with("modkist-wine-test-no-custom/detected"));
+        assert_eq!(prefix.label.as_deref(), Some("detected"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validates_folder_with_user_reg_as_wine_prefix() {
+        let root = std::env::temp_dir().join("modkist-wine-test-validate-ok");
+        let _ = fs::remove_dir_all(&root);
+        make_prefix(&root);
+
+        assert_eq!(validate_wine_prefix(&root), Ok(()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_folder_without_user_reg_as_wine_prefix() {
+        let root = std::env::temp_dir().join("modkist-wine-test-validate-bad");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("drive_c")).unwrap();
+
+        assert_eq!(
+            validate_wine_prefix(&root),
+            Err("This folder is not a Wine prefix. Choose the folder that contains \
+                 user.reg and drive_c."
+                .to_string())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_custom_prefix_is_reported_instead_of_detected() {
+        let root = std::env::temp_dir().join("modkist-wine-test-custom-gone");
+        let _ = fs::remove_dir_all(&root);
+        let detected = root.join("detected");
+        make_prefix(&detected);
+        let game = detected.join("drive_c/Games/Zeepkist");
+        fs::create_dir_all(&game).unwrap();
+        let gone = root.join("deleted-prefix");
+
+        let error = find_wine_prefix(&game, Some(&gone))
+            .expect_err("missing custom prefix is an error");
+        assert!(error.contains(&gone.display().to_string()), "{error}");
+        assert!(error.contains("Settings"), "{error}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn configures_winhttp_in_custom_prefix() {
+        let root = std::env::temp_dir().join("modkist-wine-test-custom-winhttp");
+        let _ = fs::remove_dir_all(&root);
+        let custom = root.join("MyPrefix");
+        make_prefix(&custom);
+        let game = root.join("Games/Zeepkist");
+        fs::create_dir_all(&game).unwrap();
+
+        let status = configure_winhttp_override(&game, Some(&custom));
+
+        assert_eq!(status.state, "applied", "{:?}", status.message);
+        assert_eq!(status.prefix_label.as_deref(), Some("MyPrefix"));
+        let user_reg = fs::read_to_string(custom.join("user.reg")).unwrap();
+        assert!(is_winhttp_configured(&user_reg), "{user_reg}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn custom_prefix_under_bottles_launches_as_crossover_on_macos() {
+        let root = std::env::temp_dir().join("modkist-wine-test-custom-bottle");
+        let _ = fs::remove_dir_all(&root);
+        let bottle = root.join("Bottles/ZeepBottle");
+        make_prefix(&bottle);
+        let game = root.join("Games/Zeepkist");
+        fs::create_dir_all(&game).unwrap();
+
+        let prefix = find_wine_prefix(&game, Some(&bottle))
+            .expect("valid custom prefix")
+            .expect("prefix");
+
+        #[cfg(target_os = "macos")]
+        let expected = WineLaunchKind::CrossOver {
+            bottle: "ZeepBottle".into(),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let expected = WineLaunchKind::WinePrefix;
+        assert_eq!(prefix.launch_kind, expected);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn custom_prefix_elsewhere_launches_as_wine_prefix() {
+        let root = std::env::temp_dir().join("modkist-wine-test-custom-plain");
+        let _ = fs::remove_dir_all(&root);
+        let custom = root.join("Lutris/zeepkist");
+        make_prefix(&custom);
+        let game = root.join("Games/Zeepkist");
+        fs::create_dir_all(&game).unwrap();
+
+        let prefix = find_wine_prefix(&game, Some(&custom))
+            .expect("valid custom prefix")
+            .expect("prefix");
+        assert_eq!(prefix.launch_kind, WineLaunchKind::WinePrefix);
 
         let _ = fs::remove_dir_all(&root);
     }

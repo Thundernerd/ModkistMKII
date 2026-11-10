@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { getVersion } from "@tauri-apps/api/app";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { wineWinhttpFeedback } from "~/utils/wineWinhttp";
 import { invoke, waitForTauri } from "~/utils/tauri";
@@ -20,9 +20,12 @@ const {
 const {
   autoUpdateMods,
   ignoreBepInExVersionWarning,
+  customWinePrefixPath,
   settingsReady,
   refreshAppSettings,
   setAutoUpdateMods,
+  setCustomWinePrefixPath,
+  clearCustomWinePrefixPath,
 } = useAppSettings();
 const {
   wineStatus,
@@ -43,6 +46,25 @@ const wineFeedback = computed(
     sharedWineFeedback.value ||
     wineWinhttpFeedback(bepinexStatus.value.wineWinhttp),
 );
+
+const savingWinePrefix = ref(false);
+const wineActionsDisabled = computed(
+  () =>
+    loading.value || installing.value || wineChecking.value || savingWinePrefix.value,
+);
+
+const winePrefixInUse = computed(() => {
+  if (customWinePrefixPath.value) {
+    return `Custom: ${customWinePrefixPath.value}`;
+  }
+  if (wineStatus.value?.prefixLabel) {
+    return `Detected: ${wineStatus.value.prefixLabel}`;
+  }
+  if (wineStatus.value?.state === "notFound") {
+    return "Detected: none found";
+  }
+  return "";
+});
 
 const showWineSetup = computed(
   () => wineStatus.value?.state !== "notApplicable",
@@ -203,6 +225,37 @@ async function setupWinePrefix() {
     wineSetupTone.value = "error";
     wineSetupMessage.value = String(err);
   }
+}
+
+async function saveWinePrefixSetting(save: () => Promise<unknown>) {
+  savingWinePrefix.value = true;
+  wineSetupMessage.value = "";
+  try {
+    await save();
+  } catch (err) {
+    wineSetupTone.value = "error";
+    wineSetupMessage.value = String(err);
+    return;
+  } finally {
+    savingWinePrefix.value = false;
+  }
+  await setupWinePrefix();
+}
+
+async function chooseWinePrefixFolder() {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Select the Wine prefix folder (contains user.reg and drive_c)",
+  });
+  if (typeof selected !== "string") {
+    return;
+  }
+  await saveWinePrefixSetting(() => setCustomWinePrefixPath(selected));
+}
+
+async function useWinePrefixAutoDetection() {
+  await saveWinePrefixSetting(clearCustomWinePrefixPath);
 }
 
 onMounted(async () => {
@@ -500,18 +553,39 @@ function profileKindLabel(kind: string) {
         <h3 class="panel-subtitle">Wine prefix</h3>
         <p class="hint panel-desc">
           On Linux and macOS, Modkist uses the Wine, Proton, or GameHub
-          prefix of the game to configure winhttp for BepInEx. If the
-          prefix is missing, launch Zeepkist one time. Then configure the
-          prefix here.
+          prefix of the game to configure winhttp for BepInEx and to launch
+          Zeepkist. If the prefix is missing, launch Zeepkist one time. Then
+          configure the prefix here. If Modkist does not find your prefix,
+          choose its folder (the folder that contains user.reg and drive_c).
+        </p>
+        <p v-if="winePrefixInUse" class="meta wine-prefix-in-use">
+          {{ winePrefixInUse }}
         </p>
         <div class="action-row">
           <button
             type="button"
             class="btn-secondary"
-            :disabled="loading || installing || wineChecking"
+            :disabled="wineActionsDisabled"
             @click="setupWinePrefix"
           >
             {{ wineChecking ? "Wait…" : "Configure Wine prefix" }}
+          </button>
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="wineActionsDisabled"
+            @click="chooseWinePrefixFolder"
+          >
+            Choose prefix folder…
+          </button>
+          <button
+            v-if="customWinePrefixPath"
+            type="button"
+            class="btn-secondary"
+            :disabled="wineActionsDisabled"
+            @click="useWinePrefixAutoDetection"
+          >
+            Use auto-detection
           </button>
         </div>
         <p
@@ -592,6 +666,11 @@ function profileKindLabel(kind: string) {
 
 .panel-desc {
   margin: 0 0 1rem;
+}
+
+.wine-prefix-in-use {
+  margin: 0 0 0.75rem;
+  overflow-wrap: anywhere;
 }
 
 .panel-desc code {

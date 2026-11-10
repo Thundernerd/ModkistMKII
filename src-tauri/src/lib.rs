@@ -12,7 +12,14 @@ mod wine_prefix {
         pub prefix_label: Option<String>,
     }
 
-    pub fn configure_winhttp_override(_game_dir: &Path) -> WineWinhttpStatus {
+    pub fn validate_wine_prefix(_path: &Path) -> Result<(), String> {
+        Err("Windows does not use a Wine prefix.".into())
+    }
+
+    pub fn configure_winhttp_override(
+        _game_dir: &Path,
+        _custom_prefix: Option<&Path>,
+    ) -> WineWinhttpStatus {
         WineWinhttpStatus {
             state: "notApplicable".into(),
             message: None,
@@ -54,9 +61,9 @@ mod subscription_sync_settings;
 mod zip_extract;
 
 use app_settings::{
-    get_app_settings, get_ignore_bepinex_version_warning_enabled, remember_skip_sign_in,
-    remember_ignore_bepinex_version_warning, set_auto_update_mods,
-    set_ignore_bepinex_version_warning,
+    clear_custom_wine_prefix_path, get_app_settings, get_ignore_bepinex_version_warning_enabled,
+    remember_ignore_bepinex_version_warning, remember_skip_sign_in, set_auto_update_mods,
+    set_custom_wine_prefix_path, set_ignore_bepinex_version_warning,
 };
 use app_updater::check_and_install_app_update;
 use auth::{auth_status, logout, request_email_code, verify_email_code};
@@ -198,6 +205,8 @@ pub fn run() {
             get_ignore_bepinex_version_warning_enabled,
             set_auto_update_mods,
             set_ignore_bepinex_version_warning,
+            set_custom_wine_prefix_path,
+            clear_custom_wine_prefix_path,
             remember_ignore_bepinex_version_warning,
             remember_skip_sign_in,
             game_running_status,

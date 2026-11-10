@@ -4,17 +4,20 @@ export interface AppSettings {
   autoUpdateMods: boolean;
   skipSignIn: boolean;
   ignoreBepInExVersionWarning: boolean;
+  customWinePrefixPath: string | null;
 }
 
 const autoUpdateMods = ref(true);
 const skipSignIn = ref(false);
 const ignoreBepInExVersionWarning = ref(false);
+const customWinePrefixPath = ref<string | null>(null);
 const settingsReady = ref(false);
 
 function syncSettings(settings: AppSettings) {
   autoUpdateMods.value = settings.autoUpdateMods;
   skipSignIn.value = settings.skipSignIn;
   ignoreBepInExVersionWarning.value = settings.ignoreBepInExVersionWarning;
+  customWinePrefixPath.value = settings.customWinePrefixPath ?? null;
 }
 
 export function useAppSettings() {
@@ -53,6 +56,20 @@ export function useAppSettings() {
     return invoke<boolean>("get_ignore_bepinex_version_warning_enabled");
   }
 
+  async function setCustomWinePrefixPath(path: string) {
+    const settings = await invoke<AppSettings>("set_custom_wine_prefix_path", {
+      path,
+    });
+    syncSettings(settings);
+    return settings;
+  }
+
+  async function clearCustomWinePrefixPath() {
+    const settings = await invoke<AppSettings>("clear_custom_wine_prefix_path");
+    syncSettings(settings);
+    return settings;
+  }
+
   async function rememberSkipSignIn() {
     const settings = await invoke<AppSettings>("remember_skip_sign_in");
     syncSettings(settings);
@@ -63,12 +80,15 @@ export function useAppSettings() {
     autoUpdateMods,
     skipSignIn,
     ignoreBepInExVersionWarning,
+    customWinePrefixPath,
     settingsReady,
     refreshAppSettings,
     setAutoUpdateMods,
     setIgnoreBepInExVersionWarning,
     rememberIgnoreBepInExVersionWarning,
     isBepInExVersionWarningSuppressed,
+    setCustomWinePrefixPath,
+    clearCustomWinePrefixPath,
     rememberSkipSignIn,
   };
 }
