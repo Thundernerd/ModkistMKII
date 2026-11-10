@@ -694,10 +694,15 @@ impl ModioError {
     }
 
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
+        Self::from_api_with(error, logged_in, Handled::No)
+    }
+
+    /// `handled` unless mod.io rejected our credentials (HTTP 401).
+    fn from_api_with(error: ApiError, logged_in: bool, handled: Handled) -> Self {
         let handled = if error.is_unauthorized() {
             Handled::CredentialsRejected
         } else {
-            Handled::No
+            handled
         };
         Self::new(format_api_error_logged_in(error, logged_in), handled)
     }
@@ -717,13 +722,13 @@ impl ModioError {
     /// Without a session token, a 403 means a private or hidden mod, which
     /// `ApiClient` already logs at info.
     pub(crate) fn from_mod_read(error: ApiError, logged_in: bool, token_sent: bool) -> Self {
-        let sign_in_required = !token_sent && error.is_forbidden();
-        let error = Self::from_api(error, logged_in);
-        if sign_in_required {
-            Self::new(error.message, Handled::SignInRequired)
+        // A 403 is never also a 401, so this never hides a rejected credential.
+        let handled = if !token_sent && error.is_forbidden() {
+            Handled::SignInRequired
         } else {
-            error
-        }
+            Handled::No
+        };
+        Self::from_api_with(error, logged_in, handled)
     }
 
     /// True when mod.io rejected our credentials (HTTP 401), or the read was
