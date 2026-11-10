@@ -760,8 +760,11 @@ impl ApiClient {
             response.headers(),
             started.elapsed(),
             on_failure,
-            // send_raw logs a rejected token's 401 itself: it goes to the hook.
-            authenticated && self.hooks.on_token_rejected.is_some(),
+            // send_raw logs these 401s itself, by the error_ref in the body: a
+            // rejected token goes to the hook, a refused API key is reported
+            // once, a wrong email code is logged at info, anything else at
+            // error.
+            !authenticated || self.hooks.on_token_rejected.is_some(),
         );
 
         let retry_after = response
@@ -1287,7 +1290,7 @@ fn log_response(
     headers: &reqwest::header::HeaderMap,
     elapsed: std::time::Duration,
     on_failure: OnFailure,
-    token_rejection_handled: bool,
+    handles_unauthorized: bool,
 ) {
     let header_dump: Vec<String> = headers
         .iter()
@@ -1307,14 +1310,7 @@ fn log_response(
 
     let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
-    // send_raw logs these 401s itself: a rejected token goes to the hook, a
-    // refused API key is reported once, a wrong email code is the user's.
-    let handled_unauthorized = status.as_u16() == 401
-        && (token_rejection_handled
-            || error_ref.is_some_and(|error_ref| {
-                API_KEY_REFUSED_ERROR_REFS.contains(&error_ref)
-                    || SECURITY_CODE_REFUSED_ERROR_REFS.contains(&error_ref)
-            }));
+    let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
     let expected = on_failure.expects(status.as_u16());
 
     if status.is_success() || known_not_found || handled_unauthorized || expected {

@@ -441,3 +441,55 @@ async fn a_wrong_or_expired_email_code_is_not_reported_to_sentry() {
         assert_eq!(*refusals.lock().unwrap(), 0, "error_ref {error_ref}");
     }
 }
+
+/// The `error_ref` in the body is what counts: mod.io may leave out the
+/// `x-modio-error-ref` header.
+#[tokio::test]
+async fn a_refused_api_key_without_the_error_ref_header_is_reported_once() {
+    capture_reports();
+    let server = FakeModio::start(|_| {
+        (401, None, error_body(API_KEY_INVALID_ERROR_REF, "api_key supplied is invalid."))
+    });
+    let (client, _) = server.client();
+
+    let _ = client.get_game_tags(GAME_ID).await;
+    let _ = client.get_mods(GAME_ID, &ModQuery::default()).await;
+
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+}
+
+/// mod.io `error_ref` for "the api_key differs from the one that requested the
+/// security code": an app bug, not the user's doing.
+const SECURITY_CODE_DIFFERENT_KEY_ERROR_REF: u32 = 11013;
+
+#[tokio::test]
+async fn another_tokenless_401_is_reported_as_itself_and_leaves_the_refused_key_report() {
+    capture_reports();
+    let server = FakeModio::start(|request| {
+        if request.path == "/oauth/emailexchange" {
+            let error_ref = SECURITY_CODE_DIFFERENT_KEY_ERROR_REF;
+            (401, Some(error_ref), error_body(error_ref, "The api_key differs."))
+        } else {
+            api_key_invalid()
+        }
+    });
+    let (client, refusals) = server.client_counting_api_key_refusals();
+
+    let _ = client.exchange_email_code("12345").await;
+    let _ = client.get_game_tags(GAME_ID).await;
+
+    let reports = sentry_reports();
+    let different_key = format!("error_ref=Some({SECURITY_CODE_DIFFERENT_KEY_ERROR_REF})");
+    assert!(
+        reports.iter().any(|report| report.contains(&different_key) && !report.contains("game API key refused")),
+        "the 11013 should be reported as itself: {reports:#?}"
+    );
+    let refused_key = format!("game API key refused, later refusals logged at info): status=Some(401), error_ref=Some({API_KEY_INVALID_ERROR_REF})");
+    assert_eq!(
+        reports.iter().filter(|report| report.contains(&refused_key)).count(),
+        1,
+        "the refused key should be reported once: {reports:#?}"
+    );
+    assert_eq!(*refusals.lock().unwrap(), 1);
+}
