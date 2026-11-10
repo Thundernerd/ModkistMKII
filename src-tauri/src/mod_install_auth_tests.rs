@@ -1,8 +1,9 @@
-//! What callers log when mod.io rejects our credentials mid-operation (issue
-//! #59). `ApiClient` already handles and reports a rejected session token or
-//! refused game API key once; the callers must not turn it into one Sentry
-//! report per mod. Runs the real callers against a local fake mod.io and
-//! captures the `warn`/`error` records `SentryLogWriter` would forward.
+//! What callers log when mod.io answers with an expected failure: rejected
+//! credentials mid-operation (issue #59), private mods while signed out (#68)
+//! and mod files the author deleted (#75). `ApiClient` already handles and
+//! reports these; the callers must not turn them into one Sentry report per
+//! mod. Runs the real callers against a local fake mod.io and captures the
+//! `warn`/`error` records `SentryLogWriter` would forward.
 
 use std::collections::HashSet;
 
@@ -308,4 +309,114 @@ async fn private_mods_while_signed_out_are_not_reported_per_mod() {
         .all(|mod_id| matches!(outcomes.get(mod_id), Some(ModFetchOutcome::Failed(_)))));
     assert!(map.values().all(Vec::is_empty));
     assert_eq!(bearer_requests(&server), 0);
+}
+
+// --- Installed mod file deleted on mod.io (issue #75) ------------------------
+
+/// mod.io `error_ref` for "The requested file id could not be found."
+const MODFILE_NOT_FOUND_ERROR_REF: u32 = 14000;
+
+/// Mod 100's installed file 7 was deleted or replaced by its author.
+fn installed_file_deleted(_: &Received) -> (u16, Option<u32>, String) {
+    let body = error_body(MODFILE_NOT_FOUND_ERROR_REF, "The requested file id could not be found.");
+    (404, Some(MODFILE_NOT_FOUND_ERROR_REF), body)
+}
+
+#[tokio::test]
+async fn a_deleted_installed_file_is_not_reported_when_resolving_its_version() {
+    capture_reports();
+    let server = FakeModio::start(installed_file_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let label = resolve_installed_file_version(&state, 100, 7, None).await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    assert_eq!(label, "");
+}
+
+#[tokio::test]
+async fn a_server_error_when_resolving_an_installed_version_is_still_reported() {
+    capture_reports();
+    let server = FakeModio::start(server_error);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    resolve_installed_file_version(&state, 100, 7, None).await;
+
+    let caller_warnings: Vec<String> = sentry_reports()
+        .into_iter()
+        .filter(|report| report.starts_with("WARN: Did not resolve version"))
+        .collect();
+    assert_eq!(caller_warnings.len(), 1, "{caller_warnings:#?}");
+}
+
+#[tokio::test]
+async fn a_deleted_installed_file_is_not_requested_again_on_the_next_refresh() {
+    let server = FakeModio::start(installed_file_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    resolve_installed_file_version(&state, 100, 7, None).await;
+    let label = resolve_installed_file_version(&state, 100, 7, None).await;
+
+    assert_eq!(label, "");
+    assert_eq!(server.received().len(), 1, "{:#?}", server.received());
+}
+
+/// Mod 100 still exists, but the version the user picked (file 7) was deleted.
+fn picked_version_deleted(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == format!("/games/{GAME_ID}/mods/100") {
+        (200, None, r#"{"id":100,"name":"Some mod"}"#.to_string())
+    } else {
+        installed_file_deleted(request)
+    }
+}
+
+async fn install_picked_version(state: &ModioState, file_id: u64) -> Result<InstallModResult, ModioError> {
+    install_targets_internal(
+        None,
+        state,
+        Path::new("/nonexistent-game-dir"),
+        vec![100],
+        &mut Vec::new(),
+        &mut HashMap::new(),
+        false,
+        true,
+        Some((100, file_id)),
+        None,
+        None,
+        Some(100),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn installing_a_deleted_version_drops_the_stale_version_list() {
+    let server = FakeModio::start(picked_version_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+    state.store_latest_file_id(100, 8);
+    state.store_mod_files(100, Vec::new());
+
+    let _ = install_picked_version(&state, 7).await;
+
+    assert!(state.cached_mod_files(100).is_none(), "the versions list should be fetched again");
+}
+
+#[tokio::test]
+async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
+    capture_reports();
+    let server = FakeModio::start(picked_version_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+    state.store_latest_file_id(100, 8);
+
+    let result = install_picked_version(&state, 7).await;
+
+    assert_eq!(sentry_reports(), Vec::<String>::new());
+    let Err(error) = result else {
+        panic!("installing a deleted version should fail");
+    };
+    assert_eq!(
+        error.message,
+        "This version of Some mod is no longer on mod.io. Its author deleted or replaced it. Pick another version, or install the latest one."
+    );
+    assert_eq!(error.log_level(log::Level::Error), log::Level::Info);
+    assert!(error.is_modfile_deleted(), "a restored profile falls back on this");
 }
