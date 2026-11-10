@@ -412,7 +412,7 @@ async fn a_failed_request_reports_no_response_headers() {
     assert!(!reports.is_empty(), "the failure should still be reported");
     for report in &reports {
         assert!(!report.contains(FAKE_DATE), "report contains the date header: {report}");
-        assert!(!report.contains("fake-cloudflare-cookie"), "report contains the cookie: {report}");
+        assert!(!report.contains(FAKE_COOKIE), "report contains the cookie: {report}");
     }
 }
 

@@ -193,12 +193,14 @@ impl ApiError {
     /// text: the method, the route template, the status and `error_ref`.
     fn log(&self, method: &str, path: &str) {
         self.log_details(method, path);
-        log::error!(
-            "mod.io API error: {method} {} returned status={:?}, error_ref={:?}",
-            route_template(path),
-            self.status,
-            self.error_ref
-        );
+        let route = route_template(path);
+        match self.status {
+            Some(status) => log::error!(
+                "mod.io API error: {method} {route} returned status={status}, error_ref={:?}",
+                self.error_ref
+            ),
+            None => log::error!("mod.io API error: {method} {route} failed without a response"),
+        }
     }
 
     /// The details of a failed request, for the log file only.
@@ -734,19 +736,14 @@ impl ApiClient {
         let response = request.send().await.map_err(|e| {
             // reqwest's text includes the URL, with the api_key query.
             let e = e.without_url();
-            let mut causes = String::new();
-            let mut source = std::error::Error::source(&e);
-            while let Some(cause) = source {
-                causes.push_str(&format!(": {cause}"));
-                source = cause.source();
-            }
+            let error = ApiError::transport(format!("mod.io request failed: {e}"));
             if on_failure.is_quiet() {
-                log::debug!("mod.io <- {method_label} {path} transport error: {e}{causes}");
+                log::debug!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
             } else {
-                log::info!("mod.io <- {method_label} {path} transport error: {e}{causes}");
-                log::error!("mod.io <- {method_label} {} transport error: {e}", route_template(path));
+                log::info!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
+                error.log(&method_label, path);
             }
-            ApiError::transport(format!("mod.io request failed: {e}{causes}"))
+            error
         })?;
 
         let status = response.status();
@@ -1280,6 +1277,17 @@ impl OnFailure {
     }
 }
 
+/// `error` followed by each of its causes, separated by colons.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut chain = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        chain.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    chain
+}
+
 /// `path` with each numeric id replaced by a placeholder named after the
 /// collection before it: `/games/3213/mods/44/files/9` becomes
 /// `/games/{game}/mods/{mod}/files/{file}`.
@@ -1332,12 +1340,12 @@ fn log_response(
 
     let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
     let expected = on_failure.expects(status.as_u16());
-    let logged_at_info = status.is_success() || known_not_found || handled_unauthorized || expected;
+    let expected_outcome = status.is_success() || known_not_found || handled_unauthorized || expected;
 
     // Never above info: the header dump differs on every response (`date`,
     // `cf-ray`, cookies) and is only for the log file. `send_raw` reports a
     // failure once, in text that does not depend on the request.
-    if !logged_at_info && (expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429)) {
+    if !expected_outcome && (expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429)) {
         log::debug!("{line}");
     } else {
         log::info!("{line}");
