@@ -996,7 +996,7 @@ fn migrate_profile_archives_to_app_data(
         sync_profile_archive_dir_name(&archives_root, profile)?;
     }
 
-    if let Some(game_dir) = game_directory(app).ok() {
+    if let Ok(game_dir) = game_directory(app) {
         remove_legacy_modkist_folder(&game_dir)?;
     }
 

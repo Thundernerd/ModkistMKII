@@ -422,7 +422,7 @@ fn is_dll_overrides_section(line: &str) -> bool {
     };
 
     let section_name = &after_open[..close_index];
-    section_name.replace("\\\\", "\\").to_ascii_lowercase() == r"software\wine\dlloverrides"
+    section_name.replace("\\\\", "\\").eq_ignore_ascii_case(r"software\wine\dlloverrides")
 }
 
 fn is_timestamped_dll_overrides_section(line: &str) -> bool {
