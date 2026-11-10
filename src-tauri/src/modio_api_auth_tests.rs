@@ -35,6 +35,22 @@ pub(crate) struct FakeModio {
 
 impl FakeModio {
     pub(crate) fn start(respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static) -> Self {
+        Self::start_with(None, respond)
+    }
+
+    /// Like [`FakeModio::start`], but every 429 response carries
+    /// `Retry-After: {retry_after_secs}`, as mod.io sends it.
+    pub(crate) fn start_with_retry_after(
+        retry_after_secs: u64,
+        respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static,
+    ) -> Self {
+        Self::start_with(Some(retry_after_secs), respond)
+    }
+
+    fn start_with(
+        retry_after_secs: Option<u64>,
+        respond: impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -75,6 +91,9 @@ impl FakeModio {
                 );
                 if let Some(error_ref) = error_ref {
                     response.push_str(&format!("x-modio-error-ref: {error_ref}\r\n"));
+                }
+                if let Some(retry_after_secs) = retry_after_secs.filter(|_| status == 429) {
+                    response.push_str(&format!("retry-after: {retry_after_secs}\r\n"));
                 }
                 response.push_str("\r\n");
                 response.push_str(&body);

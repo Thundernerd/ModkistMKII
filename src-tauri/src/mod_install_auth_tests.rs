@@ -502,7 +502,7 @@ async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
     assert_reported_once_and_retried(
         &server,
         "/games/{game}/mods/{mod}/dependencies",
-        "mod.io rate limit hit, retrying in 61 seconds",
+        "mod.io rate limit hit, retrying, mod.io gave no Retry-After",
     );
     assert_eq!(map.get(&ModId(100)), Some(&Vec::new()));
 }
@@ -518,7 +518,7 @@ async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
     assert_reported_once_and_retried(
         &server,
         "/games/{game}/mods",
-        "mod.io rate limit hit on batch mod fetch, retrying in 61 seconds",
+        "mod.io rate limit hit on batch mod fetch, retrying, mod.io gave no Retry-After",
     );
     assert!(matches!(outcomes.get(&ModId(100)), Some(ModFetchOutcome::Found(_))));
 }
@@ -550,7 +550,7 @@ async fn a_mod_read_under_a_sustained_rate_limit_fails_after_one_retry() {
     assert!(
         lines
             .iter()
-            .any(|line| line.starts_with("INFO: mod.io rate limit hit on mod fetch, retrying in 61 seconds")),
+            .any(|line| line.starts_with("INFO: mod.io rate limit hit on mod fetch, retrying, mod.io gave no Retry-After")),
         "the retry should be in the log file: {lines:#?}"
     );
 }
@@ -601,4 +601,50 @@ async fn a_batch_still_rate_limited_after_its_retry_fails_the_later_chunks_witho
     assert!(mod_ids.iter().all(|mod_id| failed_on_rate_limit(outcomes.get(mod_id))));
     let paths: Vec<String> = server.received().into_iter().map(|request| request.path).collect();
     assert_eq!(paths.len(), 2, "the first chunk and its one retry only: {paths:#?}");
+}
+
+// --- The retry waits for mod.io's Retry-After (issue #149) --------------------
+
+const ONE_MOD: &str = r#"{"id":100,"name":"Some mod"}"#;
+
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_mod_read_is_retried_once_its_retry_after_window_ends() {
+    capture_reports();
+    let server = FakeModio::start_with_retry_after(5, rate_limited_once(ONE_MOD));
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let started = tokio::time::Instant::now();
+    let outcome = crate::modio_client::fetch_mod_outcome(&state, ModId(100)).await;
+    let waited = started.elapsed();
+
+    assert!(matches!(outcome, ModFetchOutcome::Found(_)), "the retry should find the mod");
+    assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
+    assert!(
+        waited >= Duration::from_secs(5) && waited < Duration::from_secs(10),
+        "the retry should wait out the 5 s Retry-After, not 61 s: waited {waited:?}"
+    );
+    let lines = log_lines();
+    assert!(
+        lines.iter().any(|line| line
+            .starts_with("INFO: mod.io rate limit hit on mod fetch, retrying after the 5 seconds mod.io asked for")),
+        "the retry should name mod.io's wait: {lines:#?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_mod_read_without_retry_after_is_retried_after_a_minute() {
+    capture_reports();
+    let server = FakeModio::start(rate_limited_once(ONE_MOD));
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let started = tokio::time::Instant::now();
+    let outcome = crate::modio_client::fetch_mod_outcome(&state, ModId(100)).await;
+    let waited = started.elapsed();
+
+    assert!(matches!(outcome, ModFetchOutcome::Found(_)), "the retry should find the mod");
+    assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
+    assert!(
+        waited >= Duration::from_secs(60) && waited < Duration::from_secs(65),
+        "with no Retry-After the retry should wait about a minute: waited {waited:?}"
+    );
 }
