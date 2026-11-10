@@ -55,24 +55,34 @@ fn server_error(_: &Received) -> (u16, Option<u32>, String) {
     (503, None, r#"{"error":{"code":503,"message":"Service Unavailable"}}"#.to_string())
 }
 
-/// Mod ids appearing in a report would make Sentry open one issue per mod.
-fn names_a_mod(report: &str, mod_ids: &[u64]) -> bool {
-    mod_ids.iter().any(|mod_id| report.contains(&mod_id.to_string()))
+/// True when `report` names any of `ids`: ids in a report would make Sentry
+/// open one issue per mod.
+fn names_an_id(report: &str, ids: &[u64]) -> bool {
+    ids.iter().any(|id| report.contains(&id.to_string()))
 }
 
-#[tokio::test]
-async fn a_server_error_while_mapping_dependencies_is_reported_once_per_read_without_mod_ids() {
+/// Builds the dependency map of the installed `PRIVATE_MODS`, checks that
+/// every failed read was reported once, with the same text and no mod id, and
+/// returns that text.
+async fn the_one_id_free_report_per_dependency_read(state: &ModioState) -> String {
     capture_reports();
-    let server = FakeModio::start(server_error);
-    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
-
     let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
-    build_dependency_map(&state, &installed).await;
+    build_dependency_map(state, &installed).await;
 
     let reports = sentry_reports();
     assert_eq!(reports.len(), PRIVATE_MODS.len(), "one report per failed read: {reports:#?}");
     assert!(reports.iter().all(|report| report == &reports[0]), "{reports:#?}");
-    assert!(!names_a_mod(&reports[0], &PRIVATE_MODS), "{reports:#?}");
+    assert!(!names_an_id(&reports[0], &PRIVATE_MODS), "{reports:#?}");
+    reports[0].clone()
+}
+
+#[tokio::test]
+async fn a_server_error_while_mapping_dependencies_is_reported_once_per_read_without_mod_ids() {
+    let server = FakeModio::start(server_error);
+    let state = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
+
+    the_one_id_free_report_per_dependency_read(&state).await;
+
     assert!(!state.auth_status().session_expired);
 }
 
@@ -83,17 +93,14 @@ fn unparsable_body(_: &Received) -> (u16, Option<u32>, String) {
 
 #[tokio::test]
 async fn an_unparsable_response_while_mapping_dependencies_is_reported_once_per_read_without_mod_ids() {
-    capture_reports();
     let server = FakeModio::start(unparsable_body);
-    let state = ModioState::signed_out_against(server.base_url.clone());
+    let signed_out = ModioState::signed_out_against(server.base_url.clone());
+    let signed_in = ModioState::signed_in_against(server.base_url.clone(), TOKEN);
 
-    let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
-    build_dependency_map(&state, &installed).await;
+    let signed_out_report = the_one_id_free_report_per_dependency_read(&signed_out).await;
+    let signed_in_report = the_one_id_free_report_per_dependency_read(&signed_in).await;
 
-    let reports = sentry_reports();
-    assert_eq!(reports.len(), PRIVATE_MODS.len(), "one report per failed read: {reports:#?}");
-    assert!(reports.iter().all(|report| report == &reports[0]), "{reports:#?}");
-    assert!(!names_a_mod(&reports[0], &PRIVATE_MODS), "{reports:#?}");
+    assert_eq!(signed_in_report, signed_out_report, "the same failure should group as one Sentry issue");
 }
 
 const EMPTY_LIST: &str = r#"{"data":[],"result_total":0}"#;
@@ -363,11 +370,11 @@ async fn a_server_error_when_resolving_an_installed_version_is_reported_once_wit
     let server = FakeModio::start(server_error);
     let state = ModioState::signed_out_against(server.base_url.clone());
 
-    resolve_installed_file_version(&state, 100, 7, None).await;
+    resolve_installed_file_version(&state, 100, 70_707, None).await;
 
     let reports = sentry_reports();
     assert_eq!(reports.len(), 1, "{reports:#?}");
-    assert!(!names_a_mod(&reports[0], &[100, 7]), "{reports:#?}");
+    assert!(!names_an_id(&reports[0], &[100, 70_707]), "{reports:#?}");
 }
 
 #[tokio::test]

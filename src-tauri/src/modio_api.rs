@@ -212,16 +212,20 @@ impl ApiError {
         self
     }
 
-    /// Reports a failed request. The details (path, mod.io's message, retry
-    /// window) go to the log file at info. The report (error) holds only what
-    /// does not vary per request, as Sentry groups message events by their
-    /// text: the method, the route template, the status and `error_ref`.
+    /// Reports a failed request to Sentry (see [`Self::log`]) and marks it
+    /// reported, so callers log it at info.
     fn report(mut self, method: &str, path: &str) -> Self {
         self.log(method, path);
         self.reported = true;
         self
     }
 
+    /// Logs a failed request. The details (path, mod.io's message, retry
+    /// window) go to the log file at info. The report (error) holds only what
+    /// does not vary per request, as Sentry groups message events by their
+    /// text: the method, the route template, the status and `error_ref`.
+    /// Without a status (no response, or one whose body could not be read or
+    /// parsed) the report says so in one text, whichever request noticed it.
     fn log(&self, method: &str, path: &str) {
         self.log_details(method, path);
         let route = route_template(path);
@@ -230,30 +234,21 @@ impl ApiError {
                 "mod.io API error: {method} {route} returned status={status}, error_ref={:?}",
                 self.error_ref
             ),
-            None => log::error!("mod.io API error: {method} {route} failed without a response"),
+            None => log::error!(
+                "mod.io API error: {method} {route} failed without a readable response"
+            ),
         }
     }
 
-    /// Reports a response whose body could not be read or parsed, like
-    /// [`Self::report`]: the details at info, a stable report at error.
-    fn report_unreadable_response(mut self, method: &str, path: &str) -> Self {
-        self.log_details(method, path);
-        log::error!(
-            "mod.io API error: {method} {} returned a response that could not be read",
-            route_template(path)
-        );
-        self.reported = true;
-        self
-    }
-
-    /// An unreadable response, reported unless the request is quiet: a quiet
-    /// read is retried, and the retry decides what to report.
+    /// A response whose body could not be read or parsed, reported unless the
+    /// request is quiet: a quiet read is retried, and the retry decides what
+    /// to report.
     fn unreadable_response(self, method: &str, path: &str, on_failure: OnFailure) -> Self {
         if on_failure.is_quiet() {
             log::debug!("mod.io <- {method} {path} unreadable response: {}", self.message);
             self
         } else {
-            self.report_unreadable_response(method, path)
+            self.report(method, path)
         }
     }
 
