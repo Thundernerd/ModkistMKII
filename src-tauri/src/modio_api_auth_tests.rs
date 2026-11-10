@@ -436,3 +436,27 @@ async fn the_same_failure_on_different_mods_is_reported_with_the_same_text() {
     assert!(first[0].contains("GET /games/{game}/mods/{mod}/files/{file} "), "{}", first[0]);
     assert!(first[0].contains("503"), "the report should keep the status: {}", first[0]);
 }
+
+/// A private mod read with a session token while mod.io rate limits: the
+/// api_key read is refused, and the bearer retry gets a 429.
+fn private_mod_rate_limited_on_retry(request: &Received) -> (u16, Option<u32>, String) {
+    if request.bearer {
+        (429, None, r#"{"error":{"code":429,"message":"Too Many Requests"}}"#.to_string())
+    } else {
+        forbidden()
+    }
+}
+
+#[tokio::test]
+async fn a_rate_limited_bearer_retry_is_reported_once() {
+    capture_reports();
+    let server = FakeModio::start(private_mod_rate_limited_on_retry);
+    let (client, _) = server.client();
+
+    let error = client.get_mod(GAME_ID, 2400035, Some(TOKEN)).await.err().expect("request should fail");
+
+    assert!(error.is_rate_limited());
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report for the failed read, got {reports:#?}");
+    assert!(reports[0].contains("429"), "the report should be the rate limit: {}", reports[0]);
+}

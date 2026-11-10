@@ -192,18 +192,23 @@ impl ApiError {
     /// does not vary per request, as Sentry groups message events by their
     /// text: the method, the route template, the status and `error_ref`.
     fn log(&self, method: &str, path: &str) {
+        self.log_details(method, path);
+        log::error!(
+            "mod.io API error: {method} {} returned status={:?}, error_ref={:?}",
+            route_template(path),
+            self.status,
+            self.error_ref
+        );
+    }
+
+    /// The details of a failed request, for the log file only.
+    fn log_details(&self, method: &str, path: &str) {
         log::info!(
             "mod.io API error [{method} {path}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
             self.message,
             self.status,
             self.error_ref,
             self.retry_after_secs
-        );
-        log::error!(
-            "mod.io API error: {method} {} returned status={:?}, error_ref={:?}",
-            route_template(path),
-            self.status,
-            self.error_ref
         );
     }
 
@@ -912,9 +917,12 @@ impl ApiClient {
                     );
                 } else {
                     // 429/5xx/transport on the bearer retry is a genuinely
-                    // unexpected failure the caller will propagate, so surface it.
-                    api_key_error.log("GET", context);
-                    bearer_error.log("GET", context);
+                    // unexpected failure the caller will propagate, so surface
+                    // it once. send_raw already reported a 429, even when quiet.
+                    api_key_error.log_details("GET", context);
+                    if !bearer_error.is_rate_limited() {
+                        bearer_error.log("GET", context);
+                    }
                 }
                 Err(bearer_error)
             }
