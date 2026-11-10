@@ -594,7 +594,7 @@ async fn a_batch_still_rate_limited_after_its_retry_fails_the_later_chunks_witho
     let server = FakeModio::start(always_rate_limited);
     let state = ModioState::signed_out_against(server.base_url.clone());
     // More ids than one `id-in` request takes (100), so the read needs two chunks.
-    let mod_ids: Vec<u64> = (1..=150).collect();
+    let mod_ids: Vec<ModId> = (1..=150).map(ModId).collect();
 
     let outcomes = fetch_mod_outcomes_batch(&state, &mod_ids).await;
 
