@@ -487,9 +487,11 @@ async fn another_tokenless_401_is_reported_as_itself_and_leaves_the_refused_key_
     let _ = client.get_game_tags(GAME_ID).await;
 
     let reports = sentry_reports();
-    let different_key = format!("error_ref=Some({SECURITY_CODE_DIFFERENT_KEY_ERROR_REF})");
+    let different_key = format!(
+        "mod.io API error: POST /oauth/emailexchange returned status=401, error_ref=Some({SECURITY_CODE_DIFFERENT_KEY_ERROR_REF})"
+    );
     assert!(
-        reports.iter().any(|report| report.contains(&different_key) && !report.contains("game API key refused")),
+        reports.iter().any(|report| report.contains(&different_key)),
         "the 11013 should be reported as itself: {reports:#?}"
     );
     let refused_key = format!("game API key refused, later refusals logged at info): status=Some(401), error_ref=Some({API_KEY_INVALID_ERROR_REF})");
