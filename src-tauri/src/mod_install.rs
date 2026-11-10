@@ -344,8 +344,9 @@ fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
     unreachable!("loop always returns on the final attempt")
 }
 
-/// The install folders of `mod_id`, in both the mods and blueprints folders.
-fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<PathBuf>, String> {
+/// The install folders of `mod_id`, in both the mods and blueprints folders,
+/// each with the file id its name holds. Mods come before blueprints.
+fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<(PathBuf, u64)>, String> {
     let mut folders = Vec::new();
     for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
         let kind_dir = kind_root_dir(game_dir, kind);
@@ -357,7 +358,7 @@ fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<PathBuf>, S
             let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            let Some((entry_mod_id, _)) = parse_install_folder_name(&name) else {
+            let Some((entry_mod_id, file_id)) = parse_install_folder_name(&name) else {
                 continue;
             };
             if entry_mod_id != mod_id {
@@ -366,7 +367,7 @@ fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<PathBuf>, S
 
             let path = entry.path();
             if path.is_dir() {
-                folders.push(path);
+                folders.push((path, file_id));
             }
         }
     }
@@ -375,7 +376,7 @@ fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<PathBuf>, S
 }
 
 fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
-    for path in installed_mod_folders(game_dir, mod_id)? {
+    for (path, _) in installed_mod_folders(game_dir, mod_id)? {
         remove_dir_all_with_retry(&path)
             .map_err(|e| format!("Did not remove installed mod folder {}: {e}", path.display()))?;
     }
@@ -398,13 +399,8 @@ struct MovedAsideFolder {
 /// previous version stays installed (issue #129).
 fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<MovedAsideFolder>, String> {
     let mut moved = Vec::new();
-    for original in installed_mod_folders(game_dir, mod_id)? {
-        let file_id = original
-            .file_name()
-            .and_then(|name| parse_install_folder_name(&name.to_string_lossy()))
-            .map_or(0, |(_, file_id)| file_id);
-        let parent = original.parent().unwrap_or(game_dir);
-        let aside = parent.join(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
+    for (original, file_id) in installed_mod_folders(game_dir, mod_id)? {
+        let aside = original.with_file_name(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
         if let Err(error) = fs::rename(&original, &aside) {
             restore_moved_aside_folders(&moved);
             return Err(format!(
