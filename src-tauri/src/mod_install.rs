@@ -1199,6 +1199,13 @@ fn build_manual_install_sync_failure_context(
     (sync_failure_roots, dependency_to_subscribers)
 }
 
+/// A specific file version to install for one mod instead of its latest file.
+#[derive(Clone, Copy)]
+struct FileOverride {
+    mod_id: u64,
+    file_id: u64,
+}
+
 /// How `install_targets_internal` treats each target in its install order.
 #[derive(Default)]
 struct InstallTargetsOptions<'a> {
@@ -1206,8 +1213,8 @@ struct InstallTargetsOptions<'a> {
     should_subscribe: bool,
     /// Install a newer version of a target that is already installed.
     auto_update: bool,
-    /// `(mod_id, file_id)`: install this file for that mod instead of its latest.
-    file_override: Option<(u64, u64)>,
+    /// Install this file for that mod instead of its latest.
+    file_override: Option<FileOverride>,
     /// Mod details already fetched, so they are not requested again.
     mods_by_id: Option<&'a HashMap<u64, ModObject>>,
     /// Where to record and clear per-mod sync failures; `None` means they are not persisted.
@@ -1281,9 +1288,9 @@ async fn install_targets_internal(
             }
         };
         if matches!(state_for_mod.status.as_str(), "upToDate") {
-            if let Some((override_mod, override_file)) = file_override {
-                if override_mod == target_mod_id
-                    && state_for_mod.installed_file_id != Some(override_file)
+            if let Some(file_override) = file_override {
+                if file_override.mod_id == target_mod_id
+                    && state_for_mod.installed_file_id != Some(file_override.file_id)
                 {
                     // Install a specific older or alternate file version.
                 } else {
@@ -1322,8 +1329,8 @@ async fn install_targets_internal(
 
         log::info!("Installing mod {target_mod_id}");
         let target_file_id = file_override
-            .filter(|(override_mod, _)| *override_mod == target_mod_id)
-            .map(|(_, file_id)| file_id);
+            .filter(|file_override| file_override.mod_id == target_mod_id)
+            .map(|file_override| file_override.file_id);
         match install_single_mod(state, game_dir, target_mod_id, target_file_id).await {
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
@@ -1417,7 +1424,7 @@ async fn install_mod_internal(
         &mut dependency_map,
         InstallTargetsOptions {
             auto_update: true,
-            file_override: file_id.map(|file_id| (mod_id, file_id)),
+            file_override: file_id.map(|file_id| FileOverride { mod_id, file_id }),
             sync_failure_context: Some(sync_failure_context),
             root_mod_id: Some(mod_id),
             ..Default::default()
