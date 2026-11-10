@@ -1735,8 +1735,20 @@ async fn reconcile_custom_profile_mods_inner(
             entry.mod_id,
             entry.file_id
         );
-        match install_mod_internal(app, state, &game_dir, entry.mod_id, Some(entry.file_id)).await
-        {
+        let mut result =
+            install_mod_internal(app, state, &game_dir, entry.mod_id, Some(entry.file_id)).await;
+        if result.as_ref().is_err_and(ModioError::is_modfile_deleted) {
+            // The author deleted or replaced the pinned file: restore the mod's
+            // current file instead. The manifest sync after a successful
+            // install moves the pin to it.
+            log::info!(
+                "Custom-profile mod {} file {} was deleted on mod.io; installing its current file",
+                entry.mod_id,
+                entry.file_id
+            );
+            result = install_mod_internal(app, state, &game_dir, entry.mod_id, None).await;
+        }
+        match result {
             Ok(result) => {
                 installed.extend(result.installed.iter().copied());
                 skipped.extend(result.skipped.iter().copied());

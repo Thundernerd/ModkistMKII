@@ -401,4 +401,5 @@ async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
         "This version of Some mod is no longer on mod.io. Its author deleted or replaced it. Pick another version, or install the latest one."
     );
     assert_eq!(error.log_level(log::Level::Error), log::Level::Info);
+    assert!(error.is_modfile_deleted(), "a restored profile falls back on this");
 }

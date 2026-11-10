@@ -713,6 +713,11 @@ impl ModioError {
         }
     }
 
+    /// True when the picked version's file was deleted on mod.io.
+    pub(crate) fn is_modfile_deleted(&self) -> bool {
+        self.modfile_deleted
+    }
+
     /// The failure of a read skipped because mod.io already rejected the
     /// session it would have used.
     pub(crate) fn session_rejected() -> Self {
