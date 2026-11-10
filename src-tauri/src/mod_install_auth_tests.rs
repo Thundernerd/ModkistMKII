@@ -347,3 +347,15 @@ async fn a_server_error_when_resolving_an_installed_version_is_still_reported() 
         .collect();
     assert_eq!(caller_warnings.len(), 1, "{caller_warnings:#?}");
 }
+
+#[tokio::test]
+async fn a_deleted_installed_file_is_not_requested_again_on_the_next_refresh() {
+    let server = FakeModio::start(installed_file_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    resolve_installed_file_version(&state, 100, 7, None).await;
+    let label = resolve_installed_file_version(&state, 100, 7, None).await;
+
+    assert_eq!(label, "");
+    assert_eq!(server.received().len(), 1, "{:#?}", server.received());
+}

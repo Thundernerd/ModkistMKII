@@ -1861,6 +1861,10 @@ async fn resolve_installed_file_version(
         }
     }
 
+    if state.cached_mod_file_missing(mod_id, file_id) {
+        return String::new();
+    }
+
     let Ok(game_id) = state.game_id() else {
         return String::new();
     };
@@ -1886,6 +1890,7 @@ async fn resolve_installed_file_version(
             // The author deleted or replaced the installed file: expected, and
             // the mod then shows an update to its current file.
             let level = if error.is_not_found() {
+                state.mark_mod_file_missing(mod_id, file_id);
                 log::Level::Info
             } else {
                 log::Level::Warn

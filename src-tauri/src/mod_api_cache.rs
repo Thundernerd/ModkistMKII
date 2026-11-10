@@ -50,6 +50,8 @@ pub(crate) struct PersistedCache {
 #[derive(Default)]
 pub(crate) struct ApiCache {
     unavailable_mods: HashMap<u64, Timed<()>>,
+    /// `(mod_id, file_id)` pairs mod.io reported as deleted (404).
+    missing_mod_files: HashMap<(u64, u64), Timed<()>>,
     failed_dependency_fetches: HashMap<u64, Timed<()>>,
     dependencies: HashMap<u64, Timed<Vec<u64>>>,
     latest_file_ids: HashMap<u64, Timed<u64>>,
@@ -61,6 +63,7 @@ pub(crate) struct ApiCache {
 impl ApiCache {
     pub(crate) fn clear(&mut self) {
         self.unavailable_mods.clear();
+        self.missing_mod_files.clear();
         self.failed_dependency_fetches.clear();
         self.dependencies.clear();
         self.latest_file_ids.clear();
@@ -79,6 +82,16 @@ impl ApiCache {
         self.unavailable_mods.insert(mod_id, Timed::new(()));
     }
 
+    pub(crate) fn is_mod_file_missing(&self, mod_id: u64, file_id: u64) -> bool {
+        self.missing_mod_files
+            .get(&(mod_id, file_id))
+            .is_some_and(|entry| entry.is_valid())
+    }
+
+    pub(crate) fn mark_mod_file_missing(&mut self, mod_id: u64, file_id: u64) {
+        self.missing_mod_files.insert((mod_id, file_id), Timed::new(()));
+    }
+
     pub(crate) fn is_dependency_fetch_failed(&self, mod_id: u64) -> bool {
         self.failed_dependency_fetches
             .get(&mod_id)
@@ -91,6 +104,7 @@ impl ApiCache {
 
     pub(crate) fn invalidate_mod(&mut self, mod_id: u64) {
         self.unavailable_mods.remove(&mod_id);
+        self.missing_mod_files.retain(|(missing_mod_id, _), _| *missing_mod_id != mod_id);
         self.failed_dependency_fetches.remove(&mod_id);
         self.latest_file_ids.remove(&mod_id);
         self.mod_files.remove(&mod_id);
