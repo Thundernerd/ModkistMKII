@@ -1,6 +1,5 @@
 # The Rust version for local builds and every workflow (CI, Build, Release).
-# Bump it on purpose, in its own PR, and fix any new clippy or rustfmt findings
-# in that PR. See "Requirements" in the README.
+# See "Requirements" in the README for how to bump it.
 [toolchain]
 channel = "1.99.1"
 components = ["clippy", "rustfmt"]
