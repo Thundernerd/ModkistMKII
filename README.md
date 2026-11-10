@@ -62,6 +62,7 @@ Release builds embed `MODIO_API_KEY`, `MODIO_GAME_ID`, and `SENTRY_DSN` at compi
 | `npm run test:scripts` | Run the tests for the release scripts in `.github/scripts/` |
 | `cd src-tauri && cargo test` | Run the Rust tests |
 | `cd src-tauri && cargo clippy --all-targets --locked -- -D warnings` | Run clippy as CI does |
+| `cd src-tauri && cargo fmt --check` | Check the Rust formatting as CI does (`cargo fmt` fixes it) |
 
 `vue-router` is a direct devDependency so that the type check can find the Volar plugin Nuxt adds (`vue-router/volar/sfc-route-blocks`). Keep its version range on the same major as the one Nuxt depends on. When you upgrade Nuxt, update it too. `npm ls vue-router` should show one copy.
 
@@ -69,7 +70,7 @@ Release builds embed `MODIO_API_KEY`, `MODIO_GAME_ID`, and `SENTRY_DSN` at compi
 
 GitHub Actions has four workflows:
 
-- **CI** — runs on every pull request to `main` and every push to `main`. Runs the type check, the release script tests, the Rust tests, and clippy (`cargo clippy --all-targets --locked -- -D warnings`, so any clippy warning fails the run). Clippy runs on Linux, Windows, and macOS, so code that only builds on one platform is linted too. The other checks run on Linux only. Needs no secrets.
+- **CI** — runs on every pull request to `main` and every push to `main`. Runs the type check, the release script tests, the Rust tests, the Rust formatting check (`cargo fmt --check`, so unformatted Rust code fails the run), and clippy (`cargo clippy --all-targets --locked -- -D warnings`, so any clippy warning fails the run). Clippy runs on Linux, Windows, and macOS, so code that only builds on one platform is linted too. The other checks run on Linux only. Needs no secrets.
 - **Build** — manual builds for macOS, Windows, and Linux. Bundles appear as workflow artifacts.
 - **Release** — version bump, git tag, GitHub release, installer upload, and updater manifests. Linux releases are AppImage only.
 - **Sentry Issues** — every 30 minutes, opens a GitHub issue (label `sentry`) for each new Sentry issue and comments the latest event's JSON on it, with personal data removed. Needs the secret `SENTRY_AUTH_TOKEN` (read-only: `project:read`, `event:read`, `org:read`) and the repository variables `SENTRY_ORG` and `SENTRY_PROJECTS`.
