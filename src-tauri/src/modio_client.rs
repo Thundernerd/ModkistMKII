@@ -966,9 +966,9 @@ const BATCH_FETCH_CHUNK_SIZE: usize = 100;
 /// bearer token and handles rate limits/unavailability per mod. A rate-limited
 /// batch request is retried once, after mod.io's `Retry-After` window (see
 /// [`with_rate_limit_retry`]). A batch request still rate limited after that
-/// retry is the exception: its ids and
-/// those of every later chunk fail with that error, without any per-mod
-/// request, since those would only be rate limited too.
+/// retry is the exception: its ids and those of every later chunk fail with
+/// that error, without any per-mod request, since those would only be rate
+/// limited too.
 pub(crate) async fn fetch_mod_outcomes_batch(
     state: &ModioState,
     mod_ids: &[ModId],
