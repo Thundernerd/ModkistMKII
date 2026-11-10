@@ -2,14 +2,14 @@
 //! of 401s for every request after the session token expired and the game
 //! api_key was refused). Runs the real client against a local fake mod.io and
 //! observes what reaches the server and what would be reported to Sentry
-//! (every `warn`/`error` log record is forwarded there by `SentryLogWriter`).
+//! (see `logging::report_capture`).
 
-use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use super::*;
+use crate::logging::report_capture::{capture_reports, sentry_reports};
 
 pub(crate) const GAME_ID: u64 = 3213;
 pub(crate) const TOKEN: &str = "expired-token";
@@ -134,44 +134,6 @@ pub(crate) fn error_body(error_ref: u32, message: &str) -> String {
 
 pub(crate) fn token_expired() -> (u16, Option<u32>, String) {
     (401, Some(TOKEN_REJECTED_ERROR_REF), error_body(TOKEN_REJECTED_ERROR_REF, "Access token is expired, or has been revoked."))
-}
-
-// --- Sentry-report capture -------------------------------------------------
-
-thread_local! {
-    static REPORTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-}
-
-/// Captures, per test thread, the log records `SentryLogWriter` would send to
-/// Sentry (`warn` and `error`).
-struct ReportCapture;
-
-impl log::Log for ReportCapture {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        if record.level() <= log::Level::Warn {
-            let line = format!("{}: {}", record.level(), record.args());
-            REPORTS.with(|reports| reports.borrow_mut().push(line));
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-pub(crate) fn capture_reports() {
-    static INSTALLED: OnceLock<()> = OnceLock::new();
-    INSTALLED.get_or_init(|| {
-        log::set_boxed_logger(Box::new(ReportCapture)).unwrap();
-        log::set_max_level(log::LevelFilter::Trace);
-    });
-    REPORTS.with(|reports| reports.borrow_mut().clear());
-}
-
-pub(crate) fn sentry_reports() -> Vec<String> {
-    REPORTS.with(|reports| reports.borrow().clone())
 }
 
 // --- Behavior ----------------------------------------------------------------

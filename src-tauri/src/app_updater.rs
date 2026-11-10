@@ -143,7 +143,7 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modio_api::auth_tests::{capture_reports, sentry_reports};
+    use crate::logging::report_capture::{capture_reports, sentry_reports};
     use tauri_plugin_updater::Error as UpdaterError;
 
     #[test]
