@@ -174,7 +174,7 @@ fn dependency_failure_detail(message: &str) -> Option<String> {
 
 fn extract_dependency_mod_id(message: &str) -> Option<ModId> {
     let rest = message.strip_prefix("Required dependency (mod ")?;
-    rest.split(')').next()?.parse().ok().map(ModId)
+    rest.split(')').next()?.parse().ok()
 }
 
 fn merge_dependency_failure_details(
@@ -199,8 +199,8 @@ fn merge_dependency_failure_details(
                 .trim_start_matches("Required dependencies did not install (mods ")
                 .trim_end_matches(").");
             for id in ids.split(", ") {
-                if let Ok(parsed) = id.parse::<u64>() {
-                    mod_ids.insert(ModId(parsed));
+                if let Ok(parsed) = id.parse::<ModId>() {
+                    mod_ids.insert(parsed);
                 }
             }
         }

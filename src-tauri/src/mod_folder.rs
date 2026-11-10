@@ -50,12 +50,12 @@ pub fn install_folder_name(mod_id: ModId, file_id: FileId, mod_name: &str) -> St
 
 pub fn parse_install_folder_name(name: &str) -> Option<(ModId, FileId)> {
     let (mod_part, rest) = name.split_once('_')?;
-    let mod_id = ModId(mod_part.parse().ok()?);
+    let mod_id: ModId = mod_part.parse().ok()?;
     let (file_part, _) = match rest.split_once('_') {
         Some((file_part, _suffix)) => (file_part, _suffix),
         None => (rest, ""),
     };
-    let file_id = FileId(file_part.parse().ok()?);
+    let file_id: FileId = file_part.parse().ok()?;
     Some((mod_id, file_id))
 }
 

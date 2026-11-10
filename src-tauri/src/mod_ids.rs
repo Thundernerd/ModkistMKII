@@ -7,6 +7,8 @@
 //! unchanged.
 
 use std::fmt;
+use std::num::ParseIntError;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -33,5 +35,21 @@ impl fmt::Display for ModId {
 impl fmt::Display for FileId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl FromStr for ModId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
+
+impl FromStr for FileId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Self)
     }
 }
