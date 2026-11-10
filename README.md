@@ -19,7 +19,7 @@ The app uses Tauri 2, Nuxt 4 (Vue), and Rust.
 You need:
 
 - Node.js 20 or later
-- A stable Rust toolchain
+- Rust, at the version pinned in `src-tauri/rust-toolchain.toml`. With [rustup](https://rustup.rs) (any version except 1.28.0), cargo installs and uses that version on its own when you build in `src-tauri`. CI, Build, and Release use the same file, so a new stable Rust release does not change their compiler. To bump it, change `channel` to the new version in its own pull request, and fix any new clippy or rustfmt findings in that pull request.
 - A mod.io game API key and game ID for Zeepkist
 - Zeepkist installed (Steam app ID `1440670`)
 

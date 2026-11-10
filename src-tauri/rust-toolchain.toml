@@ -1,0 +1,6 @@
+# The Rust version for local builds and every workflow (CI, Build, Release).
+# See "Requirements" in the README for how to bump it.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

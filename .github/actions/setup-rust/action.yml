@@ -1,0 +1,47 @@
+# Installs the Rust version pinned in src-tauri/rust-toolchain.toml, so every
+# workflow builds with the same compiler as a local checkout, and a new stable
+# release changes nothing until that file is bumped.
+
+name: Setup Rust
+description: Install the Rust toolchain pinned in src-tauri/rust-toolchain.toml
+
+runs:
+  using: composite
+  steps:
+    - name: Read pinned Rust version
+      id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        file=src-tauri/rust-toolchain.toml
+        channel=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$file")
+        if [[ ! "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error file=$file::channel must be an exact version such as 1.99.1, got '$channel'"
+          exit 1
+        fi
+        echo "Pinned Rust version: $channel"
+        echo "toolchain=$channel" >> "$GITHUB_OUTPUT"
+
+    # Pinned to a commit: the action's branches move, and @master is the ref that
+    # takes a toolchain input.
+    - name: Install Rust ${{ steps.pin.outputs.toolchain }}
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+      with:
+        toolchain: ${{ steps.pin.outputs.toolchain }}
+
+    # Running rustc in src-tauri makes rustup install the components the toml
+    # lists, and fails the job if cargo there would pick a different compiler.
+    - name: Check the active Rust version
+      shell: bash
+      working-directory: src-tauri
+      env:
+        PINNED: ${{ steps.pin.outputs.toolchain }}
+      run: |
+        set -euo pipefail
+        rustc --version
+        cargo --version
+        active=$(rustc --version | awk '{print $2}')
+        if [[ "$active" != "$PINNED" ]]; then
+          echo "::error::src-tauri uses rustc $active, expected $PINNED"
+          exit 1
+        fi

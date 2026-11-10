@@ -119,11 +119,13 @@ jobs:
           VERSION: ${{ needs.resolve-version.outputs.version }}
         run: node .github/scripts/set-wix-version.mjs
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Install macOS universal targets
         if: matrix.platform == 'macos-universal'
+        # Run in src-tauri so the targets go to the pinned toolchain.
+        working-directory: src-tauri
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Rust cache
