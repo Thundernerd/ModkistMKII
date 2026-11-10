@@ -522,3 +522,35 @@ async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
     );
     assert!(matches!(outcomes.get(&100), Some(ModFetchOutcome::Found(_))));
 }
+
+// --- Bounded rate-limit retries (issue #143) ----------------------------------
+
+fn always_rate_limited(_: &Received) -> (u16, Option<u32>, String) {
+    let body = format!(
+        r#"{{"error":{{"code":429,"error_ref":{RATE_LIMITED_ERROR_REF},"message":"Too many requests."}}}}"#
+    );
+    (429, Some(RATE_LIMITED_ERROR_REF), body)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_mod_read_under_a_sustained_rate_limit_fails_after_one_retry() {
+    capture_reports();
+    let server = FakeModio::start(always_rate_limited);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let outcome = crate::modio_client::fetch_mod_outcome(&state, 100).await;
+
+    assert!(matches!(outcome, ModFetchOutcome::Failed(_)), "the read should give up");
+    assert_eq!(server.received().len(), 2, "one retry: {:#?}", server.received());
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 2, "one ApiClient report per request: {reports:#?}");
+    assert!(reports.iter().all(|report| report
+        .contains("mod.io API error: GET /games/{game}/mods/{mod} returned status=429")));
+    let lines = log_lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("INFO: mod.io rate limit hit on mod fetch, retrying in 61 seconds")),
+        "the retry should be in the log file: {lines:#?}"
+    );
+}

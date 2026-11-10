@@ -679,6 +679,7 @@ fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log
 pub(crate) struct ModioError {
     pub message: String,
     handled: Handled,
+    rate_limited: bool,
 }
 
 /// Why a `ModioError` was already handled (reported or explained to the user)
@@ -695,7 +696,7 @@ enum Handled {
 
 impl ModioError {
     fn new(message: String, handled: Handled) -> Self {
-        Self { message, handled }
+        Self { message, handled, rate_limited: false }
     }
 
     pub(crate) fn from_api(error: ApiError, logged_in: bool) -> Self {
@@ -712,7 +713,16 @@ impl ModioError {
         } else {
             handled
         };
-        Self::new(format_api_error_logged_in(error, logged_in), handled)
+        let rate_limited = error.is_rate_limited();
+        Self {
+            rate_limited,
+            ..Self::new(format_api_error_logged_in(error, logged_in), handled)
+        }
+    }
+
+    /// True when mod.io rate limited the request.
+    pub(crate) fn is_rate_limited(&self) -> bool {
+        self.rate_limited
     }
 
     /// The version the user picked is gone: its author deleted or replaced
@@ -911,9 +921,10 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
     };
     let token = state.session_token();
 
-    let outcome = match api
-        .get_mod(game_id, mod_id, token.as_deref())
-        .await
+    let outcome = match with_rate_limit_retry(" on mod fetch", || {
+        api.get_mod(game_id, mod_id, token.as_deref())
+    })
+    .await
     {
         Ok(mod_) => {
             seed_mod_cache(state, &mod_);
@@ -922,9 +933,6 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
         Err(error) => {
             if is_mod_unavailable(&error) {
                 ModFetchOutcome::Unavailable
-            } else if error.is_rate_limited() {
-                tokio::time::sleep(Duration::from_secs(61)).await;
-                return Box::pin(fetch_mod_outcome(state, mod_id)).await;
             } else {
                 ModFetchOutcome::Failed(ModioError::from_mod_read(
                     error,
@@ -1073,20 +1081,47 @@ pub(crate) fn is_rate_limited_message(message: &str) -> bool {
     lower.contains("429")
 }
 
-pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(mut operation: F) -> Result<T, E>
+/// How long to wait before retrying a request mod.io rate limited. Its limits
+/// reset after a minute.
+pub(crate) const RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(61);
+
+/// An error that can say whether mod.io rate limited the request.
+pub(crate) trait RateLimitError: std::fmt::Display {
+    fn is_rate_limited(&self) -> bool;
+}
+
+impl RateLimitError for ApiError {
+    fn is_rate_limited(&self) -> bool {
+        ApiError::is_rate_limited(self)
+    }
+}
+
+impl RateLimitError for ModioError {
+    fn is_rate_limited(&self) -> bool {
+        ModioError::is_rate_limited(self)
+    }
+}
+
+/// Runs `operation`; when mod.io rate limits it, logs the retry at info, waits
+/// [`RATE_LIMIT_RETRY_DELAY`] and runs it once more, returning that result
+/// whatever it is. `context` names the request in the log line, e.g.
+/// `" on batch mod fetch"`, or is empty.
+pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(context: &str, mut operation: F) -> Result<T, E>
 where
-    E: std::fmt::Display,
+    E: RateLimitError,
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
 {
     match operation().await {
-        Ok(value) => Ok(value),
-        Err(error) if is_rate_limited_message(&error.to_string()) => {
-            log::info!("mod.io rate limit hit, retrying in 61 seconds: {error}");
-            tokio::time::sleep(Duration::from_secs(61)).await;
+        Err(error) if error.is_rate_limited() => {
+            log::info!(
+                "mod.io rate limit hit{context}, retrying in {} seconds: {error}",
+                RATE_LIMIT_RETRY_DELAY.as_secs()
+            );
+            tokio::time::sleep(RATE_LIMIT_RETRY_DELAY).await;
             operation().await
         }
-        Err(error) => Err(error),
+        result => result,
     }
 }
 
