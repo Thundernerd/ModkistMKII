@@ -2598,7 +2598,8 @@ mod tests {
     /// be left half-deleted, and a mod's other install folders already gone
     /// (issue #129). The mod's second install folder here sits in a read-only
     /// blueprints folder, which only blocks moving it: the plugin itself
-    /// still stages in the writable mods folder.
+    /// still stages in the writable mods folder. Mods are moved aside before
+    /// blueprints, so the plugin folder has to be moved back.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_update_whose_previous_folder_cannot_be_moved_keeps_it_complete() {
@@ -2623,7 +2624,13 @@ mod tests {
         assert!(result.is_err(), "the previous folder can't be moved, so the update fails");
         assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
         assert_eq!(fs::read(locked.join("mod.zeeplevel")).unwrap(), b"old-level");
-        assert!(!kind_dir.join("129001_2_Mod").exists());
+        // Nothing else either: no new version, staging folder, or folder
+        // left moved aside.
+        let entries: Vec<String> = fs::read_dir(&kind_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["129001_1_Mod".to_string()]);
     }
 
     /// The previous version is only deleted once the new one is in place.
