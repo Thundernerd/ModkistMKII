@@ -1112,7 +1112,7 @@ fn record_sync_failure_for_target(
 #[derive(Clone, Copy)]
 struct SyncFailureContext<'a> {
     app: &'a AppHandle,
-    /// The mods the sync was asked for; their own failures are recorded against them.
+    /// The subscribed mods, or the one mod the user asked to install; their own failures are recorded against them.
     roots: &'a HashSet<u64>,
     /// For each dependency, the roots that need it; its failures are recorded against them.
     dependency_to_subscribers: &'a HashMap<u64, HashSet<u64>>,
@@ -1218,7 +1218,10 @@ struct FileOverride {
 /// How `install_targets_internal` treats each target in its install order.
 #[derive(Default)]
 struct InstallTargetsOptions<'a> {
-    /// Subscribe to each target on mod.io before installing it.
+    /// Subscribe to each target on mod.io before installing it. Production callers
+    /// leave this `false` (`install_mod_internal` subscribes before the call); the test
+    /// `an_expired_token_while_subscribing_is_a_rejected_credential` uses it to reach
+    /// the subscribe-with-expired-token path without an `AppHandle`.
     should_subscribe: bool,
     /// Install a newer version of a target that is already installed.
     auto_update: bool,
