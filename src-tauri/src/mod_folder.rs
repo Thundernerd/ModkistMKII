@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+use crate::mod_ids::{FileId, ModId};
+
 const MAX_MOD_NAME_SUFFIX_LEN: usize = 80;
 
 pub fn sanitize_mod_name(name: &str) -> String {
@@ -37,7 +39,7 @@ fn truncate_mod_name_suffix(name: &str) -> String {
         .to_string()
 }
 
-pub fn install_folder_name(mod_id: u64, file_id: u64, mod_name: &str) -> String {
+pub fn install_folder_name(mod_id: ModId, file_id: FileId, mod_name: &str) -> String {
     let sanitized = sanitize_mod_name(mod_name);
     if sanitized.is_empty() {
         format!("{mod_id}_{file_id}")
@@ -46,14 +48,14 @@ pub fn install_folder_name(mod_id: u64, file_id: u64, mod_name: &str) -> String 
     }
 }
 
-pub fn parse_install_folder_name(name: &str) -> Option<(u64, u64)> {
+pub fn parse_install_folder_name(name: &str) -> Option<(ModId, FileId)> {
     let (mod_part, rest) = name.split_once('_')?;
-    let mod_id = mod_part.parse().ok()?;
+    let mod_id = ModId(mod_part.parse().ok()?);
     let (file_part, _) = match rest.split_once('_') {
         Some((file_part, _suffix)) => (file_part, _suffix),
         None => (rest, ""),
     };
-    let file_id = file_part.parse().ok()?;
+    let file_id = FileId(file_part.parse().ok()?);
     Some((mod_id, file_id))
 }
 
@@ -105,24 +107,24 @@ mod tests {
 
     #[test]
     fn parses_legacy_and_named_folder_names() {
-        assert_eq!(parse_install_folder_name("12345_67890"), Some((12345, 67890)));
+        assert_eq!(parse_install_folder_name("12345_67890"), Some((ModId(12345), FileId(67890))));
         assert_eq!(
             parse_install_folder_name("12345_67890_Cool Mod"),
-            Some((12345, 67890))
+            Some((ModId(12345), FileId(67890)))
         );
         assert_eq!(
             parse_install_folder_name("12345_67890_Cool_Mod_Name"),
-            Some((12345, 67890))
+            Some((ModId(12345), FileId(67890)))
         );
         assert_eq!(parse_install_folder_name("invalid"), None);
     }
 
     #[test]
     fn builds_named_install_folder() {
-        assert_eq!(install_folder_name(1, 2, "Cool Mod"), "1_2_Cool Mod");
-        assert_eq!(install_folder_name(1, 2, "  "), "1_2");
+        assert_eq!(install_folder_name(ModId(1), FileId(2), "Cool Mod"), "1_2_Cool Mod");
+        assert_eq!(install_folder_name(ModId(1), FileId(2), "  "), "1_2");
         assert_eq!(
-            install_folder_name(1, 2, "Bad/Name:Here"),
+            install_folder_name(ModId(1), FileId(2), "Bad/Name:Here"),
             "1_2_Bad_Name_Here"
         );
     }

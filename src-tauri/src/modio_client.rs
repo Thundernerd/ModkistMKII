@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::mod_api_cache::{ApiCache, PersistedCache};
+use crate::mod_ids::{FileId, ModId};
 use std::collections::{HashMap, HashSet};
 
 use crate::modio_api::{
@@ -175,7 +176,7 @@ impl ModioState {
         operation().await
     }
 
-    pub(crate) fn cached_subscribed_mod_ids(&self) -> Option<Vec<u64>> {
+    pub(crate) fn cached_subscribed_mod_ids(&self) -> Option<Vec<ModId>> {
         let ids = self
             .api_cache
             .lock()
@@ -187,19 +188,19 @@ impl ModioState {
         ids
     }
 
-    pub(crate) fn store_subscribed_mod_ids(&self, mod_ids: Vec<u64>) {
+    pub(crate) fn store_subscribed_mod_ids(&self, mod_ids: Vec<ModId>) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.store_subscribed_mod_ids(mod_ids);
         }
     }
 
-    pub(crate) fn add_subscribed_mod_id(&self, mod_id: u64) {
+    pub(crate) fn add_subscribed_mod_id(&self, mod_id: ModId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.add_subscribed_mod_id(mod_id);
         }
     }
 
-    pub(crate) fn remove_subscribed_mod_id(&self, mod_id: u64) {
+    pub(crate) fn remove_subscribed_mod_id(&self, mod_id: ModId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.remove_subscribed_mod_id(mod_id);
         }
@@ -228,13 +229,13 @@ impl ModioState {
         }
     }
 
-    pub(crate) fn invalidate_mod_cache(&self, mod_id: u64) {
+    pub(crate) fn invalidate_mod_cache(&self, mod_id: ModId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.invalidate_mod(mod_id);
         }
     }
 
-    pub(crate) fn cached_mod_unavailable(&self, mod_id: u64) -> bool {
+    pub(crate) fn cached_mod_unavailable(&self, mod_id: ModId) -> bool {
         let hit = self
             .api_cache
             .lock()
@@ -246,13 +247,13 @@ impl ModioState {
         hit
     }
 
-    pub(crate) fn mark_mod_unavailable(&self, mod_id: u64) {
+    pub(crate) fn mark_mod_unavailable(&self, mod_id: ModId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.mark_mod_unavailable(mod_id);
         }
     }
 
-    pub(crate) fn cached_mod_file_deleted(&self, mod_id: u64, file_id: u64) -> bool {
+    pub(crate) fn cached_mod_file_deleted(&self, mod_id: ModId, file_id: FileId) -> bool {
         let hit = self
             .api_cache
             .lock()
@@ -264,13 +265,13 @@ impl ModioState {
         hit
     }
 
-    pub(crate) fn mark_mod_file_deleted(&self, mod_id: u64, file_id: u64) {
+    pub(crate) fn mark_mod_file_deleted(&self, mod_id: ModId, file_id: FileId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.mark_mod_file_deleted(mod_id, file_id);
         }
     }
 
-    pub(crate) fn cached_dependency_fetch_failed(&self, mod_id: u64) -> bool {
+    pub(crate) fn cached_dependency_fetch_failed(&self, mod_id: ModId) -> bool {
         let hit = self
             .api_cache
             .lock()
@@ -282,13 +283,13 @@ impl ModioState {
         hit
     }
 
-    pub(crate) fn mark_dependency_fetch_failed(&self, mod_id: u64) {
+    pub(crate) fn mark_dependency_fetch_failed(&self, mod_id: ModId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.mark_dependency_fetch_failed(mod_id);
         }
     }
 
-    pub(crate) fn cached_dependencies(&self, mod_id: u64) -> Option<Vec<u64>> {
+    pub(crate) fn cached_dependencies(&self, mod_id: ModId) -> Option<Vec<ModId>> {
         let cache = self.api_cache.lock().ok()?;
         let dependencies = cache.get_dependencies(mod_id);
         if let Some(ref dependencies) = dependencies {
@@ -300,13 +301,13 @@ impl ModioState {
         dependencies
     }
 
-    pub(crate) fn store_dependencies(&self, mod_id: u64, dependencies: Vec<u64>) {
+    pub(crate) fn store_dependencies(&self, mod_id: ModId, dependencies: Vec<ModId>) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.store_dependencies(mod_id, dependencies);
         }
     }
 
-    pub(crate) fn cached_latest_file_id(&self, mod_id: u64) -> Option<u64> {
+    pub(crate) fn cached_latest_file_id(&self, mod_id: ModId) -> Option<FileId> {
         let file_id = self
             .api_cache
             .lock()
@@ -318,13 +319,13 @@ impl ModioState {
         file_id
     }
 
-    pub(crate) fn store_latest_file_id(&self, mod_id: u64, file_id: u64) {
+    pub(crate) fn store_latest_file_id(&self, mod_id: ModId, file_id: FileId) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.store_latest_file_id(mod_id, file_id);
         }
     }
 
-    pub(crate) fn cached_mod(&self, mod_id: u64) -> Option<ModObject> {
+    pub(crate) fn cached_mod(&self, mod_id: ModId) -> Option<ModObject> {
         let mod_ = self
             .api_cache
             .lock()
@@ -342,7 +343,7 @@ impl ModioState {
         }
     }
 
-    pub(crate) fn cached_mod_files(&self, mod_id: u64) -> Option<Vec<Modfile>> {
+    pub(crate) fn cached_mod_files(&self, mod_id: ModId) -> Option<Vec<Modfile>> {
         let files = self
             .api_cache
             .lock()
@@ -354,7 +355,7 @@ impl ModioState {
         files
     }
 
-    pub(crate) fn store_mod_files(&self, mod_id: u64, files: Vec<Modfile>) {
+    pub(crate) fn store_mod_files(&self, mod_id: ModId, files: Vec<Modfile>) {
         if let Ok(mut cache) = self.api_cache.lock() {
             cache.store_mod_files(mod_id, files);
         }
@@ -849,8 +850,8 @@ pub fn should_cache_dependency_fetch_failure(error: &ApiError) -> bool {
 
 pub(crate) async fn fetch_mod_dependency_ids(
     state: &ModioState,
-    mod_id: u64,
-) -> Result<Vec<u64>, ModioError> {
+    mod_id: ModId,
+) -> Result<Vec<ModId>, ModioError> {
     if let Some(cached) = state.cached_dependencies(mod_id) {
         return Ok(cached);
     }
@@ -870,7 +871,7 @@ pub(crate) async fn fetch_mod_dependency_ids(
         .await
     {
         Ok(list) => {
-            let dependency_ids: Vec<u64> = list.data.into_iter().map(|dep| dep.mod_id).collect();
+            let dependency_ids: Vec<ModId> = list.data.into_iter().map(|dep| dep.mod_id).collect();
             state.store_dependencies(mod_id, dependency_ids.clone());
             Ok(dependency_ids)
         }
@@ -901,7 +902,7 @@ pub(crate) enum ModFetchOutcome {
     Failed(ModioError),
 }
 
-pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFetchOutcome {
+pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: ModId) -> ModFetchOutcome {
     if state.cached_mod_unavailable(mod_id) {
         return ModFetchOutcome::Unavailable;
     }
@@ -962,8 +963,8 @@ const BATCH_FETCH_CHUNK_SIZE: usize = 100;
 /// bearer token and handles rate limits/unavailability per mod.
 pub(crate) async fn fetch_mod_outcomes_batch(
     state: &ModioState,
-    mod_ids: &[u64],
-) -> HashMap<u64, ModFetchOutcome> {
+    mod_ids: &[ModId],
+) -> HashMap<ModId, ModFetchOutcome> {
     let mut outcomes = HashMap::with_capacity(mod_ids.len());
     let mut pending = Vec::new();
 
@@ -1040,7 +1041,7 @@ pub(crate) async fn fetch_mod_outcomes_batch(
     outcomes
 }
 
-pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<ModObject, ModioError> {
+pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: ModId) -> Result<ModObject, ModioError> {
     match fetch_mod_outcome(state, mod_id).await {
         ModFetchOutcome::Found(mod_) => Ok(mod_),
         ModFetchOutcome::Unavailable => {
@@ -1098,7 +1099,7 @@ where
     }
 }
 
-pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<(), ModioError> {
+pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: ModId) -> Result<(), ModioError> {
     log::info!("Subscribing to mod {mod_id}");
     state
         .with_oauth_request("subscribe_to_mod", || async {
@@ -1122,7 +1123,7 @@ pub(crate) async fn subscribe_to_mod(state: &ModioState, mod_id: u64) -> Result<
         .await
 }
 
-pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Result<(), ModioError> {
+pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: ModId) -> Result<(), ModioError> {
     log::info!("Unsubscribing from mod {mod_id}");
     state
         .with_oauth_request("unsubscribe_from_mod", || async {
@@ -1146,7 +1147,7 @@ pub(crate) async fn unsubscribe_from_mod(state: &ModioState, mod_id: u64) -> Res
         .await
 }
 
-pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u64>, ModioError> {
+pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<ModId>, ModioError> {
     if let Some(cached) = state.cached_subscribed_mod_ids() {
         return Ok(cached);
     }
@@ -1158,7 +1159,7 @@ pub(crate) async fn fetch_subscribed_mod_ids(state: &ModioState) -> Result<Vec<u
             let api = state.api()?;
             let token = state.require_token()?;
 
-            let mut mod_ids: Vec<u64> = Vec::new();
+            let mut mod_ids: Vec<ModId> = Vec::new();
             let mut offset: u32 = 0;
             loop {
                 let query = ModQuery {
@@ -1216,7 +1217,7 @@ pub struct AuthStatus {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModSummary {
-    pub id: u64,
+    pub id: ModId,
     pub name: String,
     pub summary: String,
     pub profile_url: String,
@@ -1231,7 +1232,7 @@ pub struct ModSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModDetail {
-    pub id: u64,
+    pub id: ModId,
     pub name: String,
     pub summary: String,
     pub profile_url: String,
@@ -1258,7 +1259,7 @@ pub struct ModDetail {
     pub media_image_urls: Vec<String>,
     pub has_dependencies: bool,
     pub homepage_url: Option<String>,
-    pub file_id: Option<u64>,
+    pub file_id: Option<FileId>,
     /// True when mod.io admin status is archived (3).
     pub is_archived: bool,
 }
@@ -1266,7 +1267,7 @@ pub struct ModDetail {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModFileEntry {
-    pub id: u64,
+    pub id: FileId,
     pub version: String,
     pub filename: String,
     pub filesize: u64,
@@ -1279,13 +1280,13 @@ pub struct ModFileEntry {
 #[serde(rename_all = "camelCase")]
 pub struct ModFileListResult {
     pub files: Vec<ModFileEntry>,
-    pub latest_file_id: Option<u64>,
+    pub latest_file_id: Option<FileId>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModDependency {
-    pub id: u64,
+    pub id: ModId,
     pub name: String,
     pub profile_url: String,
     pub logo_url: String,
@@ -1545,7 +1546,7 @@ fn mod_to_dependency(mod_: ModObject) -> ModDependency {
     }
 }
 
-fn unavailable_dependency(id: u64, reason: String) -> ModDependency {
+fn unavailable_dependency(id: ModId, reason: String) -> ModDependency {
     ModDependency {
         id,
         name: format!("Mod {id}"),
@@ -1616,7 +1617,7 @@ fn mod_matches_game(mod_: &ModObject, game_id: u64) -> bool {
 fn append_mod_list_page(
     state: &ModioState,
     game_id: u64,
-    seen: &mut HashSet<u64>,
+    seen: &mut HashSet<ModId>,
     mods: &mut Vec<ModSummary>,
     list: ListResponse<ModObject>,
 ) {
@@ -1699,7 +1700,7 @@ pub async fn list_mods(
             // subscribed-id cache so a subsequent sync doesn't re-fetch
             // /me/subscribed from scratch just to get the same full id list.
             if subscriptions.data.len() as u32 >= subscriptions.result_total {
-                let subscribed_ids: Vec<u64> =
+                let subscribed_ids: Vec<ModId> =
                     subscriptions.data.iter().map(|mod_| mod_.id).collect();
                 state.store_subscribed_mod_ids(subscribed_ids);
             }
@@ -1718,11 +1719,11 @@ pub async fn list_mods(
 }
 
 #[tauri::command]
-pub async fn get_mod(state: State<'_, ModioState>, mod_id: u64) -> Result<ModDetail, String> {
+pub async fn get_mod(state: State<'_, ModioState>, mod_id: ModId) -> Result<ModDetail, String> {
     get_mod_inner(&state, mod_id).await
 }
 
-pub(crate) async fn get_mod_inner(state: &ModioState, mod_id: u64) -> Result<ModDetail, String> {
+pub(crate) async fn get_mod_inner(state: &ModioState, mod_id: ModId) -> Result<ModDetail, String> {
     let mod_ = fetch_mod_object(state, mod_id).await?;
     let mut detail = mod_to_detail(mod_);
     if let Some(token) = state.session_token() {
@@ -1746,7 +1747,7 @@ pub(crate) async fn get_mod_inner(state: &ModioState, mod_id: u64) -> Result<Mod
 #[tauri::command]
 pub async fn rate_mod(
     state: State<'_, ModioState>,
-    mod_id: u64,
+    mod_id: ModId,
     rating: i8,
 ) -> Result<(), String> {
     if !matches!(rating, -1 | 0 | 1) {
@@ -1772,7 +1773,7 @@ pub async fn rate_mod(
 #[tauri::command]
 pub async fn list_mod_files(
     state: State<'_, ModioState>,
-    mod_id: u64,
+    mod_id: ModId,
 ) -> Result<ModFileListResult, String> {
     let game_id = state.game_id()?;
     let api = state.api()?;
@@ -1816,14 +1817,14 @@ pub async fn list_mod_files(
 #[tauri::command]
 pub async fn list_mod_dependencies(
     state: State<'_, ModioState>,
-    mod_id: u64,
+    mod_id: ModId,
 ) -> Result<ModDependencyListResult, String> {
     list_mod_dependencies_inner(&state, mod_id).await
 }
 
 pub(crate) async fn list_mod_dependencies_inner(
     state: &ModioState,
-    mod_id: u64,
+    mod_id: ModId,
 ) -> Result<ModDependencyListResult, String> {
     let dependency_ids = fetch_mod_dependency_ids(state, mod_id).await?;
 
@@ -2078,9 +2079,9 @@ mod archived_mod_tests {
         append_mod_list_page(&state, 1, &mut seen, &mut mods, list);
 
         assert_eq!(mods.len(), 2);
-        assert_eq!(mods[0].id, 10);
-        assert_eq!(mods[1].id, 30);
-        assert!(!seen.contains(&20));
+        assert_eq!(mods[0].id, ModId(10));
+        assert_eq!(mods[1].id, ModId(30));
+        assert!(!seen.contains(&ModId(20)));
     }
 
     #[test]

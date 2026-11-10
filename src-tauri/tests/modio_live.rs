@@ -2,6 +2,7 @@
 //!   cargo test -p modkistmkii --test modio_live -- --ignored --nocapture
 use std::path::PathBuf;
 
+use modkistmkii_lib::mod_ids::ModId;
 use modkistmkii_lib::modio_api::ApiClient;
 
 async fn build_session() -> (ApiClient, u64, String) {
@@ -54,7 +55,7 @@ async fn fetch_subscribed_paged(client: &ApiClient, token: &str, game_id: u64) -
     count
 }
 
-async fn try_subscribe(client: &ApiClient, token: &str, game_id: u64, mod_id: u64) -> bool {
+async fn try_subscribe(client: &ApiClient, token: &str, game_id: u64, mod_id: ModId) -> bool {
     match client.subscribe(token, game_id, mod_id).await {
         Ok(()) => {
             eprintln!("subscribe {mod_id}: OK");
@@ -88,7 +89,7 @@ async fn diagnose_oauth_subscribe_flow() {
         .await
         .expect("get_user_subscriptions");
     eprintln!("subscriptions (single request): {} mod(s)", list.data.len());
-    try_subscribe(&client, &token, game_id, 3_454_919).await;
+    try_subscribe(&client, &token, game_id, ModId(3_454_919)).await;
 }
 
 #[tokio::test]
@@ -108,7 +109,7 @@ async fn diagnose_startup_burst_then_subscribe() {
         .get_user_subscriptions(&token, game_id, &query)
         .await
         .expect("subs");
-    let mod_ids: Vec<u64> = subs.data.iter().map(|m| m.id).collect();
+    let mod_ids: Vec<ModId> = subs.data.iter().map(|m| m.id).collect();
     eprintln!("loaded {} subscription id(s)", mod_ids.len());
 
     for mod_id in &mod_ids {
@@ -124,5 +125,5 @@ async fn diagnose_startup_burst_then_subscribe() {
     eprintln!("game-key burst: {} get_mod + {} deps", mod_ids.len(), mod_ids.len());
 
     fetch_subscribed_paged(&client, &token, game_id).await;
-    try_subscribe(&client, &token, game_id, 3_454_919).await;
+    try_subscribe(&client, &token, game_id, ModId(3_454_919)).await;
 }
