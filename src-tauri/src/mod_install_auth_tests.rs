@@ -472,6 +472,24 @@ fn rate_limited_once(body: &'static str) -> impl Fn(&Received) -> (u16, Option<u
     }
 }
 
+/// Checks that the one rate-limited read of `route` was reported once, by
+/// `ApiClient`, that it was retried, and that the log file kept the caller's
+/// `retry_line` at info.
+fn assert_reported_once_and_retried(server: &FakeModio, route: &str, retry_line: &str) {
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
+    assert!(
+        reports[0].contains(&format!("mod.io API error: GET {route} returned status=429")),
+        "{reports:#?}"
+    );
+    assert_eq!(server.received().len(), 2, "the read should be retried: {:#?}", server.received());
+    let lines = log_lines();
+    assert!(
+        lines.iter().any(|line| line.starts_with(&format!("INFO: {retry_line}"))),
+        "the retry should still be in the log file: {lines:#?}"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
     capture_reports();
@@ -481,14 +499,10 @@ async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
     let installed: HashSet<u64> = [100].into_iter().collect();
     let map = build_dependency_map(&state, &installed).await;
 
-    let reports = sentry_reports();
-    assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
-    assert!(reports[0].contains("mod.io API error: GET /games/{game}/mods/{mod}/dependencies returned status=429"), "{reports:#?}");
-    assert_eq!(server.received().len(), 2, "the read should be retried: {:#?}", server.received());
-    assert!(
-        log_lines().iter().any(|line| line.starts_with("INFO: mod.io rate limit hit, retrying in 61 seconds")),
-        "the retry should still be in the log file: {:#?}",
-        log_lines()
+    assert_reported_once_and_retried(
+        &server,
+        "/games/{game}/mods/{mod}/dependencies",
+        "mod.io rate limit hit, retrying in 61 seconds",
     );
     assert_eq!(map.get(&100), Some(&Vec::new()));
 }
@@ -501,14 +515,10 @@ async fn a_rate_limited_batch_mod_read_is_reported_once_by_the_api_client() {
 
     let outcomes = fetch_mod_outcomes_batch(&state, &[100]).await;
 
-    let reports = sentry_reports();
-    assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
-    assert!(reports[0].contains("mod.io API error: GET /games/{game}/mods returned status=429"), "{reports:#?}");
-    assert_eq!(server.received().len(), 2, "the batch should be retried: {:#?}", server.received());
-    assert!(
-        log_lines().contains(&"INFO: mod.io rate limit hit on batch mod fetch, retrying in 61 seconds".to_string()),
-        "the retry should still be in the log file: {:#?}",
-        log_lines()
+    assert_reported_once_and_retried(
+        &server,
+        "/games/{game}/mods",
+        "mod.io rate limit hit on batch mod fetch, retrying in 61 seconds",
     );
     assert!(matches!(outcomes.get(&100), Some(ModFetchOutcome::Found(_))));
 }
