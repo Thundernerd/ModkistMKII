@@ -1181,19 +1181,16 @@ fn record_sync_failure_for_target(
         let _ = record_failed_sync_mod(app, target_mod_id, category, message);
     }
 
-    let Some(subscribers) = targets.dependency_to_subscribers.get(&target_mod_id) else {
+    let Some(subscribers) = targets
+        .dependency_to_subscribers
+        .get(&target_mod_id)
+        .filter(|subscribers| !subscribers.is_empty())
+    else {
         if !is_root {
             let _ = record_failed_sync_mod(app, target_mod_id, "dependency", &detail);
         }
         return;
     };
-
-    if subscribers.is_empty() {
-        if !is_root {
-            let _ = record_failed_sync_mod(app, target_mod_id, "dependency", &detail);
-        }
-        return;
-    }
 
     for &subscribed_mod_id in subscribers {
         if subscribed_mod_id == target_mod_id && is_root {
