@@ -48,28 +48,6 @@ fn skipped_result() -> AppUpdateCheckResult {
     }
 }
 
-/// Whether an updater error is a network outcome that the next launch retries:
-/// offline, captive portal, a GitHub hiccup, or the manifest being replaced
-/// mid-release. Anything else means the published manifest or update is broken.
-fn is_transient(error: &tauri_plugin_updater::Error) -> bool {
-    use tauri_plugin_updater::Error;
-
-    matches!(
-        error,
-        Error::ReleaseNotFound | Error::Reqwest(_) | Error::Network(_)
-    )
-}
-
-/// Log a failed updater step. Transient failures stay in the log file; the
-/// rest are reported to Sentry.
-fn log_updater_failure(step: &str, error: &tauri_plugin_updater::Error) {
-    if is_transient(error) {
-        log::info!("App update {step} failed: {error}");
-    } else {
-        log::warn!("App update {step} failed: {error}");
-    }
-}
-
 /// How long the follow-up request for a missing manifest's status may take.
 const MANIFEST_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -116,8 +94,11 @@ async fn log_check_failure(error: &tauri_plugin_updater::Error, endpoint: &str) 
     }
 }
 
+/// Log a failed update download or install. This runs only when an update is
+/// available, so it is rare enough to report every failure: a missing installer
+/// or a bad signature leaves every user on the old version.
 fn log_install_failure(error: &tauri_plugin_updater::Error) {
-    log_updater_failure("install", error);
+    log::warn!("App update install failed: {error}");
 }
 
 #[tauri::command]
@@ -291,14 +272,17 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_installer_download_is_not_reported_to_sentry() {
+    fn a_missing_installer_is_reported_to_sentry() {
         capture_reports();
 
+        // The manifest points at an installer asset that is not there.
         log_install_failure(&UpdaterError::Network(
-            "Download request failed with status: 502 Bad Gateway".into(),
+            "Download request failed with status: 404 Not Found".into(),
         ));
 
-        assert_eq!(sentry_reports(), Vec::<String>::new());
+        let reports = sentry_reports();
+        assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+        assert!(reports[0].contains("404"), "report should name the status: {}", reports[0]);
     }
 
     #[test]
