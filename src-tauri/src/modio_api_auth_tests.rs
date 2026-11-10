@@ -388,3 +388,56 @@ async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
     assert_eq!(original.len(), 1, "{original:#?}");
     assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
 }
+
+// --- Tokenless 401s that are not a refused API key (issue #122) ---------------
+
+/// mod.io `error_ref` for "the security code is not valid" (`/oauth/emailexchange`).
+const SECURITY_CODE_INVALID_ERROR_REF: u32 = 11014;
+
+fn security_code_invalid() -> (u16, Option<u32>, String) {
+    (401, Some(SECURITY_CODE_INVALID_ERROR_REF), error_body(SECURITY_CODE_INVALID_ERROR_REF, "The security code is invalid."))
+}
+
+/// The email code is refused first; the game API key is refused later in the run.
+fn email_code_refused_then_api_key_refused(request: &Received) -> (u16, Option<u32>, String) {
+    if request.path == "/oauth/emailexchange" {
+        security_code_invalid()
+    } else {
+        api_key_invalid()
+    }
+}
+
+#[tokio::test]
+async fn a_refused_api_key_is_reported_once_after_another_tokenless_401() {
+    capture_reports();
+    let server = FakeModio::start(email_code_refused_then_api_key_refused);
+    let (client, refusals) = server.client_counting_api_key_refusals();
+
+    let code = client.exchange_email_code("12345").await.err().expect("request should fail");
+    let tags = client.get_game_tags(GAME_ID).await.err().expect("request should fail");
+
+    assert!(code.is_unauthorized() && tags.is_api_key_refused());
+    let refused: Vec<String> = sentry_reports()
+        .into_iter()
+        .filter(|report| report.contains("game API key refused"))
+        .collect();
+    assert_eq!(refused.len(), 1, "expected one refused-key report, got {refused:#?}");
+    assert!(refused[0].contains("error_ref=Some(11002)"), "the report should be the 11002: {}", refused[0]);
+    assert_eq!(*refusals.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_wrong_or_expired_email_code_is_not_reported_to_sentry() {
+    // mod.io's 401s for a code that is already used, expired, invalid or used up.
+    for error_ref in [11011, 11012, SECURITY_CODE_INVALID_ERROR_REF, 11147] {
+        capture_reports();
+        let server = FakeModio::start(move |_| (401, Some(error_ref), error_body(error_ref, "Security code refused.")));
+        let (client, refusals) = server.client_counting_api_key_refusals();
+
+        let error = client.exchange_email_code("12345").await.err().expect("request should fail");
+
+        assert!(error.is_unauthorized());
+        assert_eq!(sentry_reports(), Vec::<String>::new(), "error_ref {error_ref}");
+        assert_eq!(*refusals.lock().unwrap(), 0, "error_ref {error_ref}");
+    }
+}
