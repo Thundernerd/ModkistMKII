@@ -2202,17 +2202,23 @@ mod tests {
         assert!(!is_stale_staging_dir_name("3285481_8137916_Random Track Mode"));
     }
 
+    /// A staging folder with a mod in it, named as an earlier process would.
+    fn stale_staging_dir(kind_dir: &Path) -> PathBuf {
+        let other_pid = std::process::id().wrapping_add(1);
+        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("mod.dll"), b"test").unwrap();
+        stale
+    }
+
     #[test]
     fn scan_installed_mods_removes_stale_staging_dirs() {
         let temp = tempfile::tempdir().expect("tempdir");
         let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
-        let other_pid = std::process::id().wrapping_add(1);
-        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
+        let stale = stale_staging_dir(&kind_dir);
         let live = kind_dir.join(staging_dir_name(1, 2));
-        for dir in [&stale, &live] {
-            fs::create_dir_all(dir).unwrap();
-            fs::write(dir.join("mod.dll"), b"test").unwrap();
-        }
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("mod.dll"), b"test").unwrap();
 
         scan_installed_mods(temp.path()).unwrap();
 
@@ -2222,18 +2228,16 @@ mod tests {
 
     #[test]
     fn removing_a_stale_staging_dir_is_not_reported_to_sentry() {
-        crate::modio_api::auth_tests::capture_reports();
+        use crate::modio_api::auth_tests::{capture_reports, sentry_reports};
+
+        capture_reports();
         let temp = tempfile::tempdir().expect("tempdir");
-        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
-        let other_pid = std::process::id().wrapping_add(1);
-        let stale = kind_dir.join(format!(".modkist-installing-1-2-{other_pid}-0"));
-        fs::create_dir_all(&stale).unwrap();
-        fs::write(stale.join("mod.dll"), b"test").unwrap();
+        let stale = stale_staging_dir(&kind_root_dir(temp.path(), InstalledModKind::Plugin));
 
         scan_installed_mods(temp.path()).unwrap();
 
         assert!(!stale.exists());
-        assert_eq!(crate::modio_api::auth_tests::sentry_reports(), Vec::<String>::new());
+        assert_eq!(sentry_reports(), Vec::<String>::new());
     }
 
     /// Names of the staging folders in `kind_dir`.
