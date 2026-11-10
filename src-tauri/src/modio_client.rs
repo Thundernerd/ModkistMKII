@@ -713,10 +713,10 @@ impl ModioError {
         } else {
             handled
         };
-        let rate_limited = error.is_rate_limited();
         Self {
-            rate_limited,
-            ..Self::new(format_api_error_logged_in(error, logged_in), handled)
+            rate_limited: error.is_rate_limited(),
+            message: format_api_error_logged_in(error, logged_in),
+            handled,
         }
     }
 
@@ -921,7 +921,7 @@ pub(crate) async fn fetch_mod_outcome(state: &ModioState, mod_id: u64) -> ModFet
     };
     let token = state.session_token();
 
-    let outcome = match with_rate_limit_retry(" on mod fetch", || {
+    let outcome = match with_rate_limit_retry(Some("mod fetch"), || {
         api.get_mod(game_id, mod_id, token.as_deref())
     })
     .await
@@ -1006,7 +1006,7 @@ pub(crate) async fn fetch_mod_outcomes_batch(
 
     for chunk in pending.chunks(BATCH_FETCH_CHUNK_SIZE) {
         let mut found_ids = HashSet::new();
-        match with_rate_limit_retry(" on batch mod fetch", || api.get_mods_by_id(game_id, chunk)).await {
+        match with_rate_limit_retry(Some("batch mod fetch"), || api.get_mods_by_id(game_id, chunk)).await {
             Ok(list) => {
                 for mod_ in list.data {
                     found_ids.insert(mod_.id);
@@ -1052,20 +1052,20 @@ pub(crate) async fn fetch_mod_object(state: &ModioState, mod_id: u64) -> Result<
 
 /// How long to wait before retrying a request mod.io rate limited. Its limits
 /// reset after a minute.
-pub(crate) const RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(61);
+const RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(61);
 
 /// An error that can say whether mod.io rate limited the request.
-pub(crate) trait RateLimitError: std::fmt::Display {
+pub(crate) trait MaybeRateLimited: std::fmt::Display {
     fn is_rate_limited(&self) -> bool;
 }
 
-impl RateLimitError for ApiError {
+impl MaybeRateLimited for ApiError {
     fn is_rate_limited(&self) -> bool {
         ApiError::is_rate_limited(self)
     }
 }
 
-impl RateLimitError for ModioError {
+impl MaybeRateLimited for ModioError {
     fn is_rate_limited(&self) -> bool {
         ModioError::is_rate_limited(self)
     }
@@ -1073,18 +1073,22 @@ impl RateLimitError for ModioError {
 
 /// Runs `operation`; when mod.io rate limits it, logs the retry at info, waits
 /// [`RATE_LIMIT_RETRY_DELAY`] and runs it once more, returning that result
-/// whatever it is. `context` names the request in the log line, e.g.
-/// `" on batch mod fetch"`, or is empty.
-pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(context: &str, mut operation: F) -> Result<T, E>
+/// whatever it is. `request` names the request in the log line, e.g.
+/// `Some("batch mod fetch")`.
+pub(crate) async fn with_rate_limit_retry<T, E, F, Fut>(
+    request: Option<&str>,
+    mut operation: F,
+) -> Result<T, E>
 where
-    E: RateLimitError,
+    E: MaybeRateLimited,
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
 {
     match operation().await {
         Err(error) if error.is_rate_limited() => {
+            let on_request = request.map(|request| format!(" on {request}")).unwrap_or_default();
             log::info!(
-                "mod.io rate limit hit{context}, retrying in {} seconds: {error}",
+                "mod.io rate limit hit{on_request}, retrying in {} seconds: {error}",
                 RATE_LIMIT_RETRY_DELAY.as_secs()
             );
             tokio::time::sleep(RATE_LIMIT_RETRY_DELAY).await;

@@ -645,7 +645,7 @@ async fn refresh_dependency_map(
 }
 
 async fn fetch_dependency_ids(state: &ModioState, mod_id: u64) -> Result<Vec<u64>, ModioError> {
-    with_rate_limit_retry("", || async { fetch_mod_dependency_ids(state, mod_id).await }).await
+    with_rate_limit_retry(None, || async { fetch_mod_dependency_ids(state, mod_id).await }).await
 }
 
 /// Dependencies of `mod_id`, or none when they did not load. `session` is
