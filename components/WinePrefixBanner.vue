@@ -1,11 +1,18 @@
 <script setup lang="ts">
 const {
+  wineStatus,
   wineFeedback,
   wineChecking,
   wineError,
   needsWineAttention,
   configureWineWinhttp,
 } = useWineWinhttp();
+
+const title = computed(() =>
+  wineStatus.value?.state === "failed"
+    ? "Wine prefix setup failed"
+    : "Wine prefix not found",
+);
 
 async function retry() {
   try {
@@ -24,7 +31,7 @@ async function retry() {
     aria-live="polite"
   >
     <div class="wine-banner-body">
-      <p class="wine-banner-title">Wine prefix not found</p>
+      <p class="wine-banner-title">{{ title }}</p>
       <p class="wine-banner-text">
         {{
           wineFeedback?.text ||
