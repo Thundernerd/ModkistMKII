@@ -19,7 +19,10 @@ async fn build_session() -> (ApiClient, u64, String) {
         .join("Library/Application Support/net.tnrd.modkistmkii/modio-auth.json");
     let store: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&store).expect("read auth store")).unwrap();
-    let token = store["accessToken"].as_str().expect("accessToken").to_string();
+    let token = store["accessToken"]
+        .as_str()
+        .expect("accessToken")
+        .to_string();
 
     let client = ApiClient::new(api_key, Some(game_id), None, false).expect("client");
 
@@ -122,7 +125,11 @@ async fn diagnose_startup_burst_then_subscribe() {
             .await
             .expect("deps");
     }
-    eprintln!("game-key burst: {} get_mod + {} deps", mod_ids.len(), mod_ids.len());
+    eprintln!(
+        "game-key burst: {} get_mod + {} deps",
+        mod_ids.len(),
+        mod_ids.len()
+    );
 
     fetch_subscribed_paged(&client, &token, game_id).await;
     try_subscribe(&client, &token, game_id, ModId(3_454_919)).await;

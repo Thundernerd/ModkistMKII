@@ -7,17 +7,22 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::app_settings::auto_update_mods_enabled;
-use crate::mod_ids::{FileId, ModId};
 use crate::bepinex::has_bepinex_structure;
-use crate::game_path::game_directory;
 use crate::fs_move::copy_dir_recursive;
+use crate::game_path::game_directory;
 use crate::game_process::{ensure_game_not_running, is_zeepkist_running};
 use crate::mod_download::download_modfile;
 use crate::mod_folder::{
     install_folder_name, is_legacy_install_folder_name, parse_install_folder_name,
     rename_install_folder,
 };
+use crate::mod_ids::{FileId, ModId};
 use crate::modio_api::{is_mod_archived, ModObject, Modfile};
+use crate::modio_client::{
+    caller_log_level, fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch,
+    fetch_subscribed_mod_ids, format_api_error, modfile_version_label, subscribe_to_mod,
+    unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
+};
 use crate::profiles::{
     active_profile_info, active_profile_install_blocked, active_profile_is_custom,
     active_profile_is_user, directory_has_any_file, profile_archives_root,
@@ -30,11 +35,6 @@ use crate::subscription_sync_settings::{
     is_dependency_sync_failure, list_failed_sync_mods, read_failed_sync_mod_ids,
     read_ignored_sync_mod_ids, read_pending_unsubscribe_mod_ids, record_failed_sync_mod,
     remove_pending_unsubscribe_mod, remove_sync_mod_tracking, FailedSyncModList,
-};
-use crate::modio_client::{
-    caller_log_level, fetch_mod_dependency_ids, fetch_mod_object, fetch_mod_outcomes_batch,
-    fetch_subscribed_mod_ids, format_api_error, modfile_version_label, subscribe_to_mod,
-    unsubscribe_from_mod, with_rate_limit_retry, ModFetchOutcome, ModioError, ModioState,
 };
 use crate::zip_extract::{install_downloaded_mod, sanitize_filename};
 
@@ -90,7 +90,9 @@ pub struct ModInstallState {
 #[derive(Debug, Clone)]
 enum InstallStatus {
     NotInstalled,
-    UpToDate { file_id: FileId },
+    UpToDate {
+        file_id: FileId,
+    },
     UpdateAvailable {
         installed_file_id: FileId,
         latest_file_id: FileId,
@@ -231,13 +233,18 @@ fn ensure_install_prerequisites(game_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<InstalledModRecord>, String> {
+fn scan_kind_directory(
+    kind_dir: &Path,
+    kind: InstalledModKind,
+) -> Result<Vec<InstalledModRecord>, String> {
     if !kind_dir.is_dir() {
         return Ok(Vec::new());
     }
 
     let mut records = Vec::new();
-    for entry in fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))? {
+    for entry in
+        fs::read_dir(kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
+    {
         let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
         let file_type = entry
             .file_type()
@@ -256,7 +263,10 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
             // BepInEx loads plugins from hidden subfolders too, so one that
             // can't be removed would load a duplicate copy of the mod: that
             // is worth a report.
-            log::info!("Removing mod install folder left by an earlier run: {}", entry.path().display());
+            log::info!(
+                "Removing mod install folder left by an earlier run: {}",
+                entry.path().display()
+            );
             if let Err(error) = remove_dir_all_with_retry(&entry.path()) {
                 log::warn!(
                     "Did not remove mod install folder left by an earlier run {}: {error}",
@@ -291,7 +301,10 @@ fn scan_kind_directory(kind_dir: &Path, kind: InstalledModKind) -> Result<Vec<In
 }
 
 fn scan_installed_mods(game_dir: &Path) -> Result<Vec<InstalledModRecord>, String> {
-    let mut records = scan_kind_directory(&kind_root_dir(game_dir, InstalledModKind::Plugin), InstalledModKind::Plugin)?;
+    let mut records = scan_kind_directory(
+        &kind_root_dir(game_dir, InstalledModKind::Plugin),
+        InstalledModKind::Plugin,
+    )?;
     records.extend(scan_kind_directory(
         &kind_root_dir(game_dir, InstalledModKind::Blueprint),
         InstalledModKind::Blueprint,
@@ -299,7 +312,10 @@ fn scan_installed_mods(game_dir: &Path) -> Result<Vec<InstalledModRecord>, Strin
     Ok(records)
 }
 
-fn find_installed_record(records: &[InstalledModRecord], mod_id: ModId) -> Option<&InstalledModRecord> {
+fn find_installed_record(
+    records: &[InstalledModRecord],
+    mod_id: ModId,
+) -> Option<&InstalledModRecord> {
     records.iter().find(|record| record.mod_id == mod_id)
 }
 
@@ -332,7 +348,9 @@ fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
     for attempt in 1..=REMOVE_DIR_RETRY_ATTEMPTS {
         match fs::remove_dir_all(path) {
             Ok(()) => return Ok(()),
-            Err(error) if attempt < REMOVE_DIR_RETRY_ATTEMPTS && error.raw_os_error() == Some(145) => {
+            Err(error)
+                if attempt < REMOVE_DIR_RETRY_ATTEMPTS && error.raw_os_error() == Some(145) =>
+            {
                 log::debug!(
                     "Removing {} hit a transient \"directory not empty\" error, retrying ({attempt}/{REMOVE_DIR_RETRY_ATTEMPTS})",
                     path.display()
@@ -355,7 +373,9 @@ fn installed_mod_folders(game_dir: &Path, mod_id: ModId) -> Result<Vec<(PathBuf,
             continue;
         }
 
-        for entry in fs::read_dir(&kind_dir).map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))? {
+        for entry in fs::read_dir(&kind_dir)
+            .map_err(|e| format!("Did not read {}: {e}", kind_dir.display()))?
+        {
             let entry = entry.map_err(|e| format!("Did not read directory entry: {e}"))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -378,8 +398,12 @@ fn installed_mod_folders(game_dir: &Path, mod_id: ModId) -> Result<Vec<(PathBuf,
 
 fn remove_installed_mod_folders(game_dir: &Path, mod_id: ModId) -> Result<(), String> {
     for (path, _) in installed_mod_folders(game_dir, mod_id)? {
-        remove_dir_all_with_retry(&path)
-            .map_err(|e| format!("Did not remove installed mod folder {}: {e}", path.display()))?;
+        remove_dir_all_with_retry(&path).map_err(|e| {
+            format!(
+                "Did not remove installed mod folder {}: {e}",
+                path.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -398,10 +422,17 @@ struct MovedAsideFolder {
 /// DLL) leaves an incomplete install behind. A rename either happens or
 /// doesn't: if one fails, the folders already moved are renamed back and the
 /// previous version stays installed (issue #129).
-async fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: ModId) -> Result<Vec<MovedAsideFolder>, String> {
+async fn move_installed_mod_folders_aside(
+    game_dir: &Path,
+    mod_id: ModId,
+) -> Result<Vec<MovedAsideFolder>, String> {
     let mut moved = Vec::new();
     for (original, file_id) in installed_mod_folders(game_dir, mod_id)? {
-        let aside = original.with_file_name(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
+        let aside = original.with_file_name(process_scoped_dir_name(
+            REPLACED_DIR_PREFIX,
+            mod_id,
+            file_id,
+        ));
         if let Err(error) = rename_with_transient_lock_retry(&original, &aside).await {
             let message = format!(
                 "Did not move installed mod folder {} aside to replace it: {error}",
@@ -533,7 +564,11 @@ async fn normalize_legacy_install_folder_names(
             continue;
         };
 
-        if mod_.modfile.as_ref().is_some_and(|file| file.id != folder.file_id) {
+        if mod_
+            .modfile
+            .as_ref()
+            .is_some_and(|file| file.id != folder.file_id)
+        {
             continue;
         }
 
@@ -562,10 +597,9 @@ async fn prepare_installed_records(
         let outcome = outcomes
             .get(&record.mod_id)
             .cloned()
-            .unwrap_or(ModFetchOutcome::Failed(format!(
-                "Mod {} was not returned by the batch fetch",
-                record.mod_id
-            ).into()));
+            .unwrap_or(ModFetchOutcome::Failed(
+                format!("Mod {} was not returned by the batch fetch", record.mod_id).into(),
+            ));
         match outcome {
             ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
                 if game_running {
@@ -646,7 +680,10 @@ async fn refresh_dependency_map(
 }
 
 async fn fetch_dependency_ids(state: &ModioState, mod_id: ModId) -> Result<Vec<ModId>, ModioError> {
-    with_rate_limit_retry(None, || async { fetch_mod_dependency_ids(state, mod_id).await }).await
+    with_rate_limit_retry(None, || async {
+        fetch_mod_dependency_ids(state, mod_id).await
+    })
+    .await
 }
 
 /// Dependencies of `mod_id`, or none when they did not load. `session` is
@@ -673,7 +710,10 @@ async fn fetch_dependency_ids_or_empty(
     }
 }
 
-async fn collect_install_order(state: &ModioState, root_mod_id: ModId) -> Result<Vec<ModId>, String> {
+async fn collect_install_order(
+    state: &ModioState,
+    root_mod_id: ModId,
+) -> Result<Vec<ModId>, String> {
     let mut nodes = HashSet::new();
     let mut stack = vec![root_mod_id];
     let mut dep_map: HashMap<ModId, Vec<ModId>> = HashMap::new();
@@ -700,7 +740,8 @@ async fn collect_install_order(state: &ModioState, root_mod_id: ModId) -> Result
 
     for &mod_id in &nodes {
         let deps = dep_map.get(&mod_id).cloned().unwrap_or_default();
-        let relevant_deps: Vec<ModId> = deps.into_iter().filter(|dep| nodes.contains(dep)).collect();
+        let relevant_deps: Vec<ModId> =
+            deps.into_iter().filter(|dep| nodes.contains(dep)).collect();
         in_degree.insert(mod_id, relevant_deps.len());
         for dep in relevant_deps {
             dependents.entry(dep).or_default().push(mod_id);
@@ -796,7 +837,10 @@ async fn uninstall_blockers_for(
 }
 
 fn format_uninstall_blocked_error(blockers: &[UninstallBlocker]) -> String {
-    let names: Vec<&str> = blockers.iter().map(|blocker| blocker.name.as_str()).collect();
+    let names: Vec<&str> = blockers
+        .iter()
+        .map(|blocker| blocker.name.as_str())
+        .collect();
     match names.as_slice() {
         [name] => format!("Uninstall blocked: required by {name}."),
         _ => format!("Uninstall blocked: required by {}.", names.join(", ")),
@@ -852,9 +896,9 @@ async fn install_state_for_mod(
 
     let status = match (installed, latest_file_id) {
         (None, _) => InstallStatus::NotInstalled,
-        (Some(record), Some(latest)) if record.file_id == latest => InstallStatus::UpToDate {
-            file_id: latest,
-        },
+        (Some(record), Some(latest)) if record.file_id == latest => {
+            InstallStatus::UpToDate { file_id: latest }
+        }
         (Some(record), Some(latest)) => InstallStatus::UpdateAvailable {
             installed_file_id: record.file_id,
             latest_file_id: latest,
@@ -870,10 +914,7 @@ async fn install_state_for_mod(
         uninstall_blockers_for(state, mod_id, &installed_ids, dependency_map).await?
     };
 
-    Ok(status.into_response(
-        installed.map(|record| record.kind),
-        blockers,
-    ))
+    Ok(status.into_response(installed.map(|record| record.kind), blockers))
 }
 
 fn maybe_clear_failed_sync_mod(app: &AppHandle, mod_id: ModId) {
@@ -895,14 +936,8 @@ async fn reconcile_failed_sync_mods(
         if state.session_rejected(session) {
             return;
         }
-        let Ok(install_state) = install_state_for_mod(
-            state,
-            mod_id,
-            records,
-            dependency_map,
-            mods_by_id,
-        )
-        .await
+        let Ok(install_state) =
+            install_state_for_mod(state, mod_id, records, dependency_map, mods_by_id).await
         else {
             continue;
         };
@@ -929,7 +964,10 @@ fn staging_dir_name(mod_id: ModId, file_id: FileId) -> String {
 fn process_scoped_dir_name(prefix: &str, mod_id: ModId, file_id: FileId) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{prefix}{mod_id}-{file_id}-{}-{counter}", std::process::id())
+    format!(
+        "{prefix}{mod_id}-{file_id}-{}-{counter}",
+        std::process::id()
+    )
 }
 
 /// A staging or moved-aside dir created by a different (earlier) process
@@ -969,7 +1007,10 @@ fn remove_staging_dir(staging_dir: &Path) {
     }
 }
 
-async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -> Result<(), String> {
+async fn move_staged_install_into_place(
+    staging_dir: &Path,
+    target_dir: &Path,
+) -> Result<(), String> {
     let mut rename_error = match fs::rename(staging_dir, target_dir) {
         Ok(()) => return Ok(()),
         Err(error) => error,
@@ -1074,8 +1115,13 @@ async fn install_single_mod(
     // removes it (issue #80).
     let temp_dir = std::env::temp_dir().join("modkist-mod-install");
     fs::create_dir_all(&temp_dir).map_err(|e| format!("Did not create temp directory: {e}"))?;
-    let download_path = temp_dir.join(format!("{mod_id}_{file_id}_{}", sanitize_filename(&filename)));
-    if let Err(message) = download_modfile(state, &download_url, &download_path, Some(expected_size)).await {
+    let download_path = temp_dir.join(format!(
+        "{mod_id}_{file_id}_{}",
+        sanitize_filename(&filename)
+    ));
+    if let Err(message) =
+        download_modfile(state, &download_url, &download_path, Some(expected_size)).await
+    {
         let _ = fs::remove_file(&download_path);
         return Err(message.into());
     }
@@ -1147,7 +1193,10 @@ async fn ensure_subscription_sync_may_continue(
 
 /// Stops a run of per-mod mod.io reads once mod.io rejected `session`, the
 /// token the run started with (see [`ModioState::session_rejected`]).
-fn ensure_session_not_rejected(state: &ModioState, session: Option<&str>) -> Result<(), ModioError> {
+fn ensure_session_not_rejected(
+    state: &ModioState,
+    session: Option<&str>,
+) -> Result<(), ModioError> {
     if state.session_rejected(session) {
         return Err(ModioError::session_rejected());
     }
@@ -1304,9 +1353,7 @@ fn record_install_target_failure(
         // Deleted/hidden mods are an expected outcome, not an app failure; keep
         // them out of Sentry. The failure is still recorded for the UI below.
         if message.contains("no longer available") {
-            log::info!(
-                "Skipped mod {target_mod_id} during subscription sync: {message}"
-            );
+            log::info!("Skipped mod {target_mod_id} during subscription sync: {message}");
         } else if category == "install_state" {
             log::log!(
                 error.log_level(log::Level::Error),
@@ -1399,7 +1446,11 @@ async fn install_targets_internal(
     log::debug!(
         "Installing {} mod target(s){}",
         order.len(),
-        if subscription_sync { " (subscription sync)" } else { "" }
+        if subscription_sync {
+            " (subscription sync)"
+        } else {
+            ""
+        }
     );
 
     for target_mod_id in order {
@@ -1412,31 +1463,26 @@ async fn install_targets_internal(
             subscribe_to_mod(state, target_mod_id).await?;
         }
 
-        let state_for_mod = match install_state_for_mod(
-            state,
-            target_mod_id,
-            records,
-            dependency_map,
-            mods_by_id,
-        )
-        .await
-        {
-            Ok(state_for_mod) => state_for_mod,
-            Err(error) => {
-                if record_install_target_failure(
-                    sync_failure_context,
-                    subscription_sync,
-                    root_mod_id,
-                    target_mod_id,
-                    "install_state",
-                    &error,
-                    &mut failed_dependencies,
-                ) {
-                    continue;
+        let state_for_mod =
+            match install_state_for_mod(state, target_mod_id, records, dependency_map, mods_by_id)
+                .await
+            {
+                Ok(state_for_mod) => state_for_mod,
+                Err(error) => {
+                    if record_install_target_failure(
+                        sync_failure_context,
+                        subscription_sync,
+                        root_mod_id,
+                        target_mod_id,
+                        "install_state",
+                        &error,
+                        &mut failed_dependencies,
+                    ) {
+                        continue;
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            };
         let target_file_id = file_override
             .filter(|file_override| file_override.mod_id == target_mod_id)
             .map(|file_override| file_override.file_id);
@@ -1534,8 +1580,7 @@ async fn install_mod_internal(
         targets: &sync_failure_targets,
     };
 
-    let should_subscribe =
-        state.auth_status().logged_in && active_profile_is_user(app, state)?;
+    let should_subscribe = state.auth_status().logged_in && active_profile_is_user(app, state)?;
     if should_subscribe {
         let subscribed = fetch_subscribed_mod_ids(state).await?;
         if subscribed.binary_search(&mod_id).is_ok() {
@@ -1634,7 +1679,8 @@ async fn sync_subscribed_mods_inner(
     match run_subscription_sync(app, state).await {
         // mod.io rejected the session mid-sync: the user is already signed out
         // and asked to sign in again, so this is a cancelled sync, not a failure.
-        Err(error) if error.credentials_rejected() && state.session_rejected(session.as_deref()) =>
+        Err(error)
+            if error.credentials_rejected() && state.session_rejected(session.as_deref()) =>
         {
             log::info!("Subscription sync cancelled: mod.io rejected the session ({error})");
             Err(SUBSCRIPTION_SYNC_CANCELLED.into())
@@ -1670,7 +1716,9 @@ async fn run_subscription_sync(
     }
 
     if active_profile_install_blocked(app, state)? {
-        return Err("Mod install is disabled for the Vanilla profile. Switch to another profile.".into());
+        return Err(
+            "Mod install is disabled for the Vanilla profile. Switch to another profile.".into(),
+        );
     }
 
     ensure_game_not_running()?;
@@ -1827,8 +1875,8 @@ async fn run_subscription_sync(
     state.persist_cache(app);
     match result {
         Ok(mut summary) => {
-            summary.dependency_failure_count = count_dependency_sync_failures(app)
-                .max(summary.failed_dependencies.len() as u32);
+            summary.dependency_failure_count =
+                count_dependency_sync_failures(app).max(summary.failed_dependencies.len() as u32);
             if !summary.installed.is_empty() {
                 let _ = sync_active_profile_manifest_from_live(app, state, &game_dir);
             }
@@ -1853,7 +1901,9 @@ async fn reconcile_custom_profile_mods_inner(
     }
 
     if active_profile_install_blocked(app, state)? {
-        return Err("Mod install is disabled for the Vanilla profile. Switch to another profile.".into());
+        return Err(
+            "Mod install is disabled for the Vanilla profile. Switch to another profile.".into(),
+        );
     }
 
     ensure_game_not_running()?;
@@ -1872,13 +1922,13 @@ async fn reconcile_custom_profile_mods_inner(
     let manifest_outcomes = fetch_mod_outcomes_batch(state, &manifest_ids).await;
 
     for entry in &manifest.mods {
-        let outcome = manifest_outcomes
-            .get(&entry.mod_id)
-            .cloned()
-            .unwrap_or(ModFetchOutcome::Failed(format!(
-                "Mod {} was not returned by the batch fetch",
-                entry.mod_id
-            ).into()));
+        let outcome =
+            manifest_outcomes
+                .get(&entry.mod_id)
+                .cloned()
+                .unwrap_or(ModFetchOutcome::Failed(
+                    format!("Mod {} was not returned by the batch fetch", entry.mod_id).into(),
+                ));
         match outcome {
             ModFetchOutcome::Found(mod_) if is_mod_archived(&mod_) => {
                 remove_inaccessible_mod_local(
@@ -2007,9 +2057,8 @@ async fn refresh_installed_mods_inner(
     state: &ModioState,
     sync_subscriptions: bool,
 ) -> Result<Vec<InstalledModEntry>, String> {
-    let should_sync = sync_subscriptions
-        && state.auth_status().logged_in
-        && active_profile_is_user(app, state)?;
+    let should_sync =
+        sync_subscriptions && state.auth_status().logged_in && active_profile_is_user(app, state)?;
     if should_sync {
         sync_subscribed_mods_inner(app, state).await?;
     }
@@ -2128,12 +2177,10 @@ async fn list_installed_mods_inner(
         let latest_version = latest_file.map(modfile_version_label);
         let update_available = latest_file_id.is_some_and(|latest| latest != record.file_id);
         let version =
-            resolve_installed_file_version(state, record.mod_id, record.file_id, latest_file)
-                .await;
+            resolve_installed_file_version(state, record.mod_id, record.file_id, latest_file).await;
         let tags: Vec<String> = mod_.tags.iter().map(|tag| tag.name.clone()).collect();
         let blockers =
-            uninstall_blockers_for(state, record.mod_id, &installed_ids, &dependency_map)
-                .await?;
+            uninstall_blockers_for(state, record.mod_id, &installed_ids, &dependency_map).await?;
 
         entries.push(InstalledModEntry {
             mod_id: record.mod_id,
@@ -2183,7 +2230,9 @@ pub async fn install_mod(
     log::info!("install_mod command: mod {mod_id}");
     if active_profile_install_blocked(&app, &state)? {
         log::warn!("install_mod blocked: vanilla profile active");
-        return Err("Mod install is disabled for the Vanilla profile. Switch to another profile.".into());
+        return Err(
+            "Mod install is disabled for the Vanilla profile. Switch to another profile.".into(),
+        );
     }
 
     ensure_game_not_running()?;
@@ -2278,8 +2327,7 @@ pub async fn uninstall_mod(
         return Err(format_uninstall_blocked_error(&blockers));
     }
 
-    let should_unsubscribe =
-        state.auth_status().logged_in && active_profile_is_user(&app, &state)?;
+    let should_unsubscribe = state.auth_status().logged_in && active_profile_is_user(&app, &state)?;
     if should_unsubscribe {
         log::debug!("Account profile active — unsubscribing from mod {mod_id}");
         unsubscribe_or_schedule(&app, &state, mod_id).await;
@@ -2407,8 +2455,12 @@ mod tests {
         let ours = staging_dir_name(ModId(3285481), FileId(8137916));
         assert!(!is_stale_install_scratch_dir_name(&ours));
         let other_pid = std::process::id().wrapping_add(1);
-        assert!(is_stale_install_scratch_dir_name(&format!(".modkist-installing-1-2-{other_pid}-0")));
-        assert!(!is_stale_install_scratch_dir_name("3285481_8137916_Random Track Mode"));
+        assert!(is_stale_install_scratch_dir_name(&format!(
+            ".modkist-installing-1-2-{other_pid}-0"
+        )));
+        assert!(!is_stale_install_scratch_dir_name(
+            "3285481_8137916_Random Track Mode"
+        ));
     }
 
     /// A staging folder with a mod in it, named as an earlier process would.
@@ -2445,7 +2497,11 @@ mod tests {
         let stale = kind_dir.join(format!(".modkist-replaced-1-2-{other_pid}-0"));
         fs::create_dir_all(&stale).unwrap();
         fs::write(stale.join("mod.dll"), b"test").unwrap();
-        let live = kind_dir.join(process_scoped_dir_name(REPLACED_DIR_PREFIX, ModId(1), FileId(2)));
+        let live = kind_dir.join(process_scoped_dir_name(
+            REPLACED_DIR_PREFIX,
+            ModId(1),
+            FileId(2),
+        ));
         fs::create_dir_all(&live).unwrap();
         fs::write(live.join("mod.dll"), b"test").unwrap();
 
@@ -2491,7 +2547,10 @@ mod tests {
         mod_id: ModId,
         kind_dir: &Path,
         download: (u16, &'static str),
-    ) -> (crate::modio_api::auth_tests::FakeModio, std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>) {
+    ) -> (
+        crate::modio_api::auth_tests::FakeModio,
+        std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>,
+    ) {
         use std::sync::{Arc, Mutex};
 
         let seen_during_download = Arc::new(Mutex::new(None));
@@ -2523,12 +2582,16 @@ mod tests {
     async fn no_staging_folder_exists_while_the_mod_file_downloads() {
         let temp = tempfile::tempdir().expect("tempdir");
         let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
-        let (server, seen_during_download) = fake_modio_serving_mod(ModId(80_001), &kind_dir, (404, ""));
+        let (server, seen_during_download) =
+            fake_modio_serving_mod(ModId(80_001), &kind_dir, (404, ""));
         let state = ModioState::signed_out_against(server.base_url.clone());
 
         let result = install_single_mod(&state, temp.path(), ModId(80_001), None).await;
 
-        assert!(result.is_err(), "the download is refused, so the install fails");
+        assert!(
+            result.is_err(),
+            "the download is refused, so the install fails"
+        );
         assert_eq!(
             *seen_during_download.lock().unwrap(),
             Some(Vec::<String>::new()),
@@ -2544,7 +2607,9 @@ mod tests {
         let (server, _) = fake_modio_serving_mod(ModId(80_002), &kind_dir, (200, "MZ-plugin"));
         let state = ModioState::signed_out_against(server.base_url.clone());
 
-        install_single_mod(&state, temp.path(), ModId(80_002), None).await.unwrap();
+        install_single_mod(&state, temp.path(), ModId(80_002), None)
+            .await
+            .unwrap();
 
         let records = scan_installed_mods(temp.path()).unwrap();
         assert_eq!(records.len(), 1);
@@ -2568,7 +2633,10 @@ mod tests {
 
         let result = install_single_mod(&state, temp.path(), ModId(117_001), None).await;
 
-        assert!(result.is_err(), "the download is refused, so the update fails");
+        assert!(
+            result.is_err(),
+            "the download is refused, so the update fails"
+        );
         assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
     }
 
@@ -2585,7 +2653,10 @@ mod tests {
 
         let result = install_single_mod(&state, temp.path(), ModId(117_003), None).await;
 
-        assert!(result.is_err(), "the archive is corrupt, so the update fails");
+        assert!(
+            result.is_err(),
+            "the archive is corrupt, so the update fails"
+        );
         assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
         assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
     }
@@ -2600,12 +2671,17 @@ mod tests {
         let (server, _) = fake_modio_serving_mod(ModId(117_002), &kind_dir, (200, "MZ-new"));
         let state = ModioState::signed_out_against(server.base_url.clone());
 
-        install_single_mod(&state, temp.path(), ModId(117_002), None).await.unwrap();
+        install_single_mod(&state, temp.path(), ModId(117_002), None)
+            .await
+            .unwrap();
 
         let records = scan_installed_mods(temp.path()).unwrap();
         assert_eq!(records.len(), 1, "{records:#?}");
         assert_eq!(records[0].folder_name, "117002_2_Mod");
-        assert_eq!(fs::read(kind_dir.join("117002_2_Mod/mod.dll")).unwrap(), b"MZ-new");
+        assert_eq!(
+            fs::read(kind_dir.join("117002_2_Mod/mod.dll")).unwrap(),
+            b"MZ-new"
+        );
         // Nothing else either: BepInEx would also load an old copy from a
         // hidden folder (issue #129).
         let mut entries: Vec<String> = fs::read_dir(&kind_dir)
@@ -2644,9 +2720,15 @@ mod tests {
         let result = install_single_mod(&state, temp.path(), ModId(129_001), None).await;
 
         fs::set_permissions(&blueprint_dir, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(result.is_err(), "the previous folder can't be moved, so the update fails");
+        assert!(
+            result.is_err(),
+            "the previous folder can't be moved, so the update fails"
+        );
         assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
-        assert_eq!(fs::read(locked.join("mod.zeeplevel")).unwrap(), b"old-level");
+        assert_eq!(
+            fs::read(locked.join("mod.zeeplevel")).unwrap(),
+            b"old-level"
+        );
         // Nothing else either: no new version, staging folder, or folder
         // left moved aside.
         let entries: Vec<String> = fs::read_dir(&kind_dir)
@@ -2672,7 +2754,10 @@ mod tests {
 
         let result = install_single_mod(&state, temp.path(), ModId(129_002), None).await;
 
-        assert!(result.is_err(), "the new version can't be moved into place, so the update fails");
+        assert!(
+            result.is_err(),
+            "the new version can't be moved into place, so the update fails"
+        );
         assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
     }
 
@@ -2703,9 +2788,8 @@ mod tests {
         assert!(staging.exists());
         let reports = sentry_reports();
         assert!(
-            reports
-                .iter()
-                .any(|report| report.starts_with("WARN") && report.contains(&staging.display().to_string())),
+            reports.iter().any(|report| report.starts_with("WARN")
+                && report.contains(&staging.display().to_string())),
             "{reports:#?}"
         );
     }
@@ -2718,7 +2802,9 @@ mod tests {
         fs::create_dir_all(staging.join("nested")).unwrap();
         fs::write(staging.join("nested/mod.dll"), b"test").unwrap();
 
-        move_staged_install_into_place(&staging, &target).await.unwrap();
+        move_staged_install_into_place(&staging, &target)
+            .await
+            .unwrap();
 
         assert!(!staging.exists());
         assert!(target.join("nested/mod.dll").is_file());

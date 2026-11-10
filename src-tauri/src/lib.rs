@@ -38,22 +38,22 @@ mod app_settings;
 mod app_updater;
 mod auth;
 mod bepinex;
+mod fs_link;
+mod fs_move;
 mod game_detect;
 mod game_launch;
 mod game_path;
 mod game_process;
-mod fs_link;
-mod fs_move;
 mod launch_options;
 mod logging;
 mod mod_api_cache;
 mod mod_download;
 mod mod_folder;
 pub mod mod_ids;
-mod modio_env;
 mod mod_install;
 pub mod modio_api;
 mod modio_client;
+mod modio_env;
 mod profiles;
 mod sentry_init;
 mod sideload;
@@ -81,6 +81,10 @@ use mod_install::{
     list_installed_mod_records, list_installed_mods, refresh_installed_mods, sync_subscribed_mods,
     uninstall_mod, unsubscribe_failed_sync_mod,
 };
+use modio_client::{
+    clear_mod_api_cache, get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies,
+    list_mod_files, list_mods, list_user_mods, modio_status, rate_mod, ModioState,
+};
 use profiles::{
     create_profile, delete_profile, get_active_profile, list_profiles,
     logout_requires_profile_selection_command, rename_profile, switch_profile,
@@ -91,10 +95,6 @@ use sideload::{
 };
 use subscription_sync_settings::{
     list_failed_sync_mods_command, set_failed_sync_mod_ignored, FailedSyncState,
-};
-use modio_client::{
-    clear_mod_api_cache, get_mod, get_mod_tag_options, get_user_profile, list_mod_dependencies,
-    list_mod_files, list_mods, list_user_mods, modio_status, rate_mod, ModioState,
 };
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;

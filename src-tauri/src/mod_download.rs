@@ -85,10 +85,7 @@ async fn write_download_response(
     }
 
     if bytes.is_empty() {
-        return Err(
-            "The downloaded mod file is empty. Sign in to mod.io. Then try again."
-                .into(),
-        );
+        return Err("The downloaded mod file is empty. Sign in to mod.io. Then try again.".into());
     }
 
     if let Some(expected) = expected_size {
@@ -122,7 +119,10 @@ mod tests {
     #[test]
     fn appends_api_key_query_param() {
         assert_eq!(
-            with_api_key("https://g-1.modapi.io/v1/games/1/mods/2/files/3/download", "abc"),
+            with_api_key(
+                "https://g-1.modapi.io/v1/games/1/mods/2/files/3/download",
+                "abc"
+            ),
             "https://g-1.modapi.io/v1/games/1/mods/2/files/3/download?api_key=abc"
         );
         assert_eq!(

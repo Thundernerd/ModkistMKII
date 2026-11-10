@@ -6,12 +6,8 @@ use std::path::Path;
 /// The source path is canonicalized to an absolute path so the link stays valid
 /// even if the working directory changes.
 pub fn symlink_file(source: &Path, dest: &Path) -> Result<(), String> {
-    let absolute_source = fs::canonicalize(source).map_err(|e| {
-        format!(
-            "Did not resolve source path {}: {e}",
-            source.display()
-        )
-    })?;
+    let absolute_source = fs::canonicalize(source)
+        .map_err(|e| format!("Did not resolve source path {}: {e}", source.display()))?;
 
     #[cfg(unix)]
     {

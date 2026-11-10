@@ -2,7 +2,9 @@ use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
 use flexi_logger::writers::LogWriter;
-use flexi_logger::{Cleanup, Criterion, DeferredNow, Duplicate, ErrorChannel, FileSpec, Logger, Naming};
+use flexi_logger::{
+    Cleanup, Criterion, DeferredNow, Duplicate, ErrorChannel, FileSpec, Logger, Naming,
+};
 use log::Record;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
@@ -93,8 +95,12 @@ fn log_directory(app: &AppHandle) -> Result<PathBuf, String> {
 /// Filter via `RUST_LOG`, e.g. `RUST_LOG=modkistmkii_lib=debug` for verbose output.
 pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
     let log_dir = log_directory(app)?;
-    std::fs::create_dir_all(&log_dir)
-        .map_err(|error| format!("Did not create log directory {}: {error}", log_dir.display()))?;
+    std::fs::create_dir_all(&log_dir).map_err(|error| {
+        format!(
+            "Did not create log directory {}: {error}",
+            log_dir.display()
+        )
+    })?;
 
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
 
@@ -103,7 +109,8 @@ pub fn init(app: &AppHandle) -> Result<PathBuf, String> {
         .basename(LOG_BASENAME)
         .suffix("log");
 
-    let mut logger = Logger::try_with_str(filter).map_err(|error| format!("Invalid log filter: {error}"))?;
+    let mut logger =
+        Logger::try_with_str(filter).map_err(|error| format!("Invalid log filter: {error}"))?;
 
     logger = if sentry_init::is_enabled() {
         logger.log_to_file_and_writer(file_spec, Box::new(SentryLogWriter))
@@ -226,9 +233,21 @@ mod tests {
 
     #[test]
     fn app_warnings_and_errors_are_still_reported_to_sentry() {
-        let warn = record_level(log::Level::Warn, "modkistmkii_lib::app_updater", "App update check failed");
-        let error = record_level(log::Level::Error, "modkistmkii_lib::modio_api", "mod.io API error");
-        let info = record_level(log::Level::Info, "modkistmkii_lib::app_updater", "App update check failed");
+        let warn = record_level(
+            log::Level::Warn,
+            "modkistmkii_lib::app_updater",
+            "App update check failed",
+        );
+        let error = record_level(
+            log::Level::Error,
+            "modkistmkii_lib::modio_api",
+            "mod.io API error",
+        );
+        let info = record_level(
+            log::Level::Info,
+            "modkistmkii_lib::app_updater",
+            "App update check failed",
+        );
 
         assert_eq!(warn, Some(sentry::Level::Warning));
         assert_eq!(error, Some(sentry::Level::Error));

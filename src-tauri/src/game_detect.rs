@@ -6,9 +6,9 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use crate::game_path::{game_executable_in_dir, validate_directory, STEAM_APP_ID};
 #[cfg(unix)]
 use crate::game_path::is_game_executable_name;
+use crate::game_path::{game_executable_in_dir, validate_directory, STEAM_APP_ID};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

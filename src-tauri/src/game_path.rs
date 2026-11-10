@@ -65,9 +65,7 @@ pub(crate) fn validate_directory(path: &Path) -> Result<(), String> {
     }
 
     if game_executable_in_dir(path).is_none() {
-        return Err(format!(
-            "Did not find {GAME_EXECUTABLE} in this directory."
-        ));
+        return Err(format!("Did not find {GAME_EXECUTABLE} in this directory."));
     }
 
     Ok(())
@@ -83,8 +81,8 @@ pub struct GamePathStatus {
 }
 
 pub fn game_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    let path = read_stored_path(app)?
-        .ok_or_else(|| "Game directory is not configured.".to_string())?;
+    let path =
+        read_stored_path(app)?.ok_or_else(|| "Game directory is not configured.".to_string())?;
     let path_buf = PathBuf::from(&path);
     validate_directory(&path_buf)?;
     Ok(path_buf)

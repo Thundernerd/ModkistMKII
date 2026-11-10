@@ -199,7 +199,11 @@ mod tests {
         // Offline: nothing listens on port 1.
         capture_reports();
 
-        log_check_failure(&UpdaterError::ReleaseNotFound, "http://127.0.0.1:1/latest.json").await;
+        log_check_failure(
+            &UpdaterError::ReleaseNotFound,
+            "http://127.0.0.1:1/latest.json",
+        )
+        .await;
 
         assert_eq!(sentry_reports(), Vec::<String>::new());
     }
@@ -213,8 +217,16 @@ mod tests {
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-        assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
-        assert!(reports[0].contains("404"), "report should name the status: {}", reports[0]);
+        assert!(
+            reports[0].starts_with("WARN: App update check failed"),
+            "{}",
+            reports[0]
+        );
+        assert!(
+            reports[0].contains("404"),
+            "report should name the status: {}",
+            reports[0]
+        );
     }
 
     /// A `reqwest::Error` of the major tauri-plugin-updater uses. Building a real
@@ -256,19 +268,35 @@ mod tests {
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-        assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
+        assert!(
+            reports[0].starts_with("WARN: App update check failed"),
+            "{}",
+            reports[0]
+        );
     }
 
     #[tokio::test]
     async fn a_manifest_without_this_platform_is_still_reported_to_sentry() {
         capture_reports();
 
-        log_check_failure(&UpdaterError::TargetNotFound("windows-x86_64".into()), UNUSED_ENDPOINT).await;
+        log_check_failure(
+            &UpdaterError::TargetNotFound("windows-x86_64".into()),
+            UNUSED_ENDPOINT,
+        )
+        .await;
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-        assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
-        assert!(reports[0].contains("windows-x86_64"), "report should name the platform: {}", reports[0]);
+        assert!(
+            reports[0].starts_with("WARN: App update check failed"),
+            "{}",
+            reports[0]
+        );
+        assert!(
+            reports[0].contains("windows-x86_64"),
+            "report should name the platform: {}",
+            reports[0]
+        );
     }
 
     #[test]
@@ -282,7 +310,11 @@ mod tests {
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-        assert!(reports[0].contains("404"), "report should name the status: {}", reports[0]);
+        assert!(
+            reports[0].contains("404"),
+            "report should name the status: {}",
+            reports[0]
+        );
     }
 
     #[test]
@@ -293,7 +325,11 @@ mod tests {
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-        assert!(reports[0].starts_with("WARN: App update install failed"), "{}", reports[0]);
+        assert!(
+            reports[0].starts_with("WARN: App update install failed"),
+            "{}",
+            reports[0]
+        );
     }
 
     #[test]

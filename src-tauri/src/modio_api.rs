@@ -146,7 +146,8 @@ impl ApiError {
     /// True when mod.io reports, via `error_ref`, that the requested mod or file
     /// no longer exists.
     fn is_known_not_found(&self) -> bool {
-        self.error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref))
+        self.error_ref
+            .is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref))
     }
 
     pub fn is_conflict(&self) -> bool {
@@ -171,7 +172,8 @@ impl ApiError {
     /// no-op (already in the desired state), not a real failure. Logged at
     /// debug level instead of error so they don't get reported as crashes.
     fn is_expected_no_op(&self) -> bool {
-        self.error_ref.is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref))
+        self.error_ref
+            .is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref))
     }
 
     pub fn is_unauthorized(&self) -> bool {
@@ -182,14 +184,18 @@ impl ApiError {
     /// `API_KEY_REFUSED_ERROR_REFS`), as opposed to a session token.
     pub fn is_api_key_refused(&self) -> bool {
         self.is_unauthorized()
-            && self.error_ref.is_some_and(|error_ref| API_KEY_REFUSED_ERROR_REFS.contains(&error_ref))
+            && self
+                .error_ref
+                .is_some_and(|error_ref| API_KEY_REFUSED_ERROR_REFS.contains(&error_ref))
     }
 
     /// True when mod.io refused an email security code the user entered (see
     /// `SECURITY_CODE_REFUSED_ERROR_REFS`).
     fn is_security_code_refused(&self) -> bool {
         self.is_unauthorized()
-            && self.error_ref.is_some_and(|error_ref| SECURITY_CODE_REFUSED_ERROR_REFS.contains(&error_ref))
+            && self
+                .error_ref
+                .is_some_and(|error_ref| SECURITY_CODE_REFUSED_ERROR_REFS.contains(&error_ref))
     }
 
     pub fn is_forbidden(&self) -> bool {
@@ -197,7 +203,8 @@ impl ApiError {
     }
 
     pub fn is_server_error(&self) -> bool {
-        self.status.is_some_and(|status| (500..600).contains(&status))
+        self.status
+            .is_some_and(|status| (500..600).contains(&status))
     }
 
     /// True when a failed bearer retry should be treated as "this mod is gone
@@ -240,9 +247,9 @@ impl ApiError {
                 "mod.io API error: {method} {route} returned status={status}, error_ref={:?}",
                 self.error_ref
             ),
-            None => log::error!(
-                "mod.io API error: {method} {route} failed without a readable response"
-            ),
+            None => {
+                log::error!("mod.io API error: {method} {route} failed without a readable response")
+            }
         }
     }
 
@@ -251,7 +258,10 @@ impl ApiError {
     /// to report.
     fn unreadable_response(self, method: &str, path: &str, on_failure: OnFailure) -> Self {
         if on_failure.is_quiet() {
-            log::debug!("mod.io <- {method} {path} unreadable response: {}", self.message);
+            log::debug!(
+                "mod.io <- {method} {path} unreadable response: {}",
+                self.message
+            );
             self
         } else {
             self.report(method, path)
@@ -800,10 +810,16 @@ impl ApiClient {
             let e = e.without_url();
             let error = ApiError::transport(format!("mod.io request failed: {e}"));
             if on_failure.is_quiet() {
-                log::debug!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
+                log::debug!(
+                    "mod.io <- {method_label} {path} transport error: {}",
+                    error_chain(&e)
+                );
                 error
             } else {
-                log::info!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
+                log::info!(
+                    "mod.io <- {method_label} {path} transport error: {}",
+                    error_chain(&e)
+                );
                 error.report(&method_label, path)
             }
         })?;
@@ -863,7 +879,8 @@ impl ApiClient {
         // If mod.io rate limited us, pause all subsequent requests for the
         // advised window instead of immediately retrying into the same block.
         if error.is_rate_limited() {
-            self.respect_retry_after(error.retry_after_secs.unwrap_or(DEFAULT_RETRY_AFTER_SECS)).await;
+            self.respect_retry_after(error.retry_after_secs.unwrap_or(DEFAULT_RETRY_AFTER_SECS))
+                .await;
         }
         // An expired or revoked token is routine: the hook signs the user out
         // and the UI prompts them to log in again, so keep it out of Sentry.
@@ -878,7 +895,9 @@ impl ApiClient {
         if token_rejected {
             error.log_token_rejected(path);
         } else if token.is_none() && error.is_api_key_refused() {
-            let first = !self.api_key_rejection_reported.swap(true, Ordering::Relaxed);
+            let first = !self
+                .api_key_rejection_reported
+                .swap(true, Ordering::Relaxed);
             error.log_api_key_rejected(path, first);
             error.reported = first;
             if let Some(hook) = self.hooks.on_api_key_refused.as_ref().filter(|_| first) {
@@ -892,7 +911,10 @@ impl ApiClient {
             error.log_expected(path);
         } else if error.is_known_not_found() {
             error.log_not_found(path);
-        } else if error.status.is_some_and(|status| on_failure.expects(status)) {
+        } else if error
+            .status
+            .is_some_and(|status| on_failure.expects(status))
+        {
             error.log_forbidden(path);
         } else {
             error = error.report(&method_label, path);
@@ -926,8 +948,11 @@ impl ApiClient {
             .send_raw(method, path, token, query, form, on_failure)
             .await?;
         serde_json::from_slice(&bytes).map_err(|e| {
-            ApiError::transport(format!("Did not parse mod.io response: {e}"))
-                .unreadable_response(&method_label, path, on_failure)
+            ApiError::transport(format!("Did not parse mod.io response: {e}")).unreadable_response(
+                &method_label,
+                path,
+                on_failure,
+            )
         })
     }
 
@@ -988,7 +1013,8 @@ impl ApiClient {
                     // to the token-rejected hook (sign out + re-login prompt).
                     log::info!(
                         "{context} not accessible with api key ({}); session token rejected ({})",
-                        api_key_error.message, bearer_error.message
+                        api_key_error.message,
+                        bearer_error.message
                     );
                 } else {
                     // 429/5xx/transport on the bearer retry is a genuinely
@@ -1064,7 +1090,14 @@ impl ApiClient {
                     // itself logs a single, appropriately-leveled summary once
                     // it knows whether this becomes a real failure or just an
                     // inaccessible mod.
-                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, OnFailure::Quiet)
+                    self.send_with_options(
+                        reqwest::Method::GET,
+                        &path,
+                        token,
+                        &[],
+                        None,
+                        OnFailure::Quiet,
+                    )
                 })
                 .await
             }
@@ -1127,7 +1160,14 @@ impl ApiClient {
                     // itself logs a single, appropriately-leveled summary once
                     // it knows whether this becomes a real failure or just an
                     // inaccessible mod.
-                    self.send_with_options(reqwest::Method::GET, &path, token, &[], None, OnFailure::Quiet)
+                    self.send_with_options(
+                        reqwest::Method::GET,
+                        &path,
+                        token,
+                        &[],
+                        None,
+                        OnFailure::Quiet,
+                    )
                 })
                 .await
             }
@@ -1140,7 +1180,8 @@ impl ApiClient {
         game_id: u64,
     ) -> Result<ListResponse<GameTagOptionObject>, ApiError> {
         let path = format!("/games/{game_id}/tags");
-        self.send(reqwest::Method::GET, &path, None, &[], None).await
+        self.send(reqwest::Method::GET, &path, None, &[], None)
+            .await
     }
 
     pub async fn get_user_subscriptions(
@@ -1151,8 +1192,14 @@ impl ApiClient {
     ) -> Result<ListResponse<ModObject>, ApiError> {
         let mut params = query.to_params();
         params.push(("game_id".to_string(), game_id.to_string()));
-        self.send(reqwest::Method::GET, "/me/subscribed", Some(token), &params, None)
-            .await
+        self.send(
+            reqwest::Method::GET,
+            "/me/subscribed",
+            Some(token),
+            &params,
+            None,
+        )
+        .await
     }
 
     pub async fn get_user_mods(
@@ -1172,9 +1219,15 @@ impl ApiClient {
             .await
     }
 
-    pub async fn subscribe(&self, token: &str, game_id: u64, mod_id: ModId) -> Result<(), ApiError> {
+    pub async fn subscribe(
+        &self,
+        token: &str,
+        game_id: u64,
+        mod_id: ModId,
+    ) -> Result<(), ApiError> {
         let path = format!("/games/{game_id}/mods/{mod_id}/subscribe");
-        self.send_empty(reqwest::Method::POST, &path, Some(token)).await
+        self.send_empty(reqwest::Method::POST, &path, Some(token))
+            .await
     }
 
     pub async fn unsubscribe(
@@ -1201,13 +1254,7 @@ impl ApiClient {
         let rating_value = rating.to_string();
         let form = [("rating", rating_value.as_str())];
         match self
-            .send::<Message>(
-                reqwest::Method::POST,
-                &path,
-                Some(token),
-                &[],
-                Some(&form),
-            )
+            .send::<Message>(reqwest::Method::POST, &path, Some(token), &[], Some(&form))
             .await
         {
             Ok(message) => Ok(message),
@@ -1364,14 +1411,15 @@ fn route_template(path: &str) -> String {
     let mut previous = "";
     path.split('/')
         .map(|segment| {
-            let templated = if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
-                match previous.strip_suffix('s') {
-                    Some(singular) if !singular.is_empty() => format!("{{{singular}}}"),
-                    _ => "{id}".to_string(),
-                }
-            } else {
-                segment.to_string()
-            };
+            let templated =
+                if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
+                    match previous.strip_suffix('s') {
+                        Some(singular) if !singular.is_empty() => format!("{{{singular}}}"),
+                        _ => "{id}".to_string(),
+                    }
+                } else {
+                    segment.to_string()
+                };
             previous = segment;
             templated
         })
@@ -1403,13 +1451,16 @@ fn log_response(
         .get("x-modio-error-ref")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u32>().ok());
-    let expected_no_op = error_ref.is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref));
+    let expected_no_op =
+        error_ref.is_some_and(|error_ref| EXPECTED_NO_OP_ERROR_REFS.contains(&error_ref));
 
-    let known_not_found = error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
+    let known_not_found =
+        error_ref.is_some_and(|error_ref| NOT_FOUND_ERROR_REFS.contains(&error_ref));
 
     let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
     let expected = on_failure.expects(status.as_u16());
-    let expected_outcome = status.is_success() || known_not_found || handled_unauthorized || expected;
+    let expected_outcome =
+        status.is_success() || known_not_found || handled_unauthorized || expected;
 
     // Never above info: the header dump differs on every response (`date`,
     // `cf-ray`, cookies) and is only for the log file. `send_raw` reports a
@@ -1627,21 +1678,31 @@ mod tests {
 
     #[test]
     fn bearer_retry_does_not_mark_transient_or_session_errors() {
-        assert!(!test_error(Some(500))
-            .mark_inaccessible_after_bearer_retry()
-            .inaccessible_after_bearer_retry);
-        assert!(!test_error(Some(503))
-            .mark_inaccessible_after_bearer_retry()
-            .inaccessible_after_bearer_retry);
-        assert!(!test_error(Some(429))
-            .mark_inaccessible_after_bearer_retry()
-            .inaccessible_after_bearer_retry);
-        assert!(!test_error(Some(401))
-            .mark_inaccessible_after_bearer_retry()
-            .inaccessible_after_bearer_retry);
-        assert!(!test_error(None)
-            .mark_inaccessible_after_bearer_retry()
-            .inaccessible_after_bearer_retry);
+        assert!(
+            !test_error(Some(500))
+                .mark_inaccessible_after_bearer_retry()
+                .inaccessible_after_bearer_retry
+        );
+        assert!(
+            !test_error(Some(503))
+                .mark_inaccessible_after_bearer_retry()
+                .inaccessible_after_bearer_retry
+        );
+        assert!(
+            !test_error(Some(429))
+                .mark_inaccessible_after_bearer_retry()
+                .inaccessible_after_bearer_retry
+        );
+        assert!(
+            !test_error(Some(401))
+                .mark_inaccessible_after_bearer_retry()
+                .inaccessible_after_bearer_retry
+        );
+        assert!(
+            !test_error(None)
+                .mark_inaccessible_after_bearer_retry()
+                .inaccessible_after_bearer_retry
+        );
 
         let rate_limited = ApiError {
             status: Some(400),
@@ -1651,8 +1712,10 @@ mod tests {
             inaccessible_after_bearer_retry: false,
             reported: false,
         };
-        assert!(!rate_limited
-            .mark_inaccessible_after_bearer_retry()
-            .inaccessible_after_bearer_retry);
+        assert!(
+            !rate_limited
+                .mark_inaccessible_after_bearer_retry()
+                .inaccessible_after_bearer_retry
+        );
     }
 }

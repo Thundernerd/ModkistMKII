@@ -30,8 +30,7 @@ pub fn sanitize_filename(filename: &str) -> String {
 }
 
 pub fn looks_like_zip(path: &Path) -> Result<bool, String> {
-    let mut file =
-        File::open(path).map_err(|e| format!("Did not open downloaded file: {e}"))?;
+    let mut file = File::open(path).map_err(|e| format!("Did not open downloaded file: {e}"))?;
     let mut header = [0u8; 4];
     let read = file
         .read(&mut header)
@@ -41,14 +40,10 @@ pub fn looks_like_zip(path: &Path) -> Result<bool, String> {
 }
 
 pub fn validate_download_payload(path: &Path) -> Result<(), String> {
-    let metadata =
-        fs::metadata(path).map_err(|e| format!("Did not read downloaded file: {e}"))?;
+    let metadata = fs::metadata(path).map_err(|e| format!("Did not read downloaded file: {e}"))?;
 
     if metadata.len() == 0 {
-        return Err(
-            "The downloaded mod file is empty. Sign in to mod.io. Then try again."
-                .into(),
-        );
+        return Err("The downloaded mod file is empty. Sign in to mod.io. Then try again.".into());
     }
 
     let bytes = fs::read(path).map_err(|e| format!("Did not read downloaded file: {e}"))?;
@@ -70,8 +65,8 @@ pub fn validate_download_payload(path: &Path) -> Result<(), String> {
 }
 
 pub fn extract_zip(archive_path: &Path, destination: &Path) -> Result<(), String> {
-    let file = File::open(archive_path)
-        .map_err(|e| format!("Did not open downloaded archive: {e}"))?;
+    let file =
+        File::open(archive_path).map_err(|e| format!("Did not open downloaded archive: {e}"))?;
     let mut archive =
         ZipArchive::new(file).map_err(|e| {
             let size = fs::metadata(archive_path)
@@ -125,20 +120,12 @@ pub fn install_downloaded_mod(
     let filename = sanitize_filename(original_filename);
     let dest_path = safe_join(destination, &filename)?;
     if let Some(parent) = dest_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "Did not create parent directory {}: {e}",
-                parent.display()
-            )
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Did not create parent directory {}: {e}", parent.display()))?;
     }
 
-    fs::copy(download_path, &dest_path).map_err(|e| {
-        format!(
-            "Did not install mod file to {}: {e}",
-            dest_path.display()
-        )
-    })?;
+    fs::copy(download_path, &dest_path)
+        .map_err(|e| format!("Did not install mod file to {}: {e}", dest_path.display()))?;
 
     Ok(())
 }
