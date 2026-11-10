@@ -1,8 +1,9 @@
-//! What callers log when mod.io rejects our credentials mid-operation (issue
-//! #59). `ApiClient` already handles and reports a rejected session token or
-//! refused game API key once; the callers must not turn it into one Sentry
-//! report per mod. Runs the real callers against a local fake mod.io and
-//! captures the `warn`/`error` records `SentryLogWriter` would forward.
+//! What callers log when mod.io answers with an expected failure: rejected
+//! credentials mid-operation (issue #59), private mods while signed out (#68)
+//! and mod files the author deleted (#75). `ApiClient` already handles and
+//! reports these; the callers must not turn them into one Sentry report per
+//! mod. Runs the real callers against a local fake mod.io and captures the
+//! `warn`/`error` records `SentryLogWriter` would forward.
 
 use std::collections::HashSet;
 
@@ -369,6 +370,36 @@ fn picked_version_deleted(request: &Received) -> (u16, Option<u32>, String) {
     }
 }
 
+async fn install_picked_version(state: &ModioState, file_id: u64) -> Result<InstallModResult, ModioError> {
+    install_targets_internal(
+        None,
+        state,
+        Path::new("/nonexistent-game-dir"),
+        vec![100],
+        &mut Vec::new(),
+        &mut HashMap::new(),
+        false,
+        true,
+        Some((100, file_id)),
+        None,
+        None,
+        Some(100),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn installing_a_deleted_version_drops_the_stale_version_list() {
+    let server = FakeModio::start(picked_version_deleted);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+    state.store_latest_file_id(100, 8);
+    state.store_mod_files(100, Vec::new());
+
+    let _ = install_picked_version(&state, 7).await;
+
+    assert!(state.cached_mod_files(100).is_none(), "the versions list should be fetched again");
+}
+
 #[tokio::test]
 async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
     capture_reports();
@@ -376,21 +407,7 @@ async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
     let state = ModioState::signed_out_against(server.base_url.clone());
     state.store_latest_file_id(100, 8);
 
-    let result = install_targets_internal(
-        None,
-        &state,
-        Path::new("/nonexistent-game-dir"),
-        vec![100],
-        &mut Vec::new(),
-        &mut HashMap::new(),
-        false,
-        true,
-        Some((100, 7)),
-        None,
-        None,
-        Some(100),
-    )
-    .await;
+    let result = install_picked_version(&state, 7).await;
 
     assert_eq!(sentry_reports(), Vec::<String>::new());
     let Err(error) = result else {
