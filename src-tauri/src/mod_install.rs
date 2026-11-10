@@ -2393,6 +2393,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_extraction_during_an_update_keeps_the_previous_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("117003_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        // Starts like a zip archive but isn't one, so extraction fails.
+        let (server, _) = fake_modio_serving_mod(117_003, &kind_dir, (200, "PK-corrupt"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 117_003, None).await;
+
+        assert!(result.is_err(), "the archive is corrupt, so the update fails");
+        assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
+        assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
+    }
+
+    #[tokio::test]
     async fn a_successful_update_replaces_the_previous_version() {
         let temp = tempfile::tempdir().expect("tempdir");
         let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
