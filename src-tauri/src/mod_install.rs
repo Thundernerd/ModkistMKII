@@ -402,18 +402,21 @@ fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<
     for (original, file_id) in installed_mod_folders(game_dir, mod_id)? {
         let aside = original.with_file_name(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
         if let Err(error) = fs::rename(&original, &aside) {
-            restore_moved_aside_folders(&moved);
-            return Err(format!(
+            let message = format!(
                 "Did not move installed mod folder {} aside to replace it: {error}",
                 original.display()
-            ));
+            );
+            return Err(restore_moved_aside_folders(&moved, message));
         }
         moved.push(MovedAsideFolder { original, aside });
     }
     Ok(moved)
 }
 
-fn restore_moved_aside_folders(moved: &[MovedAsideFolder]) {
+/// Moves the folders an update moved aside back into place, after the update
+/// failed with `message`. Returns `message`, plus each folder that couldn't
+/// be moved back: the next launch deletes it as left over.
+fn restore_moved_aside_folders(moved: &[MovedAsideFolder], mut message: String) -> String {
     for folder in moved {
         if let Err(error) = fs::rename(&folder.aside, &folder.original) {
             log::warn!(
@@ -421,8 +424,13 @@ fn restore_moved_aside_folders(moved: &[MovedAsideFolder]) {
                 folder.aside.display(),
                 folder.original.display()
             );
+            message.push_str(&format!(
+                "; the previous version is left in {} ({error})",
+                folder.aside.display()
+            ));
         }
     }
+    message
 }
 
 /// Deletes the folders an update moved aside. One that can't be deleted is
@@ -1088,9 +1096,10 @@ async fn install_single_mod(
     // nothing stops a concurrent operation from recreating target_dir in
     // between, and rename() onto an existing non-empty directory fails.
     let _ = remove_dir_all_with_retry(&target_dir);
-    let moved_into_place = move_staged_install_into_place(&staging_dir, &target_dir).await;
+    if let Err(message) = move_staged_install_into_place(&staging_dir, &target_dir).await {
+        return Err(restore_moved_aside_folders(&moved_aside, message).into());
+    }
     remove_moved_aside_folders(&moved_aside);
-    moved_into_place?;
 
     state.invalidate_mod_cache(mod_id);
 
@@ -2593,6 +2602,26 @@ mod tests {
         assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
         assert_eq!(fs::read(locked.join("mod.zeeplevel")).unwrap(), b"old-level");
         assert!(!kind_dir.join("129001_2_Mod").exists());
+    }
+
+    /// The previous version is only deleted once the new one is in place.
+    #[tokio::test]
+    async fn an_update_that_cannot_move_the_new_version_into_place_keeps_the_previous_version() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("129002_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        // A file where the new version's folder goes: the folder can't be
+        // moved onto it.
+        fs::write(kind_dir.join("129002_2_Mod"), b"in the way").unwrap();
+        let (server, _) = fake_modio_serving_mod(129_002, &kind_dir, (200, "MZ-new"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 129_002, None).await;
+
+        assert!(result.is_err(), "the new version can't be moved into place, so the update fails");
+        assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
     }
 
     /// The next launch removes a leftover staging folder at info, so a staging
