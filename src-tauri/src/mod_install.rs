@@ -2260,38 +2260,50 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// A fake mod.io serving plugin `mod_id` with file 2 (`mod.dll`). The
+    /// download answers `download` and records the staging folders in
+    /// `kind_dir` at the moment it is requested. Tests running in parallel
+    /// need different mod ids: the download goes to a shared temp path.
+    fn fake_modio_serving_mod(
+        mod_id: u64,
+        kind_dir: &Path,
+        download: (u16, &'static str),
+    ) -> (crate::modio_api::auth_tests::FakeModio, std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>>) {
+        use std::sync::{Arc, Mutex};
+
+        let seen_during_download = Arc::new(Mutex::new(None));
+        let seen = seen_during_download.clone();
+        let observed_dir = kind_dir.to_path_buf();
+        let base_url = Arc::new(Mutex::new(String::new()));
+        let mod_url = base_url.clone();
+        let server = crate::modio_api::auth_tests::FakeModio::start(move |request| {
+            if request.path == "/download/mod.dll" {
+                *seen.lock().unwrap() = Some(staging_dirs_in(&observed_dir));
+                return (download.0, None, download.1.to_string());
+            }
+            let download_url = format!("{}/download/mod.dll", mod_url.lock().unwrap());
+            let body = format!(
+                r#"{{"id":{mod_id},"status":1,"name":"Mod","tags":[{{"name":"{PLUGIN_TAG}"}}],
+                    "modfile":{{"id":2,"filename":"mod.dll","filesize":{},"download":{{"binary_url":"{download_url}"}}}}}}"#,
+                download.1.len()
+            );
+            (200, None, body)
+        });
+        *base_url.lock().unwrap() = server.base_url.clone();
+        (server, seen_during_download)
+    }
+
     /// Closing the app mid-download, the slowest step of an install, must not
     /// leave a staging folder in the game's mods folder for the next launch
     /// to clean up (issue #80).
     #[tokio::test]
     async fn no_staging_folder_exists_while_the_mod_file_downloads() {
-        use std::sync::{Arc, Mutex};
-
-        use crate::modio_api::auth_tests::FakeModio;
-
         let temp = tempfile::tempdir().expect("tempdir");
         let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
-        let seen_during_download = Arc::new(Mutex::new(None));
-        let seen = seen_during_download.clone();
-        let observed_dir = kind_dir.clone();
-        let base_url = Arc::new(Mutex::new(String::new()));
-        let mod_url = base_url.clone();
-        let server = FakeModio::start(move |request| {
-            if request.path == "/download/1-2.zip" {
-                *seen.lock().unwrap() = Some(staging_dirs_in(&observed_dir));
-                return (404, None, String::new());
-            }
-            let download = format!("{}/download/1-2.zip", mod_url.lock().unwrap());
-            let body = format!(
-                r#"{{"id":1,"status":1,"name":"Mod","tags":[{{"name":"{PLUGIN_TAG}"}}],
-                    "modfile":{{"id":2,"filename":"1-2.zip","filesize":4,"download":{{"binary_url":"{download}"}}}}}}"#
-            );
-            (200, None, body)
-        });
-        *base_url.lock().unwrap() = server.base_url.clone();
+        let (server, seen_during_download) = fake_modio_serving_mod(80_001, &kind_dir, (404, ""));
         let state = ModioState::signed_out_against(server.base_url.clone());
 
-        let result = install_single_mod(&state, temp.path(), 1, None).await;
+        let result = install_single_mod(&state, temp.path(), 80_001, None).await;
 
         assert!(result.is_err(), "the download is refused, so the install fails");
         assert_eq!(
@@ -2299,6 +2311,22 @@ mod tests {
             Some(Vec::<String>::new()),
             "the mods folder should hold no staging folder while the file downloads"
         );
+        assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_downloaded_mod_is_installed_without_leaving_a_staging_folder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let (server, _) = fake_modio_serving_mod(80_002, &kind_dir, (200, "MZ-plugin"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        install_single_mod(&state, temp.path(), 80_002, None).await.unwrap();
+
+        let records = scan_installed_mods(temp.path()).unwrap();
+        assert_eq!(records.len(), 1);
+        let installed = kind_dir.join(&records[0].folder_name);
+        assert_eq!(fs::read(installed.join("mod.dll")).unwrap(), b"MZ-plugin");
         assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
     }
 
