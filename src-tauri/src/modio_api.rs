@@ -234,6 +234,29 @@ impl ApiError {
         }
     }
 
+    /// Reports a response whose body could not be read or parsed, like
+    /// [`Self::report`]: the details at info, a stable report at error.
+    fn report_unreadable_response(mut self, method: &str, path: &str) -> Self {
+        self.log_details(method, path);
+        log::error!(
+            "mod.io API error: {method} {} returned a response that could not be read",
+            route_template(path)
+        );
+        self.reported = true;
+        self
+    }
+
+    /// An unreadable response, reported unless the request is quiet: a quiet
+    /// read is retried, and the retry decides what to report.
+    fn unreadable_response(self, method: &str, path: &str, on_failure: OnFailure) -> Self {
+        if on_failure.is_quiet() {
+            log::debug!("mod.io <- {method} {path} unreadable response: {}", self.message);
+            self
+        } else {
+            self.report_unreadable_response(method, path)
+        }
+    }
+
     /// The details of a failed request, for the log file only.
     fn log_details(&self, method: &str, path: &str) {
         log::info!(
@@ -808,7 +831,10 @@ impl ApiClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| ApiError::transport(format!("Did not read mod.io response: {e}")))?
+            .map_err(|e| {
+                ApiError::transport(format!("Did not read mod.io response: {e}"))
+                    .unreadable_response(&method_label, path, on_failure)
+            })?
             .to_vec();
 
         if status.is_success() {
@@ -894,11 +920,13 @@ impl ApiClient {
         form: Option<&[(&str, &str)]>,
         on_failure: OnFailure,
     ) -> Result<T, ApiError> {
+        let method_label = method.as_str().to_string();
         let bytes = self
             .send_raw(method, path, token, query, form, on_failure)
             .await?;
         serde_json::from_slice(&bytes).map_err(|e| {
             ApiError::transport(format!("Did not parse mod.io response: {e}"))
+                .unreadable_response(&method_label, path, on_failure)
         })
     }
 

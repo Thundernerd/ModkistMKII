@@ -76,6 +76,26 @@ async fn a_server_error_while_mapping_dependencies_is_reported_once_per_read_wit
     assert!(!state.auth_status().session_expired);
 }
 
+/// mod.io answers 200 with a body that is not the JSON we expect.
+fn unparsable_body(_: &Received) -> (u16, Option<u32>, String) {
+    (200, None, "<html>Bad gateway</html>".to_string())
+}
+
+#[tokio::test]
+async fn an_unparsable_response_while_mapping_dependencies_is_reported_once_per_read_without_mod_ids() {
+    capture_reports();
+    let server = FakeModio::start(unparsable_body);
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let installed: HashSet<u64> = PRIVATE_MODS.into_iter().collect();
+    build_dependency_map(&state, &installed).await;
+
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), PRIVATE_MODS.len(), "one report per failed read: {reports:#?}");
+    assert!(reports.iter().all(|report| report == &reports[0]), "{reports:#?}");
+    assert!(!names_a_mod(&reports[0], &PRIVATE_MODS), "{reports:#?}");
+}
+
 const EMPTY_LIST: &str = r#"{"data":[],"result_total":0}"#;
 
 /// The `id-in` batch read only returns public mods, so every private mod falls
