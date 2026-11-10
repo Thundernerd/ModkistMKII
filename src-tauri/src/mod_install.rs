@@ -1118,6 +1118,13 @@ struct SyncFailureContext<'a> {
     dependency_to_subscribers: &'a HashMap<u64, HashSet<u64>>,
 }
 
+/// Clears a recorded sync failure for `mod_id`, if failures are being persisted.
+fn clear_sync_failure(sync_failure_context: Option<SyncFailureContext<'_>>, mod_id: u64) {
+    if let Some(SyncFailureContext { app, .. }) = sync_failure_context {
+        maybe_clear_failed_sync_mod(app, mod_id);
+    }
+}
+
 fn record_install_target_failure(
     sync_failure_context: Option<SyncFailureContext<'_>>,
     subscription_sync: bool,
@@ -1308,9 +1315,7 @@ async fn install_targets_internal(
             && (target_file_id.is_none() || state_for_mod.installed_file_id == target_file_id)
         {
             log::debug!("Mod {target_mod_id} already up to date, skipping");
-            if let Some(context) = sync_failure_context {
-                maybe_clear_failed_sync_mod(context.app, target_mod_id);
-            }
+            clear_sync_failure(sync_failure_context, target_mod_id);
             skipped.push(target_mod_id);
             continue;
         }
@@ -1319,9 +1324,7 @@ async fn install_targets_internal(
             log::debug!(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
-            if let Some(context) = sync_failure_context {
-                maybe_clear_failed_sync_mod(context.app, target_mod_id);
-            }
+            clear_sync_failure(sync_failure_context, target_mod_id);
             skipped.push(target_mod_id);
             continue;
         }
@@ -1336,9 +1339,7 @@ async fn install_targets_internal(
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
                 installed.push(target_mod_id);
-                if let Some(context) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(context.app, target_mod_id);
-                }
+                clear_sync_failure(sync_failure_context, target_mod_id);
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
             }
