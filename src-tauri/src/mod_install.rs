@@ -343,7 +343,9 @@ fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
     unreachable!("loop always returns on the final attempt")
 }
 
-fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
+/// The install folders of `mod_id`, in both the mods and blueprints folders.
+fn installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<Vec<PathBuf>, String> {
+    let mut folders = Vec::new();
     for kind in [InstalledModKind::Plugin, InstalledModKind::Blueprint] {
         let kind_dir = kind_root_dir(game_dir, kind);
         if !kind_dir.is_dir() {
@@ -363,14 +365,82 @@ fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), Stri
 
             let path = entry.path();
             if path.is_dir() {
-                remove_dir_all_with_retry(&path).map_err(|e| {
-                    format!("Did not remove installed mod folder {}: {e}", path.display())
-                })?;
+                folders.push(path);
             }
         }
     }
 
+    Ok(folders)
+}
+
+fn remove_installed_mod_folders(game_dir: &Path, mod_id: u64) -> Result<(), String> {
+    for path in installed_mod_folders(game_dir, mod_id)? {
+        remove_dir_all_with_retry(&path)
+            .map_err(|e| format!("Did not remove installed mod folder {}: {e}", path.display()))?;
+    }
+
     Ok(())
+}
+
+/// An install folder moved aside during an update: `original` is where it
+/// was installed, `aside` where it is now.
+struct MovedAsideFolder {
+    original: PathBuf,
+    aside: PathBuf,
+}
+
+/// Moves each install folder of `mod_id` aside, to a name that doesn't parse
+/// as an install folder. Deleting a folder removes its files one by one, so
+/// a delete that fails partway (on Windows, the running game locks the plugin
+/// DLL) leaves an incomplete install behind. A rename either happens or
+/// doesn't: if one fails, the folders already moved are renamed back and the
+/// previous version stays installed (issue #129).
+fn move_installed_mod_folders_aside(game_dir: &Path, mod_id: u64) -> Result<Vec<MovedAsideFolder>, String> {
+    let mut moved = Vec::new();
+    for original in installed_mod_folders(game_dir, mod_id)? {
+        let file_id = original
+            .file_name()
+            .and_then(|name| parse_install_folder_name(&name.to_string_lossy()))
+            .map_or(0, |(_, file_id)| file_id);
+        let parent = original.parent().unwrap_or(game_dir);
+        let aside = parent.join(process_scoped_dir_name(REPLACED_DIR_PREFIX, mod_id, file_id));
+        if let Err(error) = fs::rename(&original, &aside) {
+            restore_moved_aside_folders(&moved);
+            return Err(format!(
+                "Did not move installed mod folder {} aside to replace it: {error}",
+                original.display()
+            ));
+        }
+        moved.push(MovedAsideFolder { original, aside });
+    }
+    Ok(moved)
+}
+
+fn restore_moved_aside_folders(moved: &[MovedAsideFolder]) {
+    for folder in moved {
+        if let Err(error) = fs::rename(&folder.aside, &folder.original) {
+            log::warn!(
+                "Did not move installed mod folder {} back to {}: {error}",
+                folder.aside.display(),
+                folder.original.display()
+            );
+        }
+    }
+}
+
+/// Deletes the folders an update moved aside. One that can't be deleted is
+/// reported: BepInEx loads plugins from hidden subfolders too, so it would
+/// load the old version alongside the new one until the next launch removes
+/// it at info level.
+fn remove_moved_aside_folders(moved: &[MovedAsideFolder]) {
+    for folder in moved {
+        if let Err(error) = remove_dir_all_with_retry(&folder.aside) {
+            log::warn!(
+                "Did not remove replaced mod folder {}: {error}",
+                folder.aside.display()
+            );
+        }
+    }
 }
 
 async fn normalize_legacy_install_folder_names(
@@ -816,18 +886,26 @@ async fn reconcile_failed_sync_mods(
 }
 
 const STAGING_DIR_PREFIX: &str = ".modkist-installing-";
+/// Prefix of a previous install folder an update moved aside.
+const REPLACED_DIR_PREFIX: &str = ".modkist-replaced-";
 
 /// Unique, non-conflicting staging directory name for an in-progress install.
 /// Deliberately doesn't parse as a valid `mod_id_file_id[_name]` install
 /// folder name so scan_kind_directory's orphan-cleanup ignores it.
 fn staging_dir_name(mod_id: u64, file_id: u64) -> String {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{STAGING_DIR_PREFIX}{mod_id}-{file_id}-{}-{counter}", std::process::id())
+    process_scoped_dir_name(STAGING_DIR_PREFIX, mod_id, file_id)
 }
 
-/// A staging dir created by a different (earlier) process can't belong to an
-/// install that's still running, so it's safe to delete.
+/// `{prefix}{mod_id}-{file_id}-{pid}-{counter}`: unique within this process,
+/// and marks the directory as this process's until it exits.
+fn process_scoped_dir_name(prefix: &str, mod_id: u64, file_id: u64) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}{mod_id}-{file_id}-{}-{counter}", std::process::id())
+}
+
+/// A staging or moved-aside dir created by a different (earlier) process
+/// can't belong to an install that's still running, so it's safe to delete.
 fn is_stale_staging_dir_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix(STAGING_DIR_PREFIX) else {
         return false;
@@ -994,19 +1072,25 @@ async fn install_single_mod(
         return Err(message.into());
     }
 
-    // Remove the previous install only now that the new version is staged,
-    // so a failed download or extraction leaves it installed (issue #117).
-    if let Err(message) = remove_installed_mod_folders(game_dir, mod_id) {
-        remove_staging_dir(&staging_dir);
-        return Err(message.into());
-    }
+    // Move the previous install aside only now that the new version is
+    // staged, so a failed download or extraction leaves it installed (issue
+    // #117), and move instead of delete, so a folder that can't be removed
+    // isn't left half-deleted (issue #129).
+    let moved_aside = match move_installed_mod_folders_aside(game_dir, mod_id) {
+        Ok(moved_aside) => moved_aside,
+        Err(message) => {
+            remove_staging_dir(&staging_dir);
+            return Err(message.into());
+        }
+    };
 
-    // Defensive: remove_installed_mod_folders just cleared any prior install
-    // of this mod, but nothing stops a concurrent operation from recreating
-    // target_dir in between, and rename() onto an existing non-empty
-    // directory fails.
+    // Defensive: the previous install of this mod was just moved aside, but
+    // nothing stops a concurrent operation from recreating target_dir in
+    // between, and rename() onto an existing non-empty directory fails.
     let _ = remove_dir_all_with_retry(&target_dir);
-    move_staged_install_into_place(&staging_dir, &target_dir).await?;
+    let moved_into_place = move_staged_install_into_place(&staging_dir, &target_dir).await;
+    remove_moved_aside_folders(&moved_aside);
+    moved_into_place?;
 
     state.invalidate_mod_cache(mod_id);
 
@@ -2448,6 +2532,39 @@ mod tests {
         assert_eq!(records[0].folder_name, "117002_2_Mod");
         assert_eq!(fs::read(kind_dir.join("117002_2_Mod/mod.dll")).unwrap(), b"MZ-new");
         assert!(!previous.exists());
+    }
+
+    /// Deleting a folder removes its files one by one, so a folder that can't
+    /// be removed (on Windows: the running game locks the plugin DLL) used to
+    /// be left half-deleted, and a mod's other install folders already gone
+    /// (issue #129). The mod's second install folder here sits in a read-only
+    /// blueprints folder, which only blocks moving it: the plugin itself
+    /// still stages in the writable mods folder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_update_whose_previous_folder_cannot_be_moved_keeps_it_complete() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = kind_root_dir(temp.path(), InstalledModKind::Plugin);
+        let previous = kind_dir.join("129001_1_Mod");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("mod.dll"), b"MZ-old").unwrap();
+        let blueprint_dir = kind_root_dir(temp.path(), InstalledModKind::Blueprint);
+        let locked = blueprint_dir.join("129001_1_Mod");
+        fs::create_dir_all(&locked).unwrap();
+        fs::write(locked.join("mod.zeeplevel"), b"old-level").unwrap();
+        fs::set_permissions(&blueprint_dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let (server, _) = fake_modio_serving_mod(129_001, &kind_dir, (200, "MZ-new"));
+        let state = ModioState::signed_out_against(server.base_url.clone());
+
+        let result = install_single_mod(&state, temp.path(), 129_001, None).await;
+
+        fs::set_permissions(&blueprint_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err(), "the previous folder can't be moved, so the update fails");
+        assert_eq!(fs::read(previous.join("mod.dll")).unwrap(), b"MZ-old");
+        assert_eq!(fs::read(locked.join("mod.zeeplevel")).unwrap(), b"old-level");
+        assert!(!kind_dir.join("129001_2_Mod").exists());
     }
 
     /// The next launch removes a leftover staging folder at info, so a staging
