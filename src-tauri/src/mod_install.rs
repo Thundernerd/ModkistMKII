@@ -847,6 +847,19 @@ fn is_transient_lock_error(error: &std::io::Error) -> bool {
     matches!(error.raw_os_error(), Some(5) | Some(32))
 }
 
+/// Removes this run's staging directory after the install is done with it.
+/// A staging directory that can't be removed is reported: BepInEx would load
+/// the mod from it as well, and the next launch removes leftovers at info
+/// level only (issue #80).
+fn remove_staging_dir(staging_dir: &Path) {
+    if let Err(error) = remove_dir_all_with_retry(staging_dir) {
+        log::warn!(
+            "Did not remove mod install staging directory {}: {error}",
+            staging_dir.display()
+        );
+    }
+}
+
 async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -> Result<(), String> {
     let mut rename_error = match fs::rename(staging_dir, target_dir) {
         Ok(()) => return Ok(()),
@@ -880,18 +893,12 @@ async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -
         let _ = remove_dir_all_with_retry(target_dir);
         match copy_dir_recursive(staging_dir, target_dir) {
             Ok(()) => {
-                if let Err(error) = remove_dir_all_with_retry(staging_dir) {
-                    // scan_kind_directory removes it on the next launch.
-                    log::warn!(
-                        "Did not remove mod install staging directory {}: {error}",
-                        staging_dir.display()
-                    );
-                }
+                remove_staging_dir(staging_dir);
                 return Ok(());
             }
             Err(copy_error) => {
                 let _ = remove_dir_all_with_retry(target_dir);
-                let _ = remove_dir_all_with_retry(staging_dir);
+                remove_staging_dir(staging_dir);
                 return Err(format!(
                     "Did not move installed mod into place at {}: {rename_error} (copy fallback: {copy_error})",
                     target_dir.display()
@@ -900,7 +907,7 @@ async fn move_staged_install_into_place(staging_dir: &Path, target_dir: &Path) -
         }
     }
 
-    let _ = remove_dir_all_with_retry(staging_dir);
+    remove_staging_dir(staging_dir);
     Err(format!(
         "Did not move installed mod into place at {}: {rename_error}",
         target_dir.display()
@@ -975,7 +982,7 @@ async fn install_single_mod(
     let _ = fs::remove_file(&download_path);
 
     if let Err(message) = extract_result {
-        let _ = remove_dir_all_with_retry(&staging_dir);
+        remove_staging_dir(&staging_dir);
         return Err(message.into());
     }
 
@@ -2293,6 +2300,40 @@ mod tests {
             "the mods folder should hold no staging folder while the file downloads"
         );
         assert_eq!(staging_dirs_in(&kind_dir), Vec::<String>::new());
+    }
+
+    /// The next launch removes a leftover staging folder at info, so a staging
+    /// folder this run fails to remove must be reported now, or the leak
+    /// (BepInEx loading the mod twice) is never seen.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_staging_folder_left_by_a_failed_move_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::modio_api::auth_tests::{capture_reports, sentry_reports};
+
+        capture_reports();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let kind_dir = temp.path().join("Mods");
+        let staging = kind_dir.join(staging_dir_name(1, 2));
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("mod.dll"), b"test").unwrap();
+        // A read-only mods folder: neither the rename nor the staging
+        // folder's removal can succeed.
+        fs::set_permissions(&kind_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = move_staged_install_into_place(&staging, &kind_dir.join("1_2_Mod")).await;
+
+        fs::set_permissions(&kind_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err());
+        assert!(staging.exists());
+        let reports = sentry_reports();
+        assert!(
+            reports
+                .iter()
+                .any(|report| report.starts_with("WARN") && report.contains(&staging.display().to_string())),
+            "{reports:#?}"
+        );
     }
 
     #[tokio::test]
