@@ -343,3 +343,86 @@ async fn a_server_error_on_a_mod_read_without_a_token_is_still_reported_to_sentr
         assert!(reports.iter().any(|report| report.contains(path)), "no report for {path}: {reports:#?}");
     }
 }
+
+// --- A whole session refused by mod.io (issue #74) ---------------------------
+
+const EMAIL: &str = "player@example.com";
+
+/// mod.io refuses both credentials: the game api_key (11002) and the session
+/// token (11005), as in the sessions behind #74 and its duplicates.
+fn every_credential_refused(request: &Received) -> (u16, Option<u32>, String) {
+    if request.bearer {
+        token_expired()
+    } else {
+        api_key_invalid()
+    }
+}
+
+/// Every request from the #74 cluster, in the order a session makes them.
+async fn make_every_request_a_refused_session_made(client: &ApiClient) {
+    let query = ModQuery::default();
+    let _ = client.get_authenticated_user(TOKEN).await;
+    let _ = client.get_user_mods(TOKEN, GAME_ID, &query).await;
+    let _ = client.get_user_subscriptions(TOKEN, GAME_ID, &query).await;
+    let _ = client.get_mods(GAME_ID, &query).await;
+    let _ = client.get_game_tags(GAME_ID).await;
+    for mod_id in [2400035, 6315836, 3137985] {
+        let _ = client.get_mod(GAME_ID, mod_id, Some(TOKEN)).await;
+        let _ = client.get_mod_dependencies(GAME_ID, mod_id, Some(TOKEN)).await;
+    }
+    let _ = client.request_email_code(EMAIL).await;
+}
+
+#[tokio::test]
+async fn a_session_refused_on_every_request_is_reported_to_sentry_once() {
+    capture_reports();
+    let server = FakeModio::start(every_credential_refused);
+    let (client, rejected) = server.client();
+
+    make_every_request_a_refused_session_made(&client).await;
+
+    assert_eq!(*rejected.lock().unwrap(), vec![TOKEN.to_string()], "the token should be rejected once");
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "expected one report for the whole session, got {reports:#?}");
+    assert!(reports[0].contains("game API key refused"), "the one report should be the API key: {}", reports[0]);
+}
+
+/// Sentry groups message events by their text, so the report for a refused
+/// API key must not depend on which request happened to be refused first.
+#[tokio::test]
+async fn a_refused_api_key_is_one_sentry_issue_whichever_request_is_refused_first() {
+    let server = FakeModio::start(|_| api_key_invalid());
+
+    capture_reports();
+    let (first_run, _) = server.client();
+    let _ = first_run.get_game_tags(GAME_ID).await;
+    let tags_first = sentry_reports();
+
+    capture_reports();
+    let (second_run, _) = server.client();
+    let _ = second_run.request_email_code(EMAIL).await;
+    let email_first = sentry_reports();
+
+    assert_eq!(tags_first.len(), 1, "{tags_first:#?}");
+    assert_eq!(tags_first, email_first, "both runs should file the same Sentry issue");
+}
+
+#[tokio::test]
+async fn a_refused_api_key_is_one_sentry_issue_however_mod_io_words_it() {
+    capture_reports();
+    let server = FakeModio::start(|_| api_key_invalid());
+    let reworded = FakeModio::start(|_| {
+        (401, Some(API_KEY_INVALID_ERROR_REF), error_body(API_KEY_INVALID_ERROR_REF, "The api_key you supplied is not valid."))
+    });
+
+    let (first_run, _) = server.client();
+    let _ = first_run.get_game_tags(GAME_ID).await;
+    let original = sentry_reports();
+
+    capture_reports();
+    let (second_run, _) = reworded.client();
+    let _ = second_run.get_game_tags(GAME_ID).await;
+
+    assert_eq!(original.len(), 1, "{original:#?}");
+    assert_eq!(original, sentry_reports(), "a reworded refusal should file the same Sentry issue");
+}
