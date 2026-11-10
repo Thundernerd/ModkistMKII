@@ -252,6 +252,24 @@ impl ModioState {
         }
     }
 
+    pub(crate) fn cached_mod_file_deleted(&self, mod_id: u64, file_id: u64) -> bool {
+        let hit = self
+            .api_cache
+            .lock()
+            .ok()
+            .is_some_and(|cache| cache.is_mod_file_deleted(mod_id, file_id));
+        if hit {
+            log::info!("Cache hit: mod {mod_id} file {file_id} deleted on mod.io");
+        }
+        hit
+    }
+
+    pub(crate) fn mark_mod_file_deleted(&self, mod_id: u64, file_id: u64) {
+        if let Ok(mut cache) = self.api_cache.lock() {
+            cache.mark_mod_file_deleted(mod_id, file_id);
+        }
+    }
+
     pub(crate) fn cached_dependency_fetch_failed(&self, mod_id: u64) -> bool {
         let hit = self
             .api_cache
@@ -652,12 +670,14 @@ fn level_unless_already_handled(already_handled: bool, level: log::Level) -> log
 /// reports those once, so callers log them at info instead of warn/error,
 /// which `SentryLogWriter` would forward to Sentry once per mod. The same goes
 /// for a private mod read while signed out (HTTP 403): the message already asks
-/// the user to sign in.
+/// the user to sign in, and for a picked version whose file the author
+/// deleted (HTTP 404): the message already tells the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModioError {
     pub message: String,
     pub credentials_rejected: bool,
     sign_in_required: bool,
+    modfile_deleted: bool,
 }
 
 impl ModioError {
@@ -667,6 +687,18 @@ impl ModioError {
             message: format_api_error_logged_in(error, logged_in),
             credentials_rejected,
             sign_in_required: false,
+            modfile_deleted: false,
+        }
+    }
+
+    /// The version the user picked is gone: its author deleted or replaced
+    /// the file on mod.io.
+    pub(crate) fn modfile_deleted(mod_name: &str) -> Self {
+        Self {
+            modfile_deleted: true,
+            ..Self::from(format!(
+                "This version of {mod_name} is no longer on mod.io. Its author deleted or replaced it. Pick another version, or install the latest one."
+            ))
         }
     }
 
@@ -681,6 +713,11 @@ impl ModioError {
         }
     }
 
+    /// True when the picked version's file was deleted on mod.io.
+    pub(crate) fn is_modfile_deleted(&self) -> bool {
+        self.modfile_deleted
+    }
+
     /// The failure of a read skipped because mod.io already rejected the
     /// session it would have used.
     pub(crate) fn session_rejected() -> Self {
@@ -688,13 +725,18 @@ impl ModioError {
             message: "Your mod.io session has expired. Sign in again.".to_string(),
             credentials_rejected: true,
             sign_in_required: false,
+            modfile_deleted: false,
         }
     }
 
     /// `level` for an ordinary failure; info when mod.io rejected our
-    /// credentials or the user must sign in to read the mod.
+    /// credentials, the user must sign in to read the mod, or the picked
+    /// version was deleted.
     pub(crate) fn log_level(&self, level: log::Level) -> log::Level {
-        level_unless_already_handled(self.credentials_rejected || self.sign_in_required, level)
+        level_unless_already_handled(
+            self.credentials_rejected || self.sign_in_required || self.modfile_deleted,
+            level,
+        )
     }
 }
 
@@ -710,6 +752,7 @@ impl From<String> for ModioError {
             message,
             credentials_rejected: false,
             sign_in_required: false,
+            modfile_deleted: false,
         }
     }
 }
