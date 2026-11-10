@@ -1,8 +1,8 @@
 //! What callers log when mod.io answers with an expected failure: rejected
-//! credentials mid-operation (issue #59), private mods while signed out (#68)
-//! mod files the author deleted (#75) and rate limits (#138). `ApiClient` already handles and
-//! reports these; the callers must not turn them into one Sentry report per
-//! mod. Runs the real callers against a local fake mod.io and captures the
+//! credentials mid-operation (issue #59), private mods while signed out (#68),
+//! mod files the author deleted (#75) and rate limits (#138). `ApiClient`
+//! already handles and reports these; the callers must not turn them into one
+//! Sentry report per mod, or add a second report beside `ApiClient`'s. Runs the real callers against a local fake mod.io and captures the
 //! `warn`/`error` records `SentryLogWriter` would forward.
 
 use std::collections::HashSet;
