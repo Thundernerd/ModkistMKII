@@ -2556,7 +2556,14 @@ mod tests {
         assert_eq!(records.len(), 1, "{records:#?}");
         assert_eq!(records[0].folder_name, "117002_2_Mod");
         assert_eq!(fs::read(kind_dir.join("117002_2_Mod/mod.dll")).unwrap(), b"MZ-new");
-        assert!(!previous.exists());
+        // Nothing else either: BepInEx would also load an old copy from a
+        // hidden folder (issue #129).
+        let mut entries: Vec<String> = fs::read_dir(&kind_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, vec!["117002_2_Mod".to_string()]);
     }
 
     /// Deleting a folder removes its files one by one, so a folder that can't
