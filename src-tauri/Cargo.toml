@@ -42,6 +42,8 @@ tauri-plugin-process = "2"
 
 [dev-dependencies]
 tempfile = "3"
+# `start_paused` tests skip the 61 s mod.io rate-limit wait.
+tokio = { version = "1", features = ["test-util"] }
 # The reqwest major tauri-plugin-updater uses, to build its `Error::Reqwest` in tests.
 updater-reqwest = { package = "reqwest", version = "0.13", default-features = false }
 

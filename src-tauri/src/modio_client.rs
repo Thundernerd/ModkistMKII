@@ -1082,7 +1082,7 @@ where
     match operation().await {
         Ok(value) => Ok(value),
         Err(error) if is_rate_limited_message(&error.to_string()) => {
-            log::warn!("mod.io rate limit hit, retrying in 61 seconds: {error}");
+            log::info!("mod.io rate limit hit, retrying in 61 seconds: {error}");
             tokio::time::sleep(Duration::from_secs(61)).await;
             operation().await
         }

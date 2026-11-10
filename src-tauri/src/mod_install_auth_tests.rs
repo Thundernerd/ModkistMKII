@@ -448,3 +448,37 @@ async fn installing_a_deleted_version_tells_the_user_and_is_not_reported() {
     assert_eq!(error.log_level(log::Level::Error), log::Level::Info);
     assert!(error.is_modfile_deleted(), "a restored profile falls back on this");
 }
+
+// --- Rate-limited reads (issue #138) ------------------------------------------
+
+/// mod.io `error_ref` for "too many requests in a short period".
+const RATE_LIMITED_ERROR_REF: u32 = 11008;
+
+/// The first request is rate limited (429); every later one succeeds.
+fn rate_limited_once() -> impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static {
+    let limited = std::sync::atomic::AtomicBool::new(false);
+    move |_| {
+        if limited.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            (200, None, EMPTY_LIST.to_string())
+        } else {
+            let body = error_body(RATE_LIMITED_ERROR_REF, "Too many requests.").replace("401", "429");
+            (429, Some(RATE_LIMITED_ERROR_REF), body)
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rate_limited_dependency_read_is_reported_once_by_the_api_client() {
+    capture_reports();
+    let server = FakeModio::start(rate_limited_once());
+    let state = ModioState::signed_out_against(server.base_url.clone());
+
+    let installed: HashSet<u64> = [100].into_iter().collect();
+    let map = build_dependency_map(&state, &installed).await;
+
+    let reports = sentry_reports();
+    assert_eq!(reports.len(), 1, "one report per rate-limited read: {reports:#?}");
+    assert!(reports[0].contains("mod.io API error: GET /games/{game}/mods/{mod}/dependencies returned status=429"), "{reports:#?}");
+    assert_eq!(server.received().len(), 2, "the read should be retried: {:#?}", server.received());
+    assert_eq!(map.get(&100), Some(&Vec::new()));
+}
