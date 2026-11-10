@@ -1223,11 +1223,22 @@ fn record_sync_failure_for_target(
     }
 }
 
-type SyncFailureContext<'a> = (
-    &'a AppHandle,
-    &'a HashSet<u64>,
-    &'a HashMap<u64, HashSet<u64>>,
-);
+/// Where `install_targets_internal` records and clears per-mod sync failures.
+#[derive(Clone, Copy)]
+struct SyncFailureContext<'a> {
+    app: &'a AppHandle,
+    /// The subscribed mods, or the one mod the user asked to install; their own failures are recorded against them.
+    roots: &'a HashSet<u64>,
+    /// For each dependency, the roots that need it; its failures are recorded against them.
+    dependency_to_subscribers: &'a HashMap<u64, HashSet<u64>>,
+}
+
+/// Clears a recorded sync failure for `mod_id`, if failures are being persisted.
+fn clear_sync_failure(sync_failure_context: Option<SyncFailureContext<'_>>, mod_id: u64) {
+    if let Some(SyncFailureContext { app, .. }) = sync_failure_context {
+        maybe_clear_failed_sync_mod(app, mod_id);
+    }
+}
 
 fn record_install_target_failure(
     sync_failure_context: Option<SyncFailureContext<'_>>,
@@ -1274,8 +1285,13 @@ fn record_install_target_failure(
         );
     }
 
-    if let Some((app, roots, subscribers)) = sync_failure_context {
-        if subscribers.is_empty() {
+    if let Some(SyncFailureContext {
+        app,
+        roots,
+        dependency_to_subscribers,
+    }) = sync_failure_context
+    {
+        if dependency_to_subscribers.is_empty() {
             if roots.contains(&target_mod_id) {
                 let _ = record_failed_sync_mod(app, target_mod_id, category, message);
             }
@@ -1286,7 +1302,7 @@ fn record_install_target_failure(
                 category,
                 message,
                 roots,
-                subscribers,
+                dependency_to_subscribers,
             );
         }
         track_sync_dependency_failure(target_mod_id, roots, failed_dependencies);
@@ -1314,15 +1330,25 @@ fn build_manual_install_sync_failure_context(
     (sync_failure_roots, dependency_to_subscribers)
 }
 
+/// A specific file version to install for one mod instead of its latest file.
+#[derive(Clone, Copy)]
+struct FileOverride {
+    mod_id: u64,
+    file_id: u64,
+}
+
 /// How `install_targets_internal` treats each target in its install order.
 #[derive(Default)]
 struct InstallTargetsOptions<'a> {
-    /// Subscribe to each target on mod.io before installing it.
+    /// Subscribe to each target on mod.io before installing it. Production callers
+    /// leave this `false` (`install_mod_internal` subscribes before the call); the test
+    /// `an_expired_token_while_subscribing_is_a_rejected_credential` uses it to reach
+    /// the subscribe-with-expired-token path without an `AppHandle`.
     should_subscribe: bool,
     /// Install a newer version of a target that is already installed.
     auto_update: bool,
-    /// `(mod_id, file_id)`: install this file for that mod instead of its latest.
-    file_override: Option<(u64, u64)>,
+    /// Install this file for that mod instead of its latest.
+    file_override: Option<FileOverride>,
     /// Mod details already fetched, so they are not requested again.
     mods_by_id: Option<&'a HashMap<u64, ModObject>>,
     /// Where to record and clear per-mod sync failures; `None` means they are not persisted.
@@ -1395,37 +1421,25 @@ async fn install_targets_internal(
                 return Err(error);
             }
         };
-        if matches!(state_for_mod.status.as_str(), "upToDate") {
-            if let Some((override_mod, override_file)) = file_override {
-                if override_mod == target_mod_id
-                    && state_for_mod.installed_file_id != Some(override_file)
-                {
-                    // Install a specific older or alternate file version.
-                } else {
-                    log::debug!("Mod {target_mod_id} already up to date, skipping");
-                    if let Some((app, _, _)) = sync_failure_context {
-                        maybe_clear_failed_sync_mod(app, target_mod_id);
-                    }
-                    skipped.push(target_mod_id);
-                    continue;
-                }
-            } else {
-                log::debug!("Mod {target_mod_id} already up to date, skipping");
-                if let Some((app, _, _)) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(app, target_mod_id);
-                }
-                skipped.push(target_mod_id);
-                continue;
-            }
+        let target_file_id = file_override
+            .filter(|file_override| file_override.mod_id == target_mod_id)
+            .map(|file_override| file_override.file_id);
+        // An override for a file other than the installed one still installs, to
+        // switch to a specific older or alternate file version.
+        if matches!(state_for_mod.status.as_str(), "upToDate")
+            && (target_file_id.is_none() || state_for_mod.installed_file_id == target_file_id)
+        {
+            log::debug!("Mod {target_mod_id} already up to date, skipping");
+            clear_sync_failure(sync_failure_context, target_mod_id);
+            skipped.push(target_mod_id);
+            continue;
         }
 
         if state_for_mod.status.as_str() == "updateAvailable" && !auto_update {
             log::debug!(
                 "Mod {target_mod_id} has an update available but auto-update is disabled, skipping"
             );
-            if let Some((app, _, _)) = sync_failure_context {
-                maybe_clear_failed_sync_mod(app, target_mod_id);
-            }
+            clear_sync_failure(sync_failure_context, target_mod_id);
             skipped.push(target_mod_id);
             continue;
         }
@@ -1436,16 +1450,11 @@ async fn install_targets_internal(
         ensure_session_not_rejected(state, session.as_deref())?;
 
         log::info!("Installing mod {target_mod_id}");
-        let target_file_id = file_override
-            .filter(|(override_mod, _)| *override_mod == target_mod_id)
-            .map(|(_, file_id)| file_id);
         match install_single_mod(state, game_dir, target_mod_id, target_file_id).await {
             Ok(()) => {
                 log::info!("Installed mod {target_mod_id}");
                 installed.push(target_mod_id);
-                if let Some((app, _, _)) = sync_failure_context {
-                    maybe_clear_failed_sync_mod(app, target_mod_id);
-                }
+                clear_sync_failure(sync_failure_context, target_mod_id);
                 *records = scan_installed_mods(game_dir)?;
                 refresh_dependency_map(state, dependency_map, records).await;
             }
@@ -1505,11 +1514,11 @@ async fn install_mod_internal(
     let (sync_failure_roots, mut dependency_to_subscribers) =
         build_manual_install_sync_failure_context(mod_id, &order);
     augment_dependency_subscribers_from_cache(state, &[mod_id], &mut dependency_to_subscribers);
-    let sync_failure_context = (
+    let sync_failure_context = SyncFailureContext {
         app,
-        &sync_failure_roots,
-        &dependency_to_subscribers,
-    );
+        roots: &sync_failure_roots,
+        dependency_to_subscribers: &dependency_to_subscribers,
+    };
 
     let should_subscribe =
         state.auth_status().logged_in && active_profile_is_user(app, state)?;
@@ -1532,7 +1541,7 @@ async fn install_mod_internal(
         &mut dependency_map,
         InstallTargetsOptions {
             auto_update: true,
-            file_override: file_id.map(|file_id| (mod_id, file_id)),
+            file_override: file_id.map(|file_id| FileOverride { mod_id, file_id }),
             sync_failure_context: Some(sync_failure_context),
             root_mod_id: Some(mod_id),
             ..Default::default()
@@ -1773,7 +1782,11 @@ async fn run_subscription_sync(
         InstallTargetsOptions {
             auto_update,
             mods_by_id: Some(&mods_by_id),
-            sync_failure_context: Some((app, &subscribed_roots, &dependency_to_subscribers)),
+            sync_failure_context: Some(SyncFailureContext {
+                app,
+                roots: &subscribed_roots,
+                dependency_to_subscribers: &dependency_to_subscribers,
+            }),
             ..Default::default()
         },
     )
