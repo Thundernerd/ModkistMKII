@@ -28,6 +28,13 @@ function gh(args, options = {}) {
   execFileSync("gh", args, { stdio: "inherit", ...options });
 }
 
+function ghOutput(args) {
+  return execFileSync("gh", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+}
+
 export function assetUrl(repo, tag, name) {
   return `https://github.com/${repo}/releases/download/${tag}/${name}`;
 }
@@ -94,6 +101,67 @@ export function buildManifest(version, platforms, pubDate = new Date()) {
   };
 }
 
+const TEMP_SUFFIX = ".next";
+
+function deleteAsset(gh, repo, id) {
+  gh(["api", "-X", "DELETE", `repos/${repo}/releases/assets/${id}`]);
+}
+
+function listAssets(gh, repo, tag) {
+  const release = JSON.parse(gh(["api", `repos/${repo}/releases/tags/${tag}`]));
+  return release.assets ?? [];
+}
+
+/**
+ * Replaces updater manifests on the release `tag` without a window in which
+ * the old manifest is gone and the new one is not yet uploaded.
+ *
+ * Each manifest is uploaded as `<name>.next`. Only once every upload has
+ * succeeded is the old asset deleted and the temp asset renamed to `<name>`.
+ * A failed upload throws before anything is deleted, so the previous manifest
+ * stays downloadable.
+ *
+ * `gh` runs the gh CLI with the given arguments and returns its stdout.
+ */
+export function replaceManifests({ gh, repo, tag, dir, manifests }) {
+  const tempNames = new Set(
+    manifests.map(({ name }) => `${name}${TEMP_SUFFIX}`),
+  );
+  for (const stale of listAssets(gh, repo, tag)) {
+    if (tempNames.has(stale.name)) {
+      deleteAsset(gh, repo, stale.id);
+    }
+  }
+
+  for (const { name, content } of manifests) {
+    const file = path.join(dir, `${name}${TEMP_SUFFIX}`);
+    fs.writeFileSync(file, content);
+    gh(["release", "upload", tag, file]);
+  }
+
+  const assets = listAssets(gh, repo, tag);
+  for (const { name } of manifests) {
+    const old = assets.find((asset) => asset.name === name);
+    const next = assets.find((asset) => asset.name === `${name}${TEMP_SUFFIX}`);
+    if (!next) {
+      throw new Error(
+        `Uploaded ${name}${TEMP_SUFFIX} is missing from release ${tag}`,
+      );
+    }
+    if (old) {
+      deleteAsset(gh, repo, old.id);
+    }
+    gh([
+      "api",
+      "-X",
+      "PATCH",
+      `repos/${repo}/releases/assets/${next.id}`,
+      "-f",
+      `name=${name}`,
+    ]);
+  }
+}
+
 function ensureUpdaterRelease() {
   try {
     gh(["release", "view", UPDATER_TAG], { stdio: "ignore" });
@@ -142,19 +210,20 @@ function main() {
     );
   }
 
-  const manifest = buildManifest(version, platforms);
-  const prereleasePath = path.join(tmpDir, "latest-prerelease.json");
-  fs.writeFileSync(prereleasePath, `${JSON.stringify(manifest, null, 2)}\n`);
-
-  const uploadFiles = [prereleasePath];
+  const content = `${JSON.stringify(buildManifest(version, platforms), null, 2)}\n`;
+  const manifests = [{ name: "latest-prerelease.json", content }];
   if (channel === "none") {
-    const stablePath = path.join(tmpDir, "latest.json");
-    fs.writeFileSync(stablePath, `${JSON.stringify(manifest, null, 2)}\n`);
-    uploadFiles.push(stablePath);
+    manifests.push({ name: "latest.json", content });
   }
 
   ensureUpdaterRelease();
-  gh(["release", "upload", UPDATER_TAG, ...uploadFiles, "--clobber"]);
+  replaceManifests({
+    gh: ghOutput,
+    repo,
+    tag: UPDATER_TAG,
+    dir: tmpDir,
+    manifests,
+  });
 
   console.error(
     `Published updater manifest for ${version} (${channel === "none" ? "stable + prerelease" : "prerelease only"})`,

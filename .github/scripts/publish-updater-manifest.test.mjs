@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   assetUrl,
   buildManifest,
   buildPlatforms,
+  replaceManifests,
 } from "./publish-updater-manifest.mjs";
 
 test("maps signed installer assets onto updater platforms", () => {
@@ -66,4 +70,211 @@ test("writes version and platform map into the manifest", () => {
   assert.equal(manifest.version, "1.0.0-rc.9");
   assert.equal(manifest.pub_date, "2026-08-25T12:00:00.000Z");
   assert.equal(manifest.platforms["linux-x86_64"].signature, "sig");
+});
+
+const REPO = "Thundernerd/ModkistMKII";
+
+// A fake `gh` runner that keeps the updater release's assets in memory and
+// records every call, so tests can check both the order of operations and
+// what a client would be able to download afterwards.
+function fakeGh({ assets = [], failUploadOf = [] } = {}) {
+  let nextId = 1000;
+  const state = new Map(assets.map((asset) => [asset.name, { ...asset }]));
+  const calls = [];
+  const run = (args) => {
+    calls.push(args);
+    const [cmd, sub] = args;
+    if (cmd === "api" && args.includes("-X")) {
+      const method = args[args.indexOf("-X") + 1];
+      const id = Number(
+        args
+          .find((a) => a.includes("/assets/"))
+          .split("/")
+          .pop(),
+      );
+      const entry = [...state.values()].find((asset) => asset.id === id);
+      if (!entry) throw new Error(`no asset ${id}`);
+      state.delete(entry.name);
+      if (method === "PATCH") {
+        const name = args[args.indexOf("-f") + 1].replace(/^name=/, "");
+        state.set(name, { ...entry, name, content: entry.content });
+      }
+      return "";
+    }
+    if (cmd === "api") {
+      return JSON.stringify({
+        assets: [...state.values()].map(({ id, name }) => ({ id, name })),
+      });
+    }
+    if (cmd === "release" && sub === "upload") {
+      const file = args[3];
+      const name = path.basename(file);
+      if (failUploadOf.includes(name))
+        throw new Error(`upload of ${name} failed`);
+      if (state.has(name)) throw new Error(`asset ${name} already exists`);
+      state.set(name, {
+        id: nextId++,
+        name,
+        content: fs.readFileSync(file, "utf8"),
+      });
+      return "";
+    }
+    throw new Error(`unexpected gh call: ${args.join(" ")}`);
+  };
+  return { run, calls, state };
+}
+
+function describeCall(args) {
+  if (args[0] === "release" && args[1] === "upload") {
+    return `upload ${path.basename(args[3])}`;
+  }
+  if (args[0] === "api" && args.includes("-X")) {
+    const method = args[args.indexOf("-X") + 1];
+    const id = args
+      .find((a) => a.includes("/assets/"))
+      .split("/")
+      .pop();
+    return method === "PATCH"
+      ? `rename ${id} -> ${args[args.indexOf("-f") + 1].replace(/^name=/, "")}`
+      : `delete ${id}`;
+  }
+  return "list";
+}
+
+function tempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "modkist-replace-test-"));
+}
+
+test("replaces a manifest by uploading a temp asset, then deleting the old one, then renaming", () => {
+  const gh = fakeGh({
+    assets: [{ id: 1, name: "latest-prerelease.json", content: "old" }],
+  });
+
+  replaceManifests({
+    gh: gh.run,
+    repo: REPO,
+    tag: "updater",
+    dir: tempDir(),
+    manifests: [{ name: "latest-prerelease.json", content: "new" }],
+  });
+
+  assert.deepEqual(
+    gh.calls.map(describeCall).filter((c) => c !== "list"),
+    [
+      "upload latest-prerelease.json.next",
+      "delete 1",
+      "rename 1000 -> latest-prerelease.json",
+    ],
+  );
+  assert.deepEqual(
+    [...gh.state.values()].map(({ name, content }) => ({ name, content })),
+    [{ name: "latest-prerelease.json", content: "new" }],
+  );
+});
+
+test("a failed upload throws without deleting any live manifest", () => {
+  const gh = fakeGh({
+    assets: [
+      { id: 1, name: "latest-prerelease.json", content: "old-pre" },
+      { id: 2, name: "latest.json", content: "old-stable" },
+    ],
+    failUploadOf: ["latest.json.next"],
+  });
+
+  assert.throws(
+    () =>
+      replaceManifests({
+        gh: gh.run,
+        repo: REPO,
+        tag: "updater",
+        dir: tempDir(),
+        manifests: [
+          { name: "latest-prerelease.json", content: "new" },
+          { name: "latest.json", content: "new" },
+        ],
+      }),
+    /upload of latest.json.next failed/,
+  );
+
+  assert.equal(
+    gh.calls.map(describeCall).filter((c) => c.startsWith("delete")).length,
+    0,
+  );
+  assert.equal(gh.state.get("latest-prerelease.json").content, "old-pre");
+  assert.equal(gh.state.get("latest.json").content, "old-stable");
+});
+
+test("replaces both manifests only after both temp uploads succeed", () => {
+  const gh = fakeGh({
+    assets: [
+      { id: 1, name: "latest-prerelease.json", content: "old-pre" },
+      { id: 2, name: "latest.json", content: "old-stable" },
+    ],
+  });
+
+  replaceManifests({
+    gh: gh.run,
+    repo: REPO,
+    tag: "updater",
+    dir: tempDir(),
+    manifests: [
+      { name: "latest-prerelease.json", content: "new-pre" },
+      { name: "latest.json", content: "new-stable" },
+    ],
+  });
+
+  assert.deepEqual(
+    gh.calls.map(describeCall).filter((c) => c !== "list"),
+    [
+      "upload latest-prerelease.json.next",
+      "upload latest.json.next",
+      "delete 1",
+      "rename 1000 -> latest-prerelease.json",
+      "delete 2",
+      "rename 1001 -> latest.json",
+    ],
+  );
+  assert.equal(gh.state.get("latest-prerelease.json").content, "new-pre");
+  assert.equal(gh.state.get("latest.json").content, "new-stable");
+  assert.equal(gh.state.size, 2);
+});
+
+test("creates a manifest that did not exist yet", () => {
+  const gh = fakeGh();
+
+  replaceManifests({
+    gh: gh.run,
+    repo: REPO,
+    tag: "updater",
+    dir: tempDir(),
+    manifests: [{ name: "latest.json", content: "first" }],
+  });
+
+  assert.deepEqual([...gh.state.keys()], ["latest.json"]);
+  assert.equal(gh.state.get("latest.json").content, "first");
+});
+
+test("removes a leftover temp asset from an earlier failed run before uploading", () => {
+  const gh = fakeGh({
+    assets: [
+      { id: 1, name: "latest.json", content: "old" },
+      { id: 7, name: "latest.json.next", content: "stale" },
+    ],
+  });
+
+  replaceManifests({
+    gh: gh.run,
+    repo: REPO,
+    tag: "updater",
+    dir: tempDir(),
+    manifests: [{ name: "latest.json", content: "new" }],
+  });
+
+  const steps = gh.calls.map(describeCall).filter((c) => c !== "list");
+  assert.ok(
+    steps.indexOf("delete 7") < steps.indexOf("upload latest.json.next"),
+    `stale temp asset should be deleted before the upload: ${steps.join(", ")}`,
+  );
+  assert.deepEqual([...gh.state.keys()], ["latest.json"]);
+  assert.equal(gh.state.get("latest.json").content, "new");
 });
