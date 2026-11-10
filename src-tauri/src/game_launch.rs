@@ -154,6 +154,13 @@ fn launch_game_at(game_dir: &Path, _custom_prefix: Option<&Path>) -> Result<(), 
 
 #[cfg(target_os = "linux")]
 fn launch_game_at(game_dir: &Path, custom_prefix: Option<&Path>) -> Result<(), String> {
+    // A prefix chosen in Settings wins: Steam would launch in its own Proton prefix.
+    if custom_prefix.is_some() {
+        launch_via_wine(game_dir, custom_prefix)?;
+        log::info!("Launched Zeepkist via Wine with the custom prefix from Settings");
+        return Ok(());
+    }
+
     if launch_via_steam().is_ok() {
         log::info!("Launched Zeepkist via Steam (app {STEAM_APP_ID})");
         return Ok(());
