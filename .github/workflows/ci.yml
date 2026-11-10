@@ -4,8 +4,9 @@
 # .github/scripts/, the Rust tests in src-tauri, the rustfmt check on src-tauri,
 # and clippy on src-tauri with warnings as errors. Clippy runs on Linux, Windows
 # and macOS, so code behind a platform cfg is linted too. Any failing step fails
-# the run. This workflow does not build installers (see the Build workflow) and
-# needs no secrets.
+# the run. Every job uses the Rust version pinned in
+# src-tauri/rust-toolchain.toml (see .github/actions/setup-rust). This workflow
+# does not build installers (see the Build workflow) and needs no secrets.
 
 name: CI
 
@@ -37,10 +38,8 @@ jobs:
           node-version: 24
           cache: npm
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install pinned Rust
+        uses: ./.github/actions/setup-rust
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -100,11 +99,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install Rust stable
+      - name: Install pinned Rust
         id: toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        uses: ./.github/actions/setup-rust
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
