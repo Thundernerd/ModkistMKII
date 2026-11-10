@@ -206,9 +206,26 @@ impl ApiError {
         self
     }
 
-    fn log(&self, context: &str) {
-        log::error!(
-            "mod.io API error [{context}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
+    /// Reports a failed request. The details (path, mod.io's message, retry
+    /// window) go to the log file at info. The report (error) holds only what
+    /// does not vary per request, as Sentry groups message events by their
+    /// text: the method, the route template, the status and `error_ref`.
+    fn log(&self, method: &str, path: &str) {
+        self.log_details(method, path);
+        let route = route_template(path);
+        match self.status {
+            Some(status) => log::error!(
+                "mod.io API error: {method} {route} returned status={status}, error_ref={:?}",
+                self.error_ref
+            ),
+            None => log::error!("mod.io API error: {method} {route} failed without a response"),
+        }
+    }
+
+    /// The details of a failed request, for the log file only.
+    fn log_details(&self, method: &str, path: &str) {
+        log::info!(
+            "mod.io API error [{method} {path}]: {} (status={:?}, error_ref={:?}, retry_after_secs={:?})",
             self.message,
             self.status,
             self.error_ref,
@@ -743,12 +760,16 @@ impl ApiClient {
 
         let started = Instant::now();
         let response = request.send().await.map_err(|e| {
+            // reqwest's text includes the URL, with the api_key query.
+            let e = e.without_url();
+            let error = ApiError::transport(format!("mod.io request failed: {e}"));
             if on_failure.is_quiet() {
-                log::debug!("mod.io <- {method_label} {path} transport error: {e}");
+                log::debug!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
             } else {
-                log::error!("mod.io <- {method_label} {path} transport error: {e}");
+                log::info!("mod.io <- {method_label} {path} transport error: {}", error_chain(&e));
+                error.log(&method_label, path);
             }
-            ApiError::transport(format!("mod.io request failed: {e}"))
+            error
         })?;
 
         let status = response.status();
@@ -833,7 +854,7 @@ impl ApiClient {
         } else if error.status.is_some_and(|status| on_failure.expects(status)) {
             error.log_forbidden(path);
         } else {
-            error.log(path);
+            error.log(&method_label, path);
         }
         Err(error)
     }
@@ -928,9 +949,12 @@ impl ApiClient {
                     );
                 } else {
                     // 429/5xx/transport on the bearer retry is a genuinely
-                    // unexpected failure the caller will propagate, so surface it.
-                    api_key_error.log(context);
-                    bearer_error.log(context);
+                    // unexpected failure the caller will propagate, so surface
+                    // it once. send_raw already reported a 429, even when quiet.
+                    api_key_error.log_details("GET", context);
+                    if !bearer_error.is_rate_limited() {
+                        bearer_error.log("GET", context);
+                    }
                 }
                 Err(bearer_error)
             }
@@ -1279,6 +1303,39 @@ impl OnFailure {
     }
 }
 
+/// `error` followed by each of its causes, separated by colons.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut chain = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        chain.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    chain
+}
+
+/// `path` with each numeric id replaced by a placeholder named after the
+/// collection before it: `/games/3213/mods/44/files/9` becomes
+/// `/games/{game}/mods/{mod}/files/{file}`.
+fn route_template(path: &str) -> String {
+    let mut previous = "";
+    path.split('/')
+        .map(|segment| {
+            let templated = if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) {
+                match previous.strip_suffix('s') {
+                    Some(singular) if !singular.is_empty() => format!("{{{singular}}}"),
+                    _ => "{id}".to_string(),
+                }
+            } else {
+                segment.to_string()
+            };
+            previous = segment;
+            templated
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Logs the response status, elapsed time and all response headers.
 fn log_response(
     method: &str,
@@ -1309,13 +1366,15 @@ fn log_response(
 
     let handled_unauthorized = handles_unauthorized && status.as_u16() == 401;
     let expected = on_failure.expects(status.as_u16());
+    let expected_outcome = status.is_success() || known_not_found || handled_unauthorized || expected;
 
-    if status.is_success() || known_not_found || handled_unauthorized || expected {
-        log::info!("{line}");
-    } else if expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429) {
+    // Never above info: the header dump differs on every response (`date`,
+    // `cf-ray`, cookies) and is only for the log file. `send_raw` reports a
+    // failure once, in text that does not depend on the request.
+    if !expected_outcome && (expected_no_op || (on_failure.is_quiet() && status.as_u16() != 429)) {
         log::debug!("{line}");
     } else {
-        log::warn!("{line}");
+        log::info!("{line}");
     }
 }
 
