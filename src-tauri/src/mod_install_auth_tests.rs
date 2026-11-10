@@ -2,10 +2,12 @@
 //! credentials mid-operation (issue #59), private mods while signed out (#68),
 //! mod files the author deleted (#75) and rate limits (#138). `ApiClient`
 //! already handles and reports these; the callers must not turn them into one
-//! Sentry report per mod, or add a second report beside `ApiClient`'s. Runs the real callers against a local fake mod.io and captures the
+//! Sentry report per mod, or add a second report beside `ApiClient`'s. Runs
+//! the real callers against a local fake mod.io and captures the
 //! `warn`/`error` records `SentryLogWriter` would forward.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 use crate::logging::report_capture::{capture_reports, sentry_reports};
@@ -457,12 +459,14 @@ const RATE_LIMITED_ERROR_REF: u32 = 11008;
 /// The first request is rate limited (429); every later one answers 200 with
 /// `body`.
 fn rate_limited_once(body: &'static str) -> impl Fn(&Received) -> (u16, Option<u32>, String) + Send + Sync + 'static {
-    let limited = std::sync::atomic::AtomicBool::new(false);
+    let limited = AtomicBool::new(false);
     move |_| {
-        if limited.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if limited.swap(true, Ordering::SeqCst) {
             (200, None, body.to_string())
         } else {
-            let body = error_body(RATE_LIMITED_ERROR_REF, "Too many requests.").replace("401", "429");
+            let body = format!(
+                r#"{{"error":{{"code":429,"error_ref":{RATE_LIMITED_ERROR_REF},"message":"Too many requests."}}}}"#
+            );
             (429, Some(RATE_LIMITED_ERROR_REF), body)
         }
     }
