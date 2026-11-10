@@ -45,18 +45,34 @@ fn skipped_result() -> AppUpdateCheckResult {
     }
 }
 
-/// Log a failed update check. A check that could not reach a manifest is
-/// expected now and then (offline, captive portal, GitHub hiccup, the manifest
-/// being replaced mid-release) and the next launch retries, so it stays in the
-/// log file. Anything else means the published manifest or update is broken,
-/// which is reported.
-fn log_check_failure(error: &tauri_plugin_updater::Error) {
+/// Whether an updater error is a network outcome that the next launch retries:
+/// offline, captive portal, a GitHub hiccup, or the manifest being replaced
+/// mid-release. Anything else means the published manifest or update is broken.
+fn is_transient(error: &tauri_plugin_updater::Error) -> bool {
     use tauri_plugin_updater::Error;
 
-    match error {
-        Error::ReleaseNotFound | Error::Reqwest(_) => log::info!("App update check failed: {error}"),
-        _ => log::warn!("App update check failed: {error}"),
+    matches!(
+        error,
+        Error::ReleaseNotFound | Error::Reqwest(_) | Error::Network(_)
+    )
+}
+
+/// Log a failed updater step. Transient failures stay in the log file; the
+/// rest are reported to Sentry.
+fn log_updater_failure(step: &str, error: &tauri_plugin_updater::Error) {
+    if is_transient(error) {
+        log::info!("App update {step} failed: {error}");
+    } else {
+        log::warn!("App update {step} failed: {error}");
     }
+}
+
+fn log_check_failure(error: &tauri_plugin_updater::Error) {
+    log_updater_failure("check", error);
+}
+
+fn log_install_failure(error: &tauri_plugin_updater::Error) {
+    log_updater_failure("install", error);
 }
 
 #[tauri::command]
@@ -103,7 +119,10 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
                     || {},
                 )
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| {
+                    log_install_failure(&error);
+                    error.to_string()
+                })?;
             log::info!("Installed Modkist {version}; waiting for restart");
             Ok(AppUpdateCheckResult {
                 status: "installed".into(),
@@ -170,6 +189,28 @@ mod tests {
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
         assert!(reports[0].starts_with("WARN: App update check failed"), "{}", reports[0]);
         assert!(reports[0].contains("windows-x86_64"), "report should name the platform: {}", reports[0]);
+    }
+
+    #[test]
+    fn a_failed_installer_download_is_not_reported_to_sentry() {
+        capture_reports();
+
+        log_install_failure(&UpdaterError::Network(
+            "Download request failed with status: 502 Bad Gateway".into(),
+        ));
+
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_installer_with_a_bad_signature_is_reported_to_sentry() {
+        capture_reports();
+
+        log_install_failure(&UpdaterError::SignatureUtf8("not-base64".into()));
+
+        let reports = sentry_reports();
+        assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+        assert!(reports[0].starts_with("WARN: App update install failed"), "{}", reports[0]);
     }
 
     #[test]
