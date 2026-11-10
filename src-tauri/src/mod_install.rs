@@ -1199,6 +1199,23 @@ fn build_manual_install_sync_failure_context(
     (sync_failure_roots, dependency_to_subscribers)
 }
 
+/// How `install_targets_internal` treats each target in its install order.
+#[derive(Default)]
+struct InstallTargetsOptions<'a> {
+    /// Subscribe to each target on mod.io before installing it.
+    should_subscribe: bool,
+    /// Install a newer version of a target that is already installed.
+    auto_update: bool,
+    /// `(mod_id, file_id)`: install this file for that mod instead of its latest.
+    file_override: Option<(u64, u64)>,
+    /// Mod details already fetched, so they are not requested again.
+    mods_by_id: Option<&'a HashMap<u64, ModObject>>,
+    /// Where to record and clear per-mod sync failures; `None` means they are not persisted.
+    sync_failure_context: Option<SyncFailureContext<'a>>,
+    /// The mod the user asked to install; the other targets are its dependencies.
+    root_mod_id: Option<u64>,
+}
+
 async fn install_targets_internal(
     app: Option<&AppHandle>,
     state: &ModioState,
@@ -1206,13 +1223,16 @@ async fn install_targets_internal(
     order: Vec<u64>,
     records: &mut Vec<InstalledModRecord>,
     dependency_map: &mut HashMap<u64, Vec<u64>>,
-    should_subscribe: bool,
-    auto_update: bool,
-    file_override: Option<(u64, u64)>,
-    mods_by_id: Option<&HashMap<u64, ModObject>>,
-    sync_failure_context: Option<SyncFailureContext<'_>>,
-    root_mod_id: Option<u64>,
+    options: InstallTargetsOptions<'_>,
 ) -> Result<InstallModResult, ModioError> {
+    let InstallTargetsOptions {
+        should_subscribe,
+        auto_update,
+        file_override,
+        mods_by_id,
+        sync_failure_context,
+        root_mod_id,
+    } = options;
     let mut installed = Vec::new();
     let mut skipped = Vec::new();
     let mut failed_dependencies = Vec::new();
@@ -1395,12 +1415,13 @@ async fn install_mod_internal(
         order,
         &mut records,
         &mut dependency_map,
-        false,
-        true,
-        file_id.map(|file_id| (mod_id, file_id)),
-        None,
-        Some(sync_failure_context),
-        Some(mod_id),
+        InstallTargetsOptions {
+            auto_update: true,
+            file_override: file_id.map(|file_id| (mod_id, file_id)),
+            sync_failure_context: Some(sync_failure_context),
+            root_mod_id: Some(mod_id),
+            ..Default::default()
+        },
     )
     .await?;
     result.dependency_failure_count = result.failed_dependencies.len() as u32;
@@ -1634,12 +1655,12 @@ async fn run_subscription_sync(
         install_order,
         &mut records,
         &mut dependency_map,
-        false,
-        auto_update,
-        None,
-        Some(&mods_by_id),
-        Some((app, &subscribed_roots, &dependency_to_subscribers)),
-        None,
+        InstallTargetsOptions {
+            auto_update,
+            mods_by_id: Some(&mods_by_id),
+            sync_failure_context: Some((app, &subscribed_roots, &dependency_to_subscribers)),
+            ..Default::default()
+        },
     )
     .await;
     reconcile_failed_sync_mods(
