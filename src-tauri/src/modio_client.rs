@@ -1007,7 +1007,7 @@ pub(crate) async fn fetch_mod_outcomes_batch(
                 }
             }
             Err(error) if error.is_rate_limited() => {
-                log::warn!("mod.io rate limit hit on batch mod fetch, retrying in 61 seconds");
+                log::info!("mod.io rate limit hit on batch mod fetch, retrying in 61 seconds");
                 tokio::time::sleep(Duration::from_secs(61)).await;
                 match api.get_mods_by_id(game_id, chunk).await {
                     Ok(list) => {
