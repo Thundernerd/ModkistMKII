@@ -13,6 +13,16 @@ const REQUIRED_PLATFORMS = [
   "darwin-x86_64",
   "windows-x86_64",
   "linux-x86_64",
+  "linux-x86_64-deb",
+  "linux-x86_64-rpm",
+];
+// The updater looks up `{os}-{arch}-{bundle}` before `{os}-{arch}`, so deb and
+// rpm installs get their own package. `linux-x86_64` has to stay the AppImage:
+// existing AppImage installs rely on it.
+const LINUX_BUNDLES = [
+  { platform: "linux-x86_64", extension: ".AppImage" },
+  { platform: "linux-x86_64-deb", extension: ".deb" },
+  { platform: "linux-x86_64-rpm", extension: ".rpm" },
 ];
 
 function requiredEnv(name) {
@@ -78,18 +88,18 @@ export function buildPlatforms(assetNames, signatures, repo, tag) {
     };
   }
 
-  const appImage = findAsset(
-    assetNames,
-    (name) => name.endsWith(".AppImage") && !name.endsWith(".sig"),
-  );
-  if (appImage) {
-    const signature = signatures[`${appImage}.sig`];
-    if (!signature) {
-      throw new Error(`Missing signature for ${appImage}`);
+  for (const { platform, extension } of LINUX_BUNDLES) {
+    const bundle = findAsset(assetNames, (name) => name.endsWith(extension));
+    if (!bundle) {
+      continue;
     }
-    platforms["linux-x86_64"] = {
+    const signature = signatures[`${bundle}.sig`];
+    if (!signature) {
+      throw new Error(`Missing signature for ${bundle}`);
+    }
+    platforms[platform] = {
       signature,
-      url: assetUrl(repo, tag, appImage),
+      url: assetUrl(repo, tag, bundle),
     };
   }
 
