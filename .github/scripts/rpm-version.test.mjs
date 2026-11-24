@@ -15,7 +15,14 @@ for (const channel of ["alpha", "beta", "rc"]) {
   });
 }
 
-for (const version of ["", "1.2", "v1.2.3", "1.2.3-37", "1.2.3-rc"]) {
+test("moves the Build workflow's run number to a release below alpha", () => {
+  assert.deepEqual(toRpmVersion("1.2.3-37"), {
+    version: "1.2.3",
+    release: "0~37",
+  });
+});
+
+for (const version of ["", "1.2", "v1.2.3", "1.2.3-", "1.2.3-rc", "1.2.3-37.1"]) {
   test(`rejects ${JSON.stringify(version)}`, () => {
     assert.throws(() => toRpmVersion(version), /Expected major\.minor\.patch/);
   });
