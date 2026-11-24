@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { logger } from "~/utils/logger";
+import { releasePageUrl } from "~/utils/releases";
+
 const {
   phase,
   version,
@@ -7,6 +11,7 @@ const {
   relaunchFailed,
   restartNow,
   runUpdateGate,
+  quit,
 } = useAppUpdater();
 
 const title = computed(() => {
@@ -14,7 +19,9 @@ const title = computed(() => {
     case "checking":
       return "Checking for updates";
     case "needsPassword":
-      return "Update available";
+      return "Update required";
+    case "failed":
+      return "Update failed";
     case "downloading":
       return "Update found";
     case "restarting":
@@ -28,8 +35,12 @@ const message = computed(() => {
       return "Checking for updates…";
     case "needsPassword":
       return version.value
-        ? `Modkist v${version.value} is ready to install. Your system will ask for your password.`
-        : "An update is ready to install. Your system will ask for your password.";
+        ? `Modkist needs to update to v${version.value} before you can continue. Your system will ask for your password.`
+        : "Modkist needs to update before you can continue. Your system will ask for your password.";
+    case "failed":
+      return version.value
+        ? `Modkist needs to update to v${version.value} before you can continue, but the update could not be installed.`
+        : "Modkist needs to update before you can continue, but the update could not be installed.";
     case "downloading":
       return version.value
         ? `Downloading Modkist v${version.value}…`
@@ -49,6 +60,7 @@ const progressPercent = computed(() => {
 const busy = computed(() => {
   switch (phase.value) {
     case "needsPassword":
+    case "failed":
       return false;
     case "restarting":
       return !relaunchFailed.value;
@@ -56,6 +68,12 @@ const busy = computed(() => {
       return true;
   }
 });
+
+function openReleasePage() {
+  openUrl(releasePageUrl(version.value)).catch((err) => {
+    logger.debug("Did not open the Modkist release page", err);
+  });
+}
 </script>
 
 <template>
@@ -94,14 +112,23 @@ const busy = computed(() => {
         </div>
         <p class="app-update-gate-progress-label">{{ progressPercent }}%</p>
       </div>
-      <button
-        v-if="phase === 'needsPassword'"
-        type="button"
-        class="app-update-gate-action"
-        @click="runUpdateGate(true)"
+      <div
+        v-if="phase === 'needsPassword' || phase === 'failed'"
+        class="app-update-gate-actions"
       >
-        Update
-      </button>
+        <button type="button" @click="runUpdateGate(true)">
+          {{ phase === "failed" ? "Retry" : "Update" }}
+        </button>
+        <button
+          v-if="phase === 'failed'"
+          type="button"
+          class="btn-secondary"
+          @click="openReleasePage"
+        >
+          Download manually
+        </button>
+        <button type="button" class="btn-secondary" @click="quit">Quit</button>
+      </div>
       <button
         v-if="phase === 'restarting' && relaunchFailed"
         type="button"
@@ -191,6 +218,14 @@ const busy = computed(() => {
   margin: 0;
   font-size: 0.8rem;
   color: var(--modio-text-muted);
+}
+
+.app-update-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
 }
 
 .app-update-gate-action {

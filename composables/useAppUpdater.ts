@@ -1,15 +1,22 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { exit, relaunch } from "@tauri-apps/plugin-process";
 import { invoke, waitForTauri } from "~/utils/tauri";
 
 export type AppUpdateGatePhase =
   | "checking"
   | "needsPassword"
   | "downloading"
+  | "failed"
   | "restarting";
 
 export interface AppUpdateCheckResult {
-  status: "skipped" | "upToDate" | "needsPassword" | "installed" | string;
+  status:
+    | "skipped"
+    | "upToDate"
+    | "needsPassword"
+    | "installFailed"
+    | "installed"
+    | string;
   version: string | null;
 }
 
@@ -44,9 +51,11 @@ export function useAppUpdater() {
   }
 
   /**
-   * Checks for and installs an update before the app opens. When installing
-   * needs the user's password, stops at `needsPassword` until the user clicks
-   * Update, which runs the gate again with the prompt allowed.
+   * Checks for and installs an update before the app opens. Updates are
+   * mandatory: the app stays closed until a found update is installed, and only
+   * opens without one when there is none or the check itself failed. When
+   * installing needs the user's password, stops at `needsPassword` until the
+   * user clicks Update, which runs the gate again with the prompt allowed.
    */
   async function runUpdateGate(allowPasswordPrompt = false) {
     phase.value = "checking";
@@ -95,6 +104,11 @@ export function useAppUpdater() {
         phase.value = "needsPassword";
         return;
       }
+      if (result.status === "installFailed") {
+        version.value = result.version;
+        phase.value = "failed";
+        return;
+      }
       if (result.status === "installed") {
         if (result.version) {
           version.value = result.version;
@@ -129,6 +143,14 @@ export function useAppUpdater() {
     return result.status;
   }
 
+  async function quit() {
+    try {
+      await exit(0);
+    } catch (error) {
+      console.warn("Failed to quit from the update gate", error);
+    }
+  }
+
   return {
     phase,
     version,
@@ -139,5 +161,6 @@ export function useAppUpdater() {
     runUpdateGate,
     installUpdateNow,
     restartNow,
+    quit,
   };
 }

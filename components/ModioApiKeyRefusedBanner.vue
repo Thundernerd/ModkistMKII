@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { logger } from "~/utils/logger";
-
-const RELEASES_URL = "https://github.com/Thundernerd/ModkistMKII/releases/latest";
+import { releasePageUrl } from "~/utils/releases";
 
 const { modioApiKeyRefused } = useModioStatus();
 const { installUpdateNow } = useAppUpdater();
 
-type UpdateCheck = "idle" | "checking" | "none" | "failed";
+type UpdateCheck = "idle" | "checking" | "none" | "installFailed" | "failed";
 const updateCheck = ref<UpdateCheck>("idle");
 
 const updateCheckText = computed(() => {
@@ -16,6 +15,8 @@ const updateCheckText = computed(() => {
       return "Checking for updates…";
     case "none":
       return "No in-app update is available yet. Download the latest release from GitHub.";
+    case "installFailed":
+      return "Could not install the update. Download the latest release from GitHub.";
     case "failed":
       return "Could not check for updates. Download the latest release from GitHub.";
     default:
@@ -27,6 +28,10 @@ async function updateNow() {
   updateCheck.value = "checking";
   try {
     const status = await installUpdateNow();
+    if (status === "installFailed") {
+      updateCheck.value = "installFailed";
+      return;
+    }
     // "installed" restarts the app; anything else means nothing to install.
     updateCheck.value = status === "installed" ? "idle" : "none";
   } catch (err) {
@@ -36,7 +41,7 @@ async function updateNow() {
 }
 
 function openReleases() {
-  openUrl(RELEASES_URL).catch((err) => {
+  openUrl(releasePageUrl()).catch((err) => {
     logger.debug("Did not open the Modkist releases page", err);
   });
 }
