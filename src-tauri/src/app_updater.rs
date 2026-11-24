@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use reqwest::StatusCode;
 use serde::Serialize;
+use tauri::utils::{config::BundleType, platform::bundle_type};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -46,6 +47,12 @@ fn skipped_result() -> AppUpdateCheckResult {
         status: "skipped".into(),
         version: None,
     }
+}
+
+/// Whether installing an update asks for the user's password. The updater
+/// installs a deb or rpm through the system package manager, as root.
+fn install_needs_password(bundle: Option<BundleType>) -> bool {
+    matches!(bundle, Some(BundleType::Deb | BundleType::Rpm))
 }
 
 /// How long the follow-up request for a missing manifest's status may take.
@@ -101,8 +108,14 @@ fn log_install_failure(error: &tauri_plugin_updater::Error) {
     log::warn!("App update install failed: {error}");
 }
 
+/// Check for an update and install it. When installing needs the user's password
+/// and `allow_password_prompt` is false, nothing is downloaded and the status is
+/// `needsPassword`, so that the prompt only follows something the user clicked.
 #[tauri::command]
-pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateCheckResult, String> {
+pub async fn check_and_install_app_update(
+    app: AppHandle,
+    allow_password_prompt: bool,
+) -> Result<AppUpdateCheckResult, String> {
     if cfg!(debug_assertions) {
         return Ok(skipped_result());
     }
@@ -120,6 +133,14 @@ pub async fn check_and_install_app_update(app: AppHandle) -> Result<AppUpdateChe
     match updater.check().await {
         Ok(Some(update)) => {
             let version = update.version.clone();
+            if !allow_password_prompt && install_needs_password(bundle_type()) {
+                log::info!("Modkist {version} is available; installing it needs the password");
+                return Ok(AppUpdateCheckResult {
+                    status: "needsPassword".into(),
+                    version: Some(version),
+                });
+            }
+
             log::info!("Downloading Modkist {version}");
             let _ = app.emit(
                 APP_UPDATE_AVAILABLE_EVENT,
@@ -330,6 +351,23 @@ mod tests {
             "{}",
             reports[0]
         );
+    }
+
+    #[test]
+    fn only_deb_and_rpm_installs_need_the_password() {
+        assert!(install_needs_password(Some(BundleType::Deb)));
+        assert!(install_needs_password(Some(BundleType::Rpm)));
+
+        for bundle in [
+            BundleType::AppImage,
+            BundleType::Msi,
+            BundleType::Nsis,
+            BundleType::App,
+            BundleType::Dmg,
+        ] {
+            assert!(!install_needs_password(Some(bundle.clone())), "{bundle:?}");
+        }
+        assert!(!install_needs_password(None));
     }
 
     #[test]

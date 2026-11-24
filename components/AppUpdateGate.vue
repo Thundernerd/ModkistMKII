@@ -6,12 +6,15 @@ const {
   total,
   relaunchFailed,
   restartNow,
+  runUpdateGate,
 } = useAppUpdater();
 
 const title = computed(() => {
   switch (phase.value) {
     case "checking":
       return "Checking for updates";
+    case "needsPassword":
+      return "Update available";
     case "downloading":
       return "Update found";
     case "restarting":
@@ -23,6 +26,10 @@ const message = computed(() => {
   switch (phase.value) {
     case "checking":
       return "Checking for updates…";
+    case "needsPassword":
+      return version.value
+        ? `Modkist v${version.value} is ready to install. Your system will ask for your password.`
+        : "An update is ready to install. Your system will ask for your password.";
     case "downloading":
       return version.value
         ? `Downloading Modkist v${version.value}…`
@@ -39,9 +46,16 @@ const progressPercent = computed(() => {
   return Math.min(100, Math.round((downloaded.value / total.value) * 100));
 });
 
-const busy = computed(
-  () => phase.value !== "restarting" || !relaunchFailed.value,
-);
+const busy = computed(() => {
+  switch (phase.value) {
+    case "needsPassword":
+      return false;
+    case "restarting":
+      return !relaunchFailed.value;
+    default:
+      return true;
+  }
+});
 </script>
 
 <template>
@@ -81,9 +95,17 @@ const busy = computed(
         <p class="app-update-gate-progress-label">{{ progressPercent }}%</p>
       </div>
       <button
+        v-if="phase === 'needsPassword'"
+        type="button"
+        class="app-update-gate-action"
+        @click="runUpdateGate(true)"
+      >
+        Update
+      </button>
+      <button
         v-if="phase === 'restarting' && relaunchFailed"
         type="button"
-        class="app-update-gate-restart"
+        class="app-update-gate-action"
         @click="restartNow"
       >
         Restart
@@ -171,7 +193,7 @@ const busy = computed(
   color: var(--modio-text-muted);
 }
 
-.app-update-gate-restart {
+.app-update-gate-action {
   margin-top: 0.35rem;
 }
 
