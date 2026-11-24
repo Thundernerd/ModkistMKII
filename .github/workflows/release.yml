@@ -29,14 +29,17 @@
 #
 # This workflow commits the version bump to main, pushes a git tag, creates a GitHub
 # release, builds Tauri bundles for all platforms, and uploads installers to the release.
-# Linux releases are AppImage only. After all platform builds succeed, updater
+# Linux releases are AppImage, deb, and rpm. After all platform builds succeed, updater
 # manifests are published to a rolling `updater` GitHub release.
 # Prerelease channels mark the GitHub release as a prerelease. Re-running the same
 # version/tag will fail if that tag already exists.
 #
 # Windows MSI installers use WiX, which only accepts numeric versions. The Windows
 # build sets bundle.windows.wix.version from the app version (alpha/beta/rc channels
-# are encoded into the fourth numeric component). Other platforms use the full semver.
+# are encoded into the fourth numeric component). The rpm is bundled in its own step,
+# with the prerelease part moved from its version to its release field: rpm sorts
+# 1.2.3-rc.1 after 1.2.3, so it would refuse the update from an rc to the stable
+# release. Everything else uses the full semver.
 #
 # For ad-hoc CI builds without git commits, use the Build workflow instead.
 
@@ -215,7 +218,7 @@ jobs:
             tauri_args: --bundles msi
           - os: ubuntu-22.04
             platform: linux
-            tauri_args: --bundles appimage
+            tauri_args: --bundles appimage,deb
 
     steps:
       - name: Checkout
@@ -278,6 +281,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- ${{ matrix.tauri_args }}
 
+      - name: Bundle rpm
+        if: matrix.platform == 'linux'
+        env:
+          VERSION: ${{ needs.prepare_release.outputs.version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          config="$(node .github/scripts/rpm-config.mjs)"
+          npm run tauri bundle -- --bundles rpm --config "$config"
+
       - name: Patch AppImage for host Wayland (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: bash .github/scripts/patch-appimage-wayland.sh
@@ -323,7 +337,7 @@ jobs:
             linux)
               while IFS= read -r -d '' file; do
                 files+=("$file")
-              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.AppImage.sig' \) -type f -print0)
+              done < <(find src-tauri/target -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.deb' -o -name '*.deb.sig' -o -name '*.rpm' -o -name '*.rpm.sig' \) -type f -print0)
               ;;
             *)
               echo "::error::Unknown platform: $PLATFORM"

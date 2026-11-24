@@ -18,12 +18,18 @@ test("maps signed installer assets onto updater platforms", () => {
     "Modkist_1.0.0-rc.9_x64_en-US.msi.sig",
     "Modkist_1.0.0-rc.9_amd64.AppImage",
     "Modkist_1.0.0-rc.9_amd64.AppImage.sig",
+    "Modkist_1.0.0-rc.9_amd64.deb",
+    "Modkist_1.0.0-rc.9_amd64.deb.sig",
+    "Modkist-1.0.0-0.rc.9.x86_64.rpm",
+    "Modkist-1.0.0-0.rc.9.x86_64.rpm.sig",
     "Modkist_1.0.0-rc.9_universal.dmg",
   ];
   const signatures = {
     "Modkist.app.tar.gz.sig": "darwin-sig",
     "Modkist_1.0.0-rc.9_x64_en-US.msi.sig": "windows-sig",
-    "Modkist_1.0.0-rc.9_amd64.AppImage.sig": "linux-sig",
+    "Modkist_1.0.0-rc.9_amd64.AppImage.sig": "appimage-sig",
+    "Modkist_1.0.0-rc.9_amd64.deb.sig": "deb-sig",
+    "Modkist-1.0.0-0.rc.9.x86_64.rpm.sig": "rpm-sig",
   };
 
   const platforms = buildPlatforms(
@@ -43,7 +49,16 @@ test("maps signed installer assets onto updater platforms", () => {
   });
   assert.deepEqual(platforms["darwin-x86_64"], platforms["darwin-aarch64"]);
   assert.equal(platforms["windows-x86_64"].signature, "windows-sig");
-  assert.equal(platforms["linux-x86_64"].signature, "linux-sig");
+  for (const [platform, signature, name] of [
+    ["linux-x86_64", "appimage-sig", "Modkist_1.0.0-rc.9_amd64.AppImage"],
+    ["linux-x86_64-deb", "deb-sig", "Modkist_1.0.0-rc.9_amd64.deb"],
+    ["linux-x86_64-rpm", "rpm-sig", "Modkist-1.0.0-0.rc.9.x86_64.rpm"],
+  ]) {
+    assert.deepEqual(platforms[platform], {
+      signature,
+      url: assetUrl("Thundernerd/ModkistMKII", "v1.0.0-rc.9", name),
+    });
+  }
 });
 
 test("fails when a signature is missing", () => {
@@ -58,6 +73,19 @@ test("fails when a signature is missing", () => {
     /Missing signature/,
   );
 });
+
+for (const name of [
+  "Modkist_1.0.0_amd64.AppImage",
+  "Modkist_1.0.0_amd64.deb",
+  "Modkist-1.0.0-1.x86_64.rpm",
+]) {
+  test(`fails when the signature for ${name} is missing`, () => {
+    assert.throws(
+      () => buildPlatforms([name], {}, "Thundernerd/ModkistMKII", "v1.0.0"),
+      /Missing signature/,
+    );
+  });
+}
 
 test("writes version and platform map into the manifest", () => {
   const pubDate = new Date("2026-08-25T12:00:00.000Z");
