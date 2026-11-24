@@ -2,10 +2,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke, waitForTauri } from "~/utils/tauri";
 
-export type AppUpdateGatePhase = "checking" | "downloading" | "restarting";
+export type AppUpdateGatePhase =
+  | "checking"
+  | "needsPassword"
+  | "downloading"
+  | "restarting";
 
 export interface AppUpdateCheckResult {
-  status: "skipped" | "upToDate" | "installed" | string;
+  status: "skipped" | "upToDate" | "needsPassword" | "installed" | string;
   version: string | null;
 }
 
@@ -39,7 +43,12 @@ export function useAppUpdater() {
     }
   }
 
-  async function runUpdateGate() {
+  /**
+   * Checks for and installs an update before the app opens. When installing
+   * needs the user's password, stops at `needsPassword` until the user clicks
+   * Update, which runs the gate again with the prompt allowed.
+   */
+  async function runUpdateGate(allowPasswordPrompt = false) {
     phase.value = "checking";
     version.value = null;
     downloaded.value = 0;
@@ -79,7 +88,13 @@ export function useAppUpdater() {
 
       const result = await invoke<AppUpdateCheckResult>(
         "check_and_install_app_update",
+        { allowPasswordPrompt },
       );
+      if (result.status === "needsPassword") {
+        version.value = result.version;
+        phase.value = "needsPassword";
+        return;
+      }
       if (result.status === "installed") {
         if (result.version) {
           version.value = result.version;
@@ -100,11 +115,13 @@ export function useAppUpdater() {
 
   /**
    * Checks for and installs an update without the startup gate, so the app
-   * stays mounted. Restarts when an update was installed.
+   * stays mounted. Restarts when an update was installed. Call it from a click:
+   * it may ask for the user's password.
    */
   async function installUpdateNow(): Promise<AppUpdateCheckResult["status"]> {
     const result = await invoke<AppUpdateCheckResult>(
       "check_and_install_app_update",
+      { allowPasswordPrompt: true },
     );
     if (result.status === "installed") {
       await restartNow();
