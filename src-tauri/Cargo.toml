@@ -45,7 +45,9 @@ tempfile = "3"
 # `start_paused` tests skip the 61 s mod.io rate-limit wait.
 tokio = { version = "1", features = ["test-util"] }
 # The reqwest major tauri-plugin-updater uses, to build its `Error::Reqwest` in tests.
-updater-reqwest = { package = "reqwest", version = "0.13", default-features = false }
+updater-reqwest = { package = "reqwest", version = "0.13", default-features = false, features = ["stream"] }
+# A response body that fails partway, for the same tests.
+futures-util = { version = "0.3", default-features = false }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"

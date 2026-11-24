@@ -55,6 +55,10 @@ fn install_needs_password(bundle: Option<BundleType>) -> bool {
     matches!(bundle, Some(BundleType::Deb | BundleType::Rpm))
 }
 
+/// How long fetching the manifest may take before the check counts as failed.
+/// The update gate stays up until then. Does not limit the installer download.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// How long the follow-up request for a missing manifest's status may take.
 const MANIFEST_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -94,7 +98,8 @@ async fn log_check_failure(error: &tauri_plugin_updater::Error, endpoint: &str) 
             None => log::info!("App update check failed: manifest {endpoint} did not respond"),
         },
         // A body that is not JSON is a broken manifest; anything else is the request.
-        Error::Reqwest(request) if !request.is_decode() => {
+        // A timeout while reading the body is a decode error too.
+        Error::Reqwest(request) if !request.is_decode() || request.is_timeout() => {
             log::info!("App update check failed: {error}")
         }
         _ => log::warn!("App update check failed: {error}"),
@@ -152,6 +157,7 @@ pub async fn check_and_install_app_update(
             .parse()
             .map_err(|error: url::ParseError| error.to_string())?])
         .map_err(|error| error.to_string())?
+        .timeout(CHECK_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
 
@@ -297,6 +303,32 @@ mod tests {
 
         // Offline, DNS, TLS or a cut-off body while fetching the manifest.
         log_check_failure(&UpdaterError::Reqwest(failed_request()), UNUSED_ENDPOINT).await;
+
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_manifest_that_times_out_is_not_reported_to_sentry() {
+        // A connection that stalls halfway through the manifest.
+        let stalled = futures_util::stream::iter([
+            Ok("{\"version\":"),
+            Err(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+        ]);
+        let response = tauri::http::Response::builder()
+            .status(200)
+            .body(updater_reqwest::Body::wrap_stream(stalled))
+            .unwrap();
+        let timed_out = updater_reqwest::Response::from(response)
+            .json::<serde_json::Value>()
+            .await
+            .expect_err("the body is cut off");
+        assert!(
+            timed_out.is_decode() && timed_out.is_timeout(),
+            "{timed_out:?}"
+        );
+        capture_reports();
+
+        log_check_failure(&UpdaterError::Reqwest(timed_out), UNUSED_ENDPOINT).await;
 
         assert_eq!(sentry_reports(), Vec::<String>::new());
     }
