@@ -55,6 +55,10 @@ fn install_needs_password(bundle: Option<BundleType>) -> bool {
     matches!(bundle, Some(BundleType::Deb | BundleType::Rpm))
 }
 
+/// How long fetching the manifest may take before the check counts as failed.
+/// The update gate stays up until then. Does not limit the installer download.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// How long the follow-up request for a missing manifest's status may take.
 const MANIFEST_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -94,23 +98,49 @@ async fn log_check_failure(error: &tauri_plugin_updater::Error, endpoint: &str) 
             None => log::info!("App update check failed: manifest {endpoint} did not respond"),
         },
         // A body that is not JSON is a broken manifest; anything else is the request.
-        Error::Reqwest(request) if !request.is_decode() => {
+        // A timeout while reading the body is a decode error too.
+        Error::Reqwest(request) if !request.is_decode() || request.is_timeout() => {
             log::info!("App update check failed: {error}")
         }
         _ => log::warn!("App update check failed: {error}"),
     }
 }
 
+/// Whether the step that asks for the password and installs the package failed.
+/// The updater returns the same errors for a cancelled prompt as for a package
+/// the system refused.
+fn is_package_install_failure(error: &tauri_plugin_updater::Error, needs_password: bool) -> bool {
+    use tauri_plugin_updater::Error;
+
+    match error {
+        Error::AuthenticationFailed | Error::DebInstallFailed | Error::PackageInstallFailed => true,
+        // After a cancelled prompt the updater falls back to sudo, which may not exist.
+        Error::Io(_) => needs_password,
+        _ => false,
+    }
+}
+
 /// Log a failed update download or install. This runs only when an update is
-/// available, so it is rare enough to report every failure: a missing installer
-/// or a bad signature leaves every user on the old version.
-fn log_install_failure(error: &tauri_plugin_updater::Error) {
-    log::warn!("App update install failed: {error}");
+/// available, so it is rare enough to report: a missing installer or a bad
+/// signature locks every user out until a fixed release. The exception is a
+/// failed package install, which stays in the log file because it is mostly
+/// users cancelling the password prompt.
+fn log_install_failure(error: &tauri_plugin_updater::Error, needs_password: bool) {
+    if is_package_install_failure(error, needs_password) {
+        log::info!("App update install failed: {error}");
+    } else {
+        log::warn!("App update install failed: {error}");
+    }
 }
 
 /// Check for an update and install it. When installing needs the user's password
 /// and `allow_password_prompt` is false, nothing is downloaded and the status is
 /// `needsPassword`, so that the prompt only follows something the user clicked.
+///
+/// An update that could not be downloaded or installed is the status
+/// `installFailed`; `Err` means the check itself failed. The update gate keeps
+/// the app closed for the first and opens it for the second, so that being
+/// offline or GitHub being down does not lock users out.
 #[tauri::command]
 pub async fn check_and_install_app_update(
     app: AppHandle,
@@ -127,13 +157,15 @@ pub async fn check_and_install_app_update(
             .parse()
             .map_err(|error: url::ParseError| error.to_string())?])
         .map_err(|error| error.to_string())?
+        .timeout(CHECK_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
 
     match updater.check().await {
         Ok(Some(update)) => {
             let version = update.version.clone();
-            if !allow_password_prompt && install_needs_password(bundle_type()) {
+            let needs_password = install_needs_password(bundle_type());
+            if needs_password && !allow_password_prompt {
                 log::info!("Modkist {version} is available; installing it needs the password");
                 return Ok(AppUpdateCheckResult {
                     status: "needsPassword".into(),
@@ -151,7 +183,7 @@ pub async fn check_and_install_app_update(
 
             let progress_app = app.clone();
             let mut downloaded: u64 = 0;
-            update
+            let installed = update
                 .download_and_install(
                     |chunk_length, content_length| {
                         downloaded += chunk_length as u64;
@@ -165,11 +197,14 @@ pub async fn check_and_install_app_update(
                     },
                     || {},
                 )
-                .await
-                .map_err(|error| {
-                    log_install_failure(&error);
-                    error.to_string()
-                })?;
+                .await;
+            if let Err(error) = installed {
+                log_install_failure(&error, needs_password);
+                return Ok(AppUpdateCheckResult {
+                    status: "installFailed".into(),
+                    version: Some(version),
+                });
+            }
             log::info!("Installed Modkist {version}; waiting for restart");
             Ok(AppUpdateCheckResult {
                 status: "installed".into(),
@@ -273,6 +308,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_manifest_that_times_out_is_not_reported_to_sentry() {
+        // A connection that stalls halfway through the manifest.
+        let stalled = futures_util::stream::iter([
+            Ok("{\"version\":"),
+            Err(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+        ]);
+        let response = tauri::http::Response::builder()
+            .status(200)
+            .body(updater_reqwest::Body::wrap_stream(stalled))
+            .unwrap();
+        let timed_out = updater_reqwest::Response::from(response)
+            .json::<serde_json::Value>()
+            .await
+            .expect_err("the body is cut off");
+        assert!(
+            timed_out.is_decode() && timed_out.is_timeout(),
+            "{timed_out:?}"
+        );
+        capture_reports();
+
+        log_check_failure(&UpdaterError::Reqwest(timed_out), UNUSED_ENDPOINT).await;
+
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
     async fn a_manifest_that_is_not_json_is_reported_to_sentry() {
         // What the plugin returns for a 200 with an HTML page or a corrupt upload.
         let response = tauri::http::Response::builder()
@@ -322,27 +383,58 @@ mod tests {
 
     #[test]
     fn a_missing_installer_is_reported_to_sentry() {
+        // The manifest points at an installer asset that is not there.
+        for needs_password in [false, true] {
+            capture_reports();
+
+            log_install_failure(
+                &UpdaterError::Network("Download request failed with status: 404 Not Found".into()),
+                needs_password,
+            );
+
+            let reports = sentry_reports();
+            assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
+            assert!(
+                reports[0].contains("404"),
+                "report should name the status: {}",
+                reports[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_cancelled_password_prompt_is_not_reported_to_sentry() {
         capture_reports();
 
-        // The manifest points at an installer asset that is not there.
-        log_install_failure(&UpdaterError::Network(
-            "Download request failed with status: 404 Not Found".into(),
-        ));
+        for error in [
+            UpdaterError::AuthenticationFailed,
+            UpdaterError::PackageInstallFailed,
+            UpdaterError::Io(std::io::ErrorKind::NotFound.into()),
+        ] {
+            log_install_failure(&error, true);
+        }
 
-        let reports = sentry_reports();
-        assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
-        assert!(
-            reports[0].contains("404"),
-            "report should name the status: {}",
-            reports[0]
+        assert_eq!(sentry_reports(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_write_without_a_password_prompt_is_reported_to_sentry() {
+        capture_reports();
+
+        // Replacing the AppImage or the macOS app bundle.
+        log_install_failure(
+            &UpdaterError::Io(std::io::ErrorKind::PermissionDenied.into()),
+            false,
         );
+
+        assert_eq!(sentry_reports().len(), 1);
     }
 
     #[test]
     fn an_installer_with_a_bad_signature_is_reported_to_sentry() {
         capture_reports();
 
-        log_install_failure(&UpdaterError::SignatureUtf8("not-base64".into()));
+        log_install_failure(&UpdaterError::SignatureUtf8("not-base64".into()), true);
 
         let reports = sentry_reports();
         assert_eq!(reports.len(), 1, "expected one report, got {reports:#?}");
